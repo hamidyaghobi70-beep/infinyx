@@ -145,6 +145,64 @@ describe("server shutdown runtime", () => {
     expect(setup.exit).toHaveBeenCalledWith(1);
   });
 
+  it("E2E: serves HTTP, then stops CoreEngine exactly once for concurrent signals", async () => {
+    const stopGate = deferred();
+    const fakeProcess = new FakeProcess();
+    const app = express();
+    app.get("/e2e-probe", (_request, response) => {
+      response.status(200).send("ready");
+    });
+    const core = {
+      initialize: vi.fn(async () => undefined),
+      start: vi.fn(async () => undefined),
+      stop: vi.fn(() => stopGate.promise)
+    } as unknown as CoreEngine;
+    const logger = { info: vi.fn(), error: vi.fn() };
+    const exit = vi.fn();
+
+    const runtime = await startServerRuntime({
+      app,
+      core,
+      process: fakeProcess as unknown as NodeJS.Process,
+      exit,
+      logger,
+      host: "127.0.0.1",
+      port: 0,
+      environment: "test",
+      drainTimeoutMs: 1_000
+    });
+
+    await new Promise<void>((resolve) => {
+      if (runtime.server.listening) {
+        resolve();
+      } else {
+        runtime.server.once("listening", resolve);
+      }
+    });
+    const address = runtime.server.address();
+    if (!address || typeof address === "string") {
+      throw new Error("Expected a TCP address from the HTTP server.");
+    }
+
+    const response = await fetch(`http://127.0.0.1:${address.port}/e2e-probe`);
+    expect(response.status).toBe(200);
+    expect(await response.text()).toBe("ready");
+
+    fakeProcess.emit("SIGINT");
+    fakeProcess.emit("SIGTERM");
+    await new Promise<void>((resolve) => setImmediate(resolve));
+
+    expect(core.stop).toHaveBeenCalledOnce();
+    expect(exit).not.toHaveBeenCalled();
+
+    stopGate.resolve();
+    await runtime.shutdown();
+
+    expect(core.stop).toHaveBeenCalledTimes(1);
+    expect(exit).toHaveBeenCalledTimes(1);
+    expect(exit).toHaveBeenCalledWith(0);
+  });
+
   it("does not invoke the real process exit in tests", async () => {
     const setup = fixture();
     const runtime = await setup.start();
