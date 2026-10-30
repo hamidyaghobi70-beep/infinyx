@@ -18,8 +18,21 @@ core.register({
   start: () => {
     process.stdout.write("STARTED\n");
   },
-  stop: () => {
-    process.stdout.write("STOPPED\n");
+  stop: async () => {
+    if (mode === "double-signal") {
+      process.stdout.write("CLEANUP_STARTED\\n");
+      process.stdin.setEncoding("utf8");
+      await new Promise((resolve) => {
+        const onData = (chunk) => {
+          if (chunk.includes("RELEASE")) {
+            process.stdin.off("data", onData);
+            resolve();
+          }
+        };
+        process.stdin.on("data", onData);
+      });
+    }
+    process.stdout.write("STOPPED\\n");
   }
 });
 
@@ -31,8 +44,12 @@ const runtime = await startServerRuntime({
     process.stdout.write(`EXIT:${code}\n`, () => process.exit(code));
   },
   logger: {
-    info: () => undefined,
-    error: (...args) => process.stderr.write(`${args.map(String).join(" ")}\n`)
+    info: (fields) => {
+      if (fields && typeof fields === "object" && "reason" in fields) {
+        process.stdout.write(`SIGNAL:${fields.reason}\\n`);
+      }
+    },
+    error: (...args) => process.stderr.write(`${args.map(String).join(" ")}\\n`)
   },
   host: "127.0.0.1",
   port: 0,
