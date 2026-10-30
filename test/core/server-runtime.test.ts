@@ -109,6 +109,23 @@ describe("server shutdown runtime", () => {
     expect(setup.exit).toHaveBeenCalledWith(0);
   });
 
+  it("returns the same shutdown promise to independent runtime consumers", async () => {
+    const stopGate = deferred();
+    const setup = fixture({ stop: () => stopGate.promise });
+    const runtime = await setup.start();
+
+    const first = runtime.shutdown("SIGINT");
+    const second = runtime.shutdown("SIGTERM");
+
+    expect(first).toBe(second);
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    expect(setup.core.stop).toHaveBeenCalledOnce();
+
+    stopGate.resolve();
+    await Promise.all([first, second]);
+    expect(setup.exit).toHaveBeenCalledOnce();
+  });
+
   it("preserves a fatal exit code when a fatal event arrives during signal shutdown", async () => {
     const stopGate = deferred();
     const setup = fixture({ stop: () => stopGate.promise });
