@@ -1,3 +1,4 @@
+import { AsyncLocalStorage } from "node:async_hooks";
 import type {
   CoreLifecycleState,
   CoreModule,
@@ -27,6 +28,7 @@ export class CoreEngine {
   private readonly moduleStates = new Map<string, ModuleLifecycleState>();
   private initializedModules: CoreModule[] = [];
   private readonly cleanupInFlight = new Map<string, Promise<void>>();
+  private readonly cleanupContext = new AsyncLocalStorage<CoreEngine>();
   private stopPromise: Promise<void> | undefined;
 
   constructor(private readonly options: CoreEngineOptions = {}) {
@@ -121,6 +123,15 @@ export class CoreEngine {
   }
 
   stop(): Promise<void> {
+    // Returning the in-flight stop promise from inside a stop hook would make
+    // that hook await the operation that is itself waiting for the hook.
+    // Detect this async call chain explicitly instead of creating a deadlock.
+    if (this.cleanupContext.getStore() === this) {
+      return Promise.reject(new CoreError(
+        "INVALID_LIFECYCLE_TRANSITION",
+        "Re-entrant stop() from a module cleanup hook is not allowed."
+      ));
+    }
     if (this.stopPromise) return this.stopPromise;
     if (this.lifecycle === "stopped") return Promise.resolve();
     if (this.lifecycle === "created") {
@@ -198,7 +209,9 @@ export class CoreEngine {
     const cleanup = (async (): Promise<void> => {
       this.moduleStates.set(module.id, "cleaning");
       try {
-        await module.stop?.(this.createContext(module.id));
+        await this.cleanupContext.run(this, async () => {
+          await module.stop?.(this.createContext(module.id));
+        });
         this.moduleStates.set(module.id, preserveFailure ? "failed" : "stopped");
         this.initializedModules = this.initializedModules.filter(
           (initialized) => initialized.id !== module.id
