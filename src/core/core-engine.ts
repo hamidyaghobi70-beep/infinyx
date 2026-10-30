@@ -27,6 +27,7 @@ export class CoreEngine {
   private readonly moduleStates = new Map<string, ModuleLifecycleState>();
   private initializedModules: CoreModule[] = [];
   private readonly cleanupInFlight = new Map<string, Promise<void>>();
+  private stopPromise: Promise<void> | undefined;
 
   constructor(private readonly options: CoreEngineOptions = {}) {
     this.events = options.events ?? new InMemoryEventBus();
@@ -119,20 +120,37 @@ export class CoreEngine {
     }
   }
 
-  async stop(): Promise<void> {
-    if (this.lifecycle === "stopped") return;
+  stop(): Promise<void> {
+    if (this.stopPromise) return this.stopPromise;
+    if (this.lifecycle === "stopped") return Promise.resolve();
     if (this.lifecycle === "created") {
       this.lifecycle = "stopped";
-      return;
+      return Promise.resolve();
     }
     if (!["initialized", "running", "failed"].includes(this.lifecycle)) {
-      throw new CoreError(
+      return Promise.reject(new CoreError(
         "INVALID_LIFECYCLE_TRANSITION",
         'Cannot stop Core Engine while it is "' + this.lifecycle + '".'
-      );
+      ));
     }
 
     this.lifecycle = "stopping";
+    // Defer execution one microtask so the shared promise is installed before
+    // any module stop hook can re-enter CoreEngine.stop().
+    const stopPromise = Promise.resolve().then(() => this.performStop());
+    this.stopPromise = stopPromise;
+    void stopPromise.then(
+      () => {
+        if (this.stopPromise === stopPromise) this.stopPromise = undefined;
+      },
+      () => {
+        if (this.stopPromise === stopPromise) this.stopPromise = undefined;
+      }
+    );
+    return stopPromise;
+  }
+
+  private async performStop(): Promise<void> {
     const errors = await this.cleanupInitializedModules();
     this.lifecycle = errors.length ? "failed" : "stopped";
 
