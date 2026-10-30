@@ -1,0 +1,211 @@
+name: Vitest 5.0.5 Isolated Remediation Experiment
+
+on:
+  push:
+    branches:
+      - experiment/vitest-5-remediation
+
+permissions:
+  contents: write
+
+jobs:
+  isolated-remediation:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout experiment branch
+        uses: actions/checkout@v4
+        with:
+          ref: experiment/vitest-5-remediation
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22.23.4
+          cache: npm
+
+      - name: Record runtime and baseline
+        shell: bash
+        run: |
+          {
+            echo "## Runtime"
+            echo "- Node.js: $(node --version)"
+            echo "- npm: $(npm --version)"
+            echo "- Branch: $(git branch --show-current)"
+            echo "- Starting commit: $(git rev-parse HEAD)"
+            echo
+            echo "## Baseline dependency versions"
+            npm ls vitest @vitest/mocker tinypool vite typescript --all || true
+          } | tee experiment-environment.txt
+
+      - name: Upgrade only Vitest and explicit Vite peer; regenerate lockfile
+        id: resolve
+        shell: bash
+        run: |
+          set +e
+          npm install --package-lock-only --ignore-scripts --save-dev --save-exact vitest@5.0.5 vite@7.3.7 > dependency-resolution.log 2>&1
+          status=$?
+          echo "exit_code=$status" >> "$GITHUB_OUTPUT"
+          cat dependency-resolution.log
+          exit 0
+
+      - name: Install exact lockfile
+        id: ci_install
+        shell: bash
+        run: |
+          set +e
+          npm ci > npm-ci.log 2>&1
+          status=$?
+          echo "exit_code=$status" >> "$GITHUB_OUTPUT"
+          cat npm-ci.log
+          exit 0
+
+      - name: Typecheck
+        id: typecheck
+        shell: bash
+        run: |
+          set +e
+          npm run typecheck > typecheck.log 2>&1
+          status=$?
+          echo "exit_code=$status" >> "$GITHUB_OUTPUT"
+          cat typecheck.log
+          exit 0
+
+      - name: Build
+        id: build
+        shell: bash
+        run: |
+          set +e
+          npm run build > build.log 2>&1
+          status=$?
+          echo "exit_code=$status" >> "$GITHUB_OUTPUT"
+          cat build.log
+          exit 0
+
+      - name: Test
+        id: test
+        shell: bash
+        run: |
+          set +e
+          npm test > test.log 2>&1
+          status=$?
+          echo "exit_code=$status" >> "$GITHUB_OUTPUT"
+          cat test.log
+          exit 0
+
+      - name: Dependency security audit and dependency paths
+        id: audit
+        shell: bash
+        run: |
+          set +e
+          npm audit --audit-level=high --json > npm-audit.json 2> npm-audit.stderr
+          audit_status=$?
+          echo "exit_code=$audit_status" >> "$GITHUB_OUTPUT"
+          set -e
+
+          node --input-type=module <<'NODE'
+          import fs from 'node:fs';
+          import { execFileSync } from 'node:child_process';
+          const audit = JSON.parse(fs.readFileSync('npm-audit.json', 'utf8'));
+          const metadata = audit.metadata?.vulnerabilities ?? {};
+          const lines = [
+            '# Vitest 5.0.5 experiment — npm audit',
+            '',
+            '- Command: npm audit --audit-level=high --json',
+            '- Exit code: ' + process.env.AUDIT_EXIT,
+            '- Counts: ' + JSON.stringify(metadata),
+            '',
+            '## Vulnerable packages'
+          ];
+          const entries = Object.entries(audit.vulnerabilities ?? {}).sort(([a], [b]) => a.localeCompare(b));
+          if (!entries.length) lines.push('No vulnerable package entries were reported.');
+          for (const [name, item] of entries) {
+            lines.push('', '### ' + name);
+            lines.push('- Severity: ' + item.severity);
+            lines.push('- Range: ' + item.range);
+            lines.push('- Installed nodes: ' + (item.nodes ?? []).join(', '));
+            lines.push('- Direct: ' + Boolean(item.isDirect));
+            lines.push('- Fix available: ' + JSON.stringify(item.fixAvailable ?? null));
+            for (const via of item.via ?? []) {
+              if (typeof via === 'string') lines.push('- Dependency advisory: ' + via);
+              else lines.push('- Advisory: ' + via.title + ' | ' + via.severity + ' | ' + via.range + ' | ' + (via.url ?? ''));
+            }
+            try {
+              const explanation = execFileSync('npm', ['explain', name], { encoding: 'utf8' }).trim();
+              lines.push('', 'Dependency path:', '```text', explanation, '```');
+            } catch (error) {
+              lines.push('', 'Dependency path lookup failed: ' + String(error.message));
+            }
+          }
+          const report = lines.join('\n') + '\n';
+          fs.writeFileSync('npm-audit-report.md', report);
+          fs.appendFileSync(process.env.GITHUB_STEP_SUMMARY, report);
+          console.log(report);
+          NODE
+        env:
+          AUDIT_EXIT: ${{ steps.audit.outputs.exit_code }}
+
+      - name: Capture resolved dependency versions
+        if: always()
+        shell: bash
+        run: |
+          npm ls vitest @vitest/mocker tinypool vite typescript --all > resolved-dependencies.log 2>&1 || true
+          cat resolved-dependencies.log
+
+      - name: Commit experiment dependency manifests
+        if: always() && steps.resolve.outputs.exit_code == '0'
+        shell: bash
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add package.json package-lock.json
+          if ! git diff --cached --quiet; then
+            git commit -m "test: evaluate Vitest 5.0.5 dependency remediation"
+            git push origin HEAD:refs/heads/experiment/vitest-5-remediation
+          else
+            echo "No manifest changes to commit."
+          fi
+
+      - name: Upload reproducible experiment evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: vitest-5-remediation-evidence
+          path: |
+            experiment-environment.txt
+            dependency-resolution.log
+            npm-ci.log
+            typecheck.log
+            build.log
+            test.log
+            npm-audit.json
+            npm-audit.stderr
+            npm-audit-report.md
+            resolved-dependencies.log
+            package.json
+            package-lock.json
+          if-no-files-found: warn
+          retention-days: 30
+
+      - name: Enforce experiment acceptance checks
+        if: always()
+        shell: bash
+        env:
+          RESOLVE: ${{ steps.resolve.outputs.exit_code }}
+          INSTALL: ${{ steps.ci_install.outputs.exit_code }}
+          TYPECHECK: ${{ steps.typecheck.outputs.exit_code }}
+          BUILD: ${{ steps.build.outputs.exit_code }}
+          TEST: ${{ steps.test.outputs.exit_code }}
+          AUDIT: ${{ steps.audit.outputs.exit_code }}
+        run: |
+          failed=0
+          for entry in "dependency resolution:$RESOLVE" "npm ci:$INSTALL" "typecheck:$TYPECHECK" "build:$BUILD" "test:$TEST" "npm audit:$AUDIT"; do
+            name="${entry%%:*}"
+            code="${entry#*:}"
+            if [ -z "$code" ] || [ "$code" != "0" ]; then
+              echo "::error::$name failed or did not run (exit code: ${code:-missing})"
+              failed=1
+            else
+              echo "PASS: $name"
+            fi
+          done
+          exit "$failed"
