@@ -102,7 +102,7 @@ jobs:
           echo "exit_code=$audit_status" >> "$GITHUB_OUTPUT"
           set -e
 
-          node --input-type=module <<'NODE'
+          AUDIT_EXIT="$audit_status" node --input-type=module <<'NODE'
           import fs from 'node:fs';
           import { execFileSync } from 'node:child_process';
           const audit = JSON.parse(fs.readFileSync('npm-audit.json', 'utf8'));
@@ -141,8 +141,6 @@ jobs:
           fs.appendFileSync(process.env.GITHUB_STEP_SUMMARY, report);
           console.log(report);
           NODE
-        env:
-          AUDIT_EXIT: ${{ steps.audit.outputs.exit_code }}
 
       - name: Capture resolved dependency versions
         if: always()
