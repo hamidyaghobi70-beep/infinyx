@@ -232,7 +232,7 @@ export class CoreEngine {
         // Deactivating it distinguishes detached callbacks from active re-entry.
         context.active = false;
       }
-    });
+    })();
 
     this.cleanupInFlight.set(module.id, cleanup);
     try {
