@@ -18,7 +18,7 @@ Core Engine v1 provides the in-process lifecycle and coordination foundation for
 
 A module declares an identifier, version, optional dependencies, and optional initialize/start/stop hooks. A module receives only its own ModuleContext. Modules should depend on public contracts rather than importing another module's private implementation.
 
-Registration is closed after initialization begins. Modules are initialized and started in dependency order and stopped in reverse order.
+Registration is closed after initialization begins. Modules are initialized and started in dependency order and stopped in reverse order. The stop hook is also called for a module whose initialization failed, so it must safely handle partially initialized resources.
 
 ## Security boundaries and non-goals
 

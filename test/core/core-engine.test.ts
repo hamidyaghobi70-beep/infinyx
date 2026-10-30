@@ -61,6 +61,27 @@ describe("CoreEngine", () => {
     expect(stopped).toEqual(["worker", "platform"]);
   });
 
+  it("cleans up a module whose initialization fails after partial setup", async () => {
+    const engine = new CoreEngine();
+    const stopped: string[] = [];
+    engine.register({
+      id: "platform",
+      version: "1.0.0",
+      stop: () => { stopped.push("platform"); }
+    });
+    engine.register({
+      id: "broken",
+      version: "1.0.0",
+      dependencies: ["platform"],
+      initialize: () => { throw new Error("partial initialization failure"); },
+      stop: () => { stopped.push("broken"); }
+    });
+
+    await expect(engine.initialize()).rejects.toThrow(/initialization failed/i);
+    expect(stopped).toEqual(["broken", "platform"]);
+    expect(engine.getModuleStates().get("broken")).toBe("failed");
+  });
+
   it("does not authorize actions without an explicit policy", async () => {
     const engine = new CoreEngine();
     const decision = await engine.policy.evaluate({

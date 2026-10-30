@@ -21,8 +21,8 @@ export interface CoreEngineOptions {
 export class CoreEngine {
   readonly events: EventBusPort;
   readonly policy: PolicyEngine;
-  readonly registry = new ModuleRegistry();
 
+  private readonly moduleRegistry = new ModuleRegistry();
   private lifecycle: CoreLifecycleState = "created";
   private readonly moduleStates = new Map<string, ModuleLifecycleState>();
   private initializedModules: CoreModule[] = [];
@@ -36,6 +36,10 @@ export class CoreEngine {
     return this.lifecycle;
   }
 
+  getModules(): readonly CoreModule[] {
+    return this.moduleRegistry.list();
+  }
+
   register(module: CoreModule): void {
     if (this.lifecycle !== "created") {
       throw new CoreError(
@@ -43,7 +47,7 @@ export class CoreEngine {
         "Modules can only be registered before initialization."
       );
     }
-    this.registry.register(module);
+    this.moduleRegistry.register(module);
     this.moduleStates.set(module.id, "registered");
   }
 
@@ -56,19 +60,22 @@ export class CoreEngine {
     this.lifecycle = "initializing";
 
     try {
-      for (const module of this.registry.resolveStartOrder()) {
+      for (const module of this.moduleRegistry.resolveStartOrder()) {
         this.moduleStates.set(module.id, "initializing");
-        await module.initialize?.(this.createContext(module.id));
+        // Track before invoking the hook so rollback also cleans up a module
+        // whose initialization failed after partially allocating resources.
         this.initializedModules.push(module);
+        await module.initialize?.(this.createContext(module.id));
         this.moduleStates.set(module.id, "initialized");
       }
       this.lifecycle = "initialized";
     } catch (error) {
       const failedModule = [...this.moduleStates.entries()]
         .find(([, state]) => state === "initializing")?.[0];
-      if (failedModule) this.moduleStates.set(failedModule, "failed");
       this.lifecycle = "failed";
-      const cleanupErrors = await this.cleanupInitializedModules();
+      const cleanupErrors = await this.cleanupInitializedModules(
+        failedModule ? new Set([failedModule]) : new Set()
+      );
       const failure = new CoreError(
         "MODULE_INITIALIZATION_FAILED",
         "Core Engine module initialization failed.",
@@ -86,7 +93,7 @@ export class CoreEngine {
     this.lifecycle = "starting";
 
     try {
-      for (const module of this.registry.resolveStartOrder()) {
+      for (const module of this.moduleRegistry.resolveStartOrder()) {
         this.moduleStates.set(module.id, "starting");
         await module.start?.(this.createContext(module.id));
         this.moduleStates.set(module.id, "running");
@@ -95,9 +102,10 @@ export class CoreEngine {
     } catch (error) {
       const failedModule = [...this.moduleStates.entries()]
         .find(([, state]) => state === "starting")?.[0];
-      if (failedModule) this.moduleStates.set(failedModule, "failed");
       this.lifecycle = "failed";
-      const cleanupErrors = await this.cleanupInitializedModules();
+      const cleanupErrors = await this.cleanupInitializedModules(
+        failedModule ? new Set([failedModule]) : new Set()
+      );
       const failure = new CoreError(
         "MODULE_START_FAILED",
         "Core Engine module startup failed.",
@@ -147,13 +155,18 @@ export class CoreEngine {
     );
   }
 
-  private async cleanupInitializedModules(): Promise<unknown[]> {
+  private async cleanupInitializedModules(
+    preserveFailureIds: ReadonlySet<string> = new Set()
+  ): Promise<unknown[]> {
     const errors: unknown[] = [];
     for (const module of [...this.initializedModules].reverse()) {
       this.moduleStates.set(module.id, "stopping");
       try {
         await module.stop?.(this.createContext(module.id));
-        this.moduleStates.set(module.id, "stopped");
+        this.moduleStates.set(
+          module.id,
+          preserveFailureIds.has(module.id) ? "failed" : "stopped"
+        );
       } catch (error) {
         this.moduleStates.set(module.id, "failed");
         errors.push(error);
