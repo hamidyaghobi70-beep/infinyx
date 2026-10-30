@@ -191,25 +191,34 @@ describe("CoreEngine", () => {
     expect(engine.state).toBe("stopped");
   });
 
-  it("does not retry a failed cleanup hook implicitly", async () => {
+  it("retries only failed cleanup hooks after an explicit stop call", async () => {
     const engine = new CoreEngine();
-    let cleanupCalls = 0;
+    const calls = { stable: 0, flaky: 0 };
     engine.register({
-      id: "unstable",
+      id: "stable",
+      version: "1.0.0",
+      stop: () => { calls.stable += 1; }
+    });
+    engine.register({
+      id: "flaky",
       version: "1.0.0",
       stop: () => {
-        cleanupCalls += 1;
-        throw new Error("cleanup failed once");
+        calls.flaky += 1;
+        if (calls.flaky === 1) throw new Error("temporary cleanup failure");
       }
     });
 
     await engine.initialize();
-    await expect(engine.stop()).rejects.toThrow(/One or more modules failed to stop/i);
-    await expect(engine.stop()).rejects.toThrow(/One or more modules failed to stop/i);
+    await expect(engine.stop()).rejects.toThrow(/failed to stop/i);
+    expect(calls).toEqual({ stable: 1, flaky: 1 });
+    expect(engine.getModuleStates().get("stable")).toBe("stopped");
+    expect(engine.getModuleStates().get("flaky")).toBe("failed");
 
-    expect(cleanupCalls).toBe(1);
-    expect(engine.getModuleStates().get("unstable")).toBe("failed");
-    expect(engine.state).toBe("failed");
+    await engine.stop();
+
+    expect(calls).toEqual({ stable: 1, flaky: 2 });
+    expect(engine.getModuleStates().get("flaky")).toBe("stopped");
+    expect(engine.state).toBe("stopped");
   });
 
   it("does not authorize actions without an explicit policy", async () => {
