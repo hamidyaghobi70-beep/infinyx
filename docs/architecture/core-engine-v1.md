@@ -39,3 +39,12 @@ Before production use, add independent review of lifecycle failure modes, author
 ## Runtime compatibility
 
 The repository minimum runtime is Node.js `22.12.0`, matching the minimum Node 22 engine requirement declared by Vitest 5.0.5 and Vite 7.3.7. CI currently validates on Node.js `22.23.4`.
+
+
+## Process shutdown (Revision v4)
+
+The HTTP composition root uses a single shutdown controller. SIGINT, SIGTERM, uncaughtException and unhandledRejection all converge on the same shutdown Promise; no handler calls the exit function independently. Fatal events set the final exit code to 1 even when a signal-initiated shutdown is already in progress. The exit function is guarded by a shared exit Promise and is invoked at most once.
+
+Shutdown drains the HTTP server before stopping Core Engine. The drain timeout defaults to 10 seconds; if it expires, remaining HTTP connections are closed and the final exit code becomes 1. HTTP close errors and Core Engine stop errors also produce a non-zero exit code. Process handlers are installed after Core Engine startup but before the HTTP server's listen call.
+
+The runtime accepts an injected exit function. Tests provide a spy rather than process.exit, so exercising signal and fatal-event handlers never terminates the Vitest process. The integration tests measure both the Core Engine stop call count and final exit call count.
