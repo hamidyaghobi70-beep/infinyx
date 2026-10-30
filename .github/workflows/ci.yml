@@ -17,12 +17,10 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
-
       - name: Set up Node.js
         uses: actions/setup-node@v4
         with:
           node-version: 22
-
       - name: Record runtime versions
         shell: bash
         run: |
@@ -31,15 +29,113 @@ jobs:
             echo "- Node.js: $(node --version)"
             echo "- npm: $(npm --version)"
           } | tee -a "$GITHUB_STEP_SUMMARY"
-
       - name: Install dependencies
         run: npm ci
-
       - name: Type check
         run: npm run typecheck
-
       - name: Build
         run: npm run build
-
       - name: Test
         run: npm test
+
+  dependency-security-audit:
+    name: Dependency Security Audit
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Record audit runtime
+        shell: bash
+        run: |
+          {
+            echo "### Dependency audit runtime"
+            echo "- Node.js: $(node --version)"
+            echo "- npm: $(npm --version)"
+            echo "- Audit threshold: high"
+          } | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: Install dependencies
+        run: npm ci
+      - name: Run npm audit and build dependency-path report
+        shell: bash
+        run: |
+          set +e
+          npm audit --audit-level=high --json > npm-audit.json
+          audit_status=$?
+          set -e
+
+          AUDIT_EXIT="$audit_status" node --input-type=module <<'NODE'
+          import fs from 'node:fs';
+          import { execFileSync } from 'node:child_process';
+
+          const outputPath = 'npm-audit-report.md';
+          const raw = fs.readFileSync('npm-audit.json', 'utf8');
+          const auditExit = Number(process.env.AUDIT_EXIT ?? 1);
+          let audit;
+          try {
+            audit = JSON.parse(raw);
+          } catch (error) {
+            const report = ['# npm audit report', '', `- npm audit exit code: ${auditExit}`, `- JSON parsing error: ${error.message}`, '', 'The raw npm-audit.json artifact contains the command output.'].join('\n');
+            fs.writeFileSync(outputPath, report + '\n');
+            fs.appendFileSync(process.env.GITHUB_STEP_SUMMARY, report + '\n');
+            process.exit(auditExit || 1);
+          }
+
+          const vulnerabilities = audit.vulnerabilities ?? {};
+          const names = Object.keys(vulnerabilities).sort();
+          const lines = [
+            '# Dependency Security Audit',
+            '',
+            `- npm audit exit code: ${auditExit}`,
+            '- Audit threshold: high',
+            `- Vulnerable package entries: ${names.length}`,
+            `- Counts by severity: ${JSON.stringify(audit.metadata?.vulnerabilities ?? {})}`,
+            ''
+          ];
+          if (names.length === 0) lines.push('No vulnerable package entries were reported by npm audit.');
+
+          for (const name of names) {
+            const item = vulnerabilities[name];
+            lines.push(`## ${name}`);
+            lines.push(`- Severity: ${item.severity ?? 'unknown'}`);
+            lines.push(`- Affected version range: ${item.range ?? 'not provided'}`);
+            lines.push(`- Installed dependency locations: ${(item.nodes ?? []).join(', ') || 'not provided'}`);
+            lines.push(`- Direct dependency: ${Boolean(item.isDirect)}`);
+            lines.push(`- Fix available: ${JSON.stringify(item.fixAvailable ?? null)}`);
+            for (const advisory of item.via ?? []) {
+              if (typeof advisory === 'string') lines.push(`- Advisory dependency: ${advisory}`);
+              else {
+                lines.push(`- Advisory: ${advisory.title ?? 'Untitled'}`);
+                lines.push(`  - Severity: ${advisory.severity ?? 'unknown'}`);
+                lines.push(`  - Range: ${advisory.range ?? 'not provided'}`);
+                if (advisory.url) lines.push(`  - URL: ${advisory.url}`);
+              }
+            }
+            try {
+              const explanation = execFileSync('npm', ['explain', name], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).trim();
+              lines.push('', 'Dependency path(s) from npm explain:', '```text', explanation || 'No explanation returned.', '```');
+            } catch (error) {
+              const detail = [error.stdout, error.stderr].filter(Boolean).join('\n').trim();
+              lines.push('', 'Dependency path(s) from npm explain:', '```text', detail || 'npm explain could not resolve this package.', '```');
+            }
+            lines.push('');
+          }
+          const report = lines.join('\n');
+          fs.writeFileSync(outputPath, report + '\n');
+          fs.appendFileSync(process.env.GITHUB_STEP_SUMMARY, report + '\n');
+          console.log(report);
+          process.exit(auditExit);
+          NODE
+      - name: Upload complete npm audit reports
+        if: always() && hashFiles('npm-audit.json') != ''
+        uses: actions/upload-artifact@v4
+        with:
+          name: dependency-security-audit
+          path: |
+            npm-audit.json
+            npm-audit-report.md
+          if-no-files-found: error
+          retention-days: 30
