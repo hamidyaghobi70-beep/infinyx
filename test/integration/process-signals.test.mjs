@@ -7,7 +7,7 @@ const fixture = fileURLToPath(new URL("../fixtures/lifecycle-child.mjs", import.
 
 function launch(mode) {
   const child = spawn(process.execPath, [fixture, mode], {
-    stdio: ["ignore", "pipe", "pipe"]
+    stdio: ["pipe", "pipe", "pipe"]
   });
   let stdout = "";
   let stderr = "";
@@ -70,7 +70,9 @@ function count(output, marker) {
   return output.split(marker).length - 1;
 }
 
-test("real SIGINT during initialization waits for the hook and skips module start", async (t) => {
+test("real SIGINT during initialization waits for the hook and skips module start", {
+  skip: process.platform === "win32" ? "POSIX signal semantics are not available on Windows" : false
+}, async (t) => {
   const run = launch("startup");
   t.after(() => {
     if (run.child.exitCode === null && run.child.signalCode === null) run.child.kill("SIGKILL");
@@ -89,7 +91,9 @@ test("real SIGINT during initialization waits for the hook and skips module star
   assert.doesNotMatch(run.output(), /STARTED|READY/);
 });
 
-test("real SIGTERM shuts down a running child process exactly once", async (t) => {
+test("real SIGTERM shuts down a running child process exactly once", {
+  skip: process.platform === "win32" ? "POSIX signal semantics are not available on Windows" : false
+}, async (t) => {
   const run = launch("ready");
   t.after(() => {
     if (run.child.exitCode === null && run.child.signalCode === null) run.child.kill("SIGKILL");
@@ -103,6 +107,55 @@ test("real SIGTERM shuts down a running child process exactly once", async (t) =
   assert.equal(result.code, 0, run.errors());
   assert.equal(result.signal, null);
   assert.match(run.output(), /STARTED/);
+  assert.equal(count(run.output(), "STOPPED"), 1);
+  assert.equal(count(run.output(), "EXIT:0"), 1);
+});
+
+
+test("a second real signal joins the existing shutdown without rerunning cleanup", {
+  skip: process.platform === "win32" ? "POSIX signal semantics are not available on Windows" : false
+}, async (t) => {
+  const run = launch("double-signal");
+  t.after(() => {
+    if (run.child.exitCode === null && run.child.signalCode === null) run.child.kill("SIGKILL");
+  });
+
+  await waitForOutput(run.child, run.output, "READY");
+  const exited = waitForExit(run.child);
+
+  assert.equal(run.child.kill("SIGINT"), true);
+  await waitForOutput(run.child, run.output, "CLEANUP_STARTED");
+  await waitForOutput(run.child, run.output, "SIGNAL:SIGINT");
+
+  assert.equal(run.child.kill("SIGTERM"), true);
+  await waitForOutput(run.child, run.output, "SIGNAL:SIGTERM");
+
+  run.child.stdin.write("RELEASE\\n");
+  const result = await exited;
+
+  assert.equal(result.code, 0, run.errors());
+  assert.equal(result.signal, null);
+  assert.equal(count(run.output(), "SIGNAL:SIGINT"), 1);
+  assert.equal(count(run.output(), "SIGNAL:SIGTERM"), 1);
+  assert.equal(count(run.output(), "CLEANUP_STARTED"), 1);
+  assert.equal(count(run.output(), "STOPPED"), 1);
+  assert.equal(count(run.output(), "EXIT:0"), 1);
+});
+
+test("IPC requests graceful shutdown for platforms without POSIX signal semantics", async (t) => {
+  const run = launch("ipc");
+  t.after(() => {
+    if (run.child.exitCode === null && run.child.signalCode === null) run.child.kill("SIGKILL");
+  });
+
+  await waitForOutput(run.child, run.output, "READY");
+  const exited = waitForExit(run.child);
+  run.child.stdin.write("SHUTDOWN\\n");
+  const result = await exited;
+
+  assert.equal(result.code, 0, run.errors());
+  assert.equal(result.signal, null);
+  assert.equal(count(run.output(), "SIGNAL:IPC"), 1);
   assert.equal(count(run.output(), "STOPPED"), 1);
   assert.equal(count(run.output(), "EXIT:0"), 1);
 });
