@@ -6,6 +6,7 @@ on:
       - feature/core-engine-v1
       - fix/core-engine-shutdown-v4
       - fix/core-engine-shutdown-v5
+      - fix/core-engine-shutdown-v6
   pull_request:
     branches:
       - foundation/repository-foundation
@@ -37,5 +38,7 @@ jobs:
         run: npm run build
       - name: Test
         run: npm test
+      - name: Real process signal integration
+        run: npm run test:process
       - name: Dependency security audit
         run: npm audit --audit-level=high
