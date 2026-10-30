@@ -211,7 +211,7 @@ export class CoreEngine {
       await inFlight;
       return;
     }
-    const cleanup = Promise.resolve().then(async (): Promise<void> => {
+    const cleanup = (async (): Promise<void> => {
       this.moduleStates.set(module.id, "cleaning");
       const context: CleanupExecutionContext = { engine: this, active: true };
       try {
