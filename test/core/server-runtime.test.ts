@@ -95,7 +95,7 @@ describe("server shutdown runtime", () => {
 
     setup.fakeProcess.emit("SIGINT");
     setup.fakeProcess.emit("SIGTERM");
-    await Promise.resolve();
+    await new Promise<void>((resolve) => setImmediate(resolve));
 
     expect(setup.close).toHaveBeenCalledOnce();
     expect(setup.core.stop).toHaveBeenCalledOnce();
