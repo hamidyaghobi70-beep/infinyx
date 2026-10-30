@@ -2,16 +2,18 @@
 
 ## Cleanup retry contract
 
-Core Engine cleanup hooks use an **at-most-once** invocation policy per module
-lifecycle. A hook is marked attempted before user code is invoked. If it fails,
-the failure is retained and re-reported by subsequent `stop()` calls; the
-hook is not silently retried. The module remains in the `failed` state and is
-removed from the pending cleanup queue.
+Core Engine cleanup hooks use an **explicit retry** policy. Each module has at
+most one in-flight cleanup attempt at a time. When a hook succeeds, that module
+is removed from the pending cleanup queue and will not be cleaned again during
+the same lifecycle. When a hook fails, it remains pending and its state becomes
+`failed`; a later, explicit `stop()` call retries only the failed/pending
+module hooks. Successful sibling hooks are not repeated.
 
-This policy avoids repeating partially completed external side effects. It does
-not guarantee that a failed cleanup completed successfully. Recovery must be
-explicitly designed by the owning module/operator (for example, an idempotent
-reconciliation operation); calling `stop()` again is not a retry mechanism.
+Core Engine does not retry a failed hook automatically inside the same
+Shutdown attempt. The caller must explicitly call `stop()` again after
+handling or deciding to retry the failure. Module cleanup hooks should be
+idempotent or otherwise safe to retry because a failure can occur after partial
+external side effects. Every failed attempt is reported to its caller.
 
 ## AsyncLocalStorage boundary
 
