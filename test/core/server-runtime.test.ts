@@ -1,4 +1,5 @@
 import { EventEmitter } from "node:events";
+import express from "express";
 import type { Server } from "node:http";
 import type { Express } from "express";
 import { afterEach, describe, expect, it, vi } from "vitest";
