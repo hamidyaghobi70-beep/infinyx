@@ -26,6 +26,7 @@ export class CoreEngine {
   private lifecycle: CoreLifecycleState = "created";
   private readonly moduleStates = new Map<string, ModuleLifecycleState>();
   private initializedModules: CoreModule[] = [];
+  private readonly cleanupInFlight = new Map<string, Promise<void>>();
 
   constructor(private readonly options: CoreEngineOptions = {}) {
     this.events = options.events ?? new InMemoryEventBus();
@@ -160,20 +161,44 @@ export class CoreEngine {
   ): Promise<unknown[]> {
     const errors: unknown[] = [];
     for (const module of [...this.initializedModules].reverse()) {
-      this.moduleStates.set(module.id, "stopping");
       try {
-        await module.stop?.(this.createContext(module.id));
-        this.moduleStates.set(
-          module.id,
-          preserveFailureIds.has(module.id) ? "failed" : "stopped"
-        );
+        await this.cleanupModule(module, preserveFailureIds.has(module.id));
       } catch (error) {
-        this.moduleStates.set(module.id, "failed");
         errors.push(error);
       }
     }
-    this.initializedModules = [];
     return errors;
+  }
+
+  private async cleanupModule(module: CoreModule, preserveFailure: boolean): Promise<void> {
+    const inFlight = this.cleanupInFlight.get(module.id);
+    if (inFlight) {
+      await inFlight;
+      return;
+    }
+
+    const cleanup = (async (): Promise<void> => {
+      this.moduleStates.set(module.id, "cleaning");
+      try {
+        await module.stop?.(this.createContext(module.id));
+        this.moduleStates.set(module.id, preserveFailure ? "failed" : "stopped");
+        this.initializedModules = this.initializedModules.filter(
+          (initialized) => initialized.id !== module.id
+        );
+      } catch (error) {
+        this.moduleStates.set(module.id, "failed");
+        throw error;
+      }
+    })();
+
+    this.cleanupInFlight.set(module.id, cleanup);
+    try {
+      await cleanup;
+    } finally {
+      if (this.cleanupInFlight.get(module.id) === cleanup) {
+        this.cleanupInFlight.delete(module.id);
+      }
+    }
   }
 
   private assertState(expected: CoreLifecycleState, operation: string): void {

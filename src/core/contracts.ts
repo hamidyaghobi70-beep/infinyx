@@ -14,6 +14,7 @@ export type ModuleLifecycleState =
   | "initialized"
   | "starting"
   | "running"
+  | "cleaning"
   | "stopping"
   | "stopped"
   | "failed";
