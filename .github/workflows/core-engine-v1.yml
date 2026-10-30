@@ -1,0 +1,38 @@
+name: Core Engine v1
+
+on:
+  push:
+    branches:
+      - feature/core-engine-v1
+  pull_request:
+    branches:
+      - foundation/repository-foundation
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22.23.4
+          cache: npm
+      - name: Record runtime
+        run: |
+          echo "Node.js: $(node --version)"
+          echo "npm: $(npm --version)"
+      - name: Install exact lockfile
+        run: npm ci
+      - name: Type check
+        run: npm run typecheck
+      - name: Build
+        run: npm run build
+      - name: Test
+        run: npm test
+      - name: Dependency security audit
+        run: npm audit --audit-level=high
