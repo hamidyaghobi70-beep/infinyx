@@ -82,6 +82,23 @@ describe("CoreEngine", () => {
     expect(engine.getModuleStates().get("broken")).toBe("failed");
   });
 
+  it("does not deadlock when a module cleanup attempts a re-entrant stop", async () => {
+    const engine = new CoreEngine();
+    engine.register({
+      id: "worker",
+      version: "1.0.0",
+      stop: async () => {
+        await expect(engine.stop()).rejects.toThrow(/re-entrant stop/i);
+      }
+    });
+
+    await engine.initialize();
+    await engine.stop();
+
+    expect(engine.state).toBe("stopped");
+    expect(engine.getModuleStates().get("worker")).toBe("stopped");
+  });
+
   it("does not authorize actions without an explicit policy", async () => {
     const engine = new CoreEngine();
     const decision = await engine.policy.evaluate({
