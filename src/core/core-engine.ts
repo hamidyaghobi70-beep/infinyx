@@ -33,10 +33,6 @@ export class CoreEngine {
   private readonly moduleStates = new Map<string, ModuleLifecycleState>();
   private initializedModules: CoreModule[] = [];
   private readonly cleanupInFlight = new Map<string, Promise<void>>();
-  // Cleanup is at-most-once per module. A failed attempt remains terminal and
-  // is re-reported by later stop() calls; CoreEngine never retries implicitly.
-  private readonly cleanupAttempted = new Set<string>();
-  private readonly cleanupFailures = new Map<string, unknown>();
   private readonly cleanupContext = new AsyncLocalStorage<CleanupExecutionContext>();
   private stopPromise: Promise<void> | undefined;
 
@@ -198,7 +194,7 @@ export class CoreEngine {
   private async cleanupInitializedModules(
     preserveFailureIds: ReadonlySet<string> = new Set()
   ): Promise<unknown[]> {
-    const errors: unknown[] = [...this.cleanupFailures.values()];
+    const errors: unknown[] = [];
     for (const module of [...this.initializedModules].reverse()) {
       try {
         await this.cleanupModule(module, preserveFailureIds.has(module.id));
@@ -215,16 +211,6 @@ export class CoreEngine {
       await inFlight;
       return;
     }
-    if (this.cleanupAttempted.has(module.id)) {
-      if (this.cleanupFailures.has(module.id)) {
-        throw this.cleanupFailures.get(module.id);
-      }
-      return;
-    }
-
-    // Mark before invoking user code so retries/concurrent callers cannot run
-    // the same hook twice, including when the hook throws synchronously.
-    this.cleanupAttempted.add(module.id);
     const cleanup = Promise.resolve().then(async (): Promise<void> => {
       this.moduleStates.set(module.id, "cleaning");
       const context: CleanupExecutionContext = { engine: this, active: true };
@@ -233,17 +219,18 @@ export class CoreEngine {
           await module.stop?.(this.createContext(module.id));
         });
         this.moduleStates.set(module.id, preserveFailure ? "failed" : "stopped");
+        // Successful hooks leave the retry queue. Failed hooks remain queued
+        // for an explicit later stop() call; successful siblings never rerun.
+        this.initializedModules = this.initializedModules.filter(
+          (initialized) => initialized.id !== module.id
+        );
       } catch (error) {
         this.moduleStates.set(module.id, "failed");
-        this.cleanupFailures.set(module.id, error);
         throw error;
       } finally {
         // Async resources created by the hook retain the same context object.
         // Deactivating it distinguishes detached callbacks from active re-entry.
         context.active = false;
-        this.initializedModules = this.initializedModules.filter(
-          (initialized) => initialized.id !== module.id
-        );
       }
     });
 
