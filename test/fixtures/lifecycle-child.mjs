@@ -1,3 +1,4 @@
+import { once } from "node:events";
 import express from "express";
 import { CoreEngine } from "../../dist/core/core-engine.js";
 import { startServerRuntime } from "../../dist/core/server-runtime.js";
@@ -39,10 +40,10 @@ const runtime = await startServerRuntime({
   drainTimeoutMs: 1_000
 });
 
-if (runtime.server.listening) {
-  process.stdout.write("READY\n");
-} else {
-  // Startup was interrupted by an operating-system signal. The controller
-  // owns shutdown and process exit; keep this child alive until that completes.
+if (mode === "startup" && !runtime.server.listening) {
+  // The real signal interrupted startup; shutdown owns the eventual process exit.
   await new Promise(() => undefined);
+} else {
+  if (!runtime.server.listening) await once(runtime.server, "listening");
+  process.stdout.write("READY\n");
 }
