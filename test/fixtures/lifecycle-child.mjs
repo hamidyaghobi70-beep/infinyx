@@ -40,6 +40,13 @@ const runtime = await startServerRuntime({
   drainTimeoutMs: 1_000
 });
 
+if (mode === "ipc") {
+  process.stdin.setEncoding("utf8");
+  process.stdin.on("data", (chunk) => {
+    if (chunk.includes("SHUTDOWN")) void runtime.shutdown("IPC");
+  });
+}
+
 if (mode === "startup" && !runtime.server.listening) {
   // The real signal interrupted startup; shutdown owns the eventual process exit.
   await new Promise(() => undefined);
