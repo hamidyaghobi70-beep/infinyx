@@ -35,3 +35,7 @@ Registration is closed after initialization begins. Modules are initialized and 
 Core Engine is single-process and single-tenant in this phase. Interfaces should not encode assumptions that prevent later tenant isolation, but no multi-tenant security claim is made.
 
 Before production use, add independent review of lifecycle failure modes, authorization policy, memory adapter threat model, event delivery semantics, observability and operational shutdown behavior.
+
+## Runtime compatibility
+
+The repository minimum runtime is Node.js `22.12.0`, matching the minimum Node 22 engine requirement declared by Vitest 5.0.5 and Vite 7.3.7. CI currently validates on Node.js `22.23.4`.
