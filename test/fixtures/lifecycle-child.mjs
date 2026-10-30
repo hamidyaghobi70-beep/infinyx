@@ -20,7 +20,7 @@ core.register({
   },
   stop: async () => {
     if (mode === "double-signal") {
-      process.stdout.write("CLEANUP_STARTED\\n");
+      process.stdout.write("CLEANUP_STARTED\n");
       process.stdin.setEncoding("utf8");
       await new Promise((resolve) => {
         const onData = (chunk) => {
@@ -32,7 +32,7 @@ core.register({
         process.stdin.on("data", onData);
       });
     }
-    process.stdout.write("STOPPED\\n");
+    process.stdout.write("STOPPED\n");
   }
 });
 
@@ -46,7 +46,7 @@ const runtime = await startServerRuntime({
   logger: {
     info: (fields) => {
       if (fields && typeof fields === "object" && "reason" in fields) {
-        process.stdout.write(`SIGNAL:${fields.reason}\\n`);
+        process.stdout.write(`SIGNAL:${fields.reason}\n`);
       }
     },
     error: (...args) => process.stderr.write(`${args.map(String).join(" ")}\\n`)
