@@ -99,6 +99,119 @@ describe("CoreEngine", () => {
     expect(engine.getModuleStates().get("worker")).toBe("stopped");
   });
 
+  it("shares the exact stop promise between independent consumers", async () => {
+    const engine = new CoreEngine();
+    let releaseCleanup!: () => void;
+    const cleanupGate = new Promise<void>((resolve) => { releaseCleanup = resolve; });
+    let cleanupCalls = 0;
+
+    engine.register({
+      id: "worker",
+      version: "1.0.0",
+      stop: async () => {
+        cleanupCalls += 1;
+        await cleanupGate;
+      }
+    });
+
+    await engine.initialize();
+    const promiseA = engine.stop();
+    const promiseB = engine.stop();
+
+    expect(promiseA).toBe(promiseB);
+    releaseCleanup();
+    await Promise.all([promiseA, promiseB]);
+
+    expect(cleanupCalls).toBe(1);
+    expect(engine.state).toBe("stopped");
+  });
+
+  it("keeps a timer created inside an active cleanup hook in the re-entrant context", async () => {
+    const engine = new CoreEngine();
+    let reentrantRejected = false;
+
+    engine.register({
+      id: "worker",
+      version: "1.0.0",
+      stop: async () => {
+        await new Promise<void>((resolve) => setTimeout(resolve, 0));
+        await expect(engine.stop()).rejects.toThrow(/re-entrant stop/i);
+        reentrantRejected = true;
+      }
+    });
+
+    await engine.initialize();
+    await engine.stop();
+
+    expect(reentrantRejected).toBe(true);
+    expect(engine.state).toBe("stopped");
+  });
+
+  it("allows a timer callback after its cleanup hook settles to join the active shutdown", async () => {
+    const engine = new CoreEngine();
+    let releaseBlocker!: () => void;
+    const blockerGate = new Promise<void>((resolve) => { releaseBlocker = resolve; });
+    let detachedStop: Promise<void> | undefined;
+    let observedTimer!: () => void;
+    const timerObserved = new Promise<void>((resolve) => { observedTimer = resolve; });
+    let blockerCalls = 0;
+    let timerHookCalls = 0;
+
+    // Cleanup is reverse registration order: timer hook first, blocker second.
+    engine.register({
+      id: "blocker",
+      version: "1.0.0",
+      stop: async () => {
+        blockerCalls += 1;
+        await blockerGate;
+      }
+    });
+    engine.register({
+      id: "timer",
+      version: "1.0.0",
+      stop: () => {
+        timerHookCalls += 1;
+        setTimeout(() => {
+          detachedStop = engine.stop();
+          observedTimer();
+        }, 0);
+      }
+    });
+
+    await engine.initialize();
+    const shutdown = engine.stop();
+    await timerObserved;
+
+    expect(detachedStop).toBe(shutdown);
+    releaseBlocker();
+    await shutdown;
+
+    expect(timerHookCalls).toBe(1);
+    expect(blockerCalls).toBe(1);
+    expect(engine.state).toBe("stopped");
+  });
+
+  it("does not retry a failed cleanup hook implicitly", async () => {
+    const engine = new CoreEngine();
+    let cleanupCalls = 0;
+    engine.register({
+      id: "unstable",
+      version: "1.0.0",
+      stop: () => {
+        cleanupCalls += 1;
+        throw new Error("cleanup failed once");
+      }
+    });
+
+    await engine.initialize();
+    await expect(engine.stop()).rejects.toThrow(/One or more modules failed to stop/i);
+    await expect(engine.stop()).rejects.toThrow(/One or more modules failed to stop/i);
+
+    expect(cleanupCalls).toBe(1);
+    expect(engine.getModuleStates().get("unstable")).toBe("failed");
+    expect(engine.state).toBe("failed");
+  });
+
   it("does not authorize actions without an explicit policy", async () => {
     const engine = new CoreEngine();
     const decision = await engine.policy.evaluate({
