@@ -4,6 +4,7 @@ on:
   push:
     branches:
       - feature/core-engine-v1
+      - fix/core-engine-shutdown-v4
   pull_request:
     branches:
       - foundation/repository-foundation
