@@ -13,6 +13,11 @@ import { InMemoryEventBus } from "./event-bus.js";
 import { CoreError } from "./core-error.js";
 import { ModuleRegistry } from "./module-registry.js";
 
+interface CleanupExecutionContext {
+  readonly engine: CoreEngine;
+  active: boolean;
+}
+
 export interface CoreEngineOptions {
   readonly events?: EventBusPort;
   readonly policy?: PolicyEngine;
@@ -28,7 +33,11 @@ export class CoreEngine {
   private readonly moduleStates = new Map<string, ModuleLifecycleState>();
   private initializedModules: CoreModule[] = [];
   private readonly cleanupInFlight = new Map<string, Promise<void>>();
-  private readonly cleanupContext = new AsyncLocalStorage<CoreEngine>();
+  // Cleanup is at-most-once per module. A failed attempt remains terminal and
+  // is re-reported by later stop() calls; CoreEngine never retries implicitly.
+  private readonly cleanupAttempted = new Set<string>();
+  private readonly cleanupFailures = new Map<string, unknown>();
+  private readonly cleanupContext = new AsyncLocalStorage<CleanupExecutionContext>();
   private stopPromise: Promise<void> | undefined;
 
   constructor(private readonly options: CoreEngineOptions = {}) {
@@ -126,7 +135,8 @@ export class CoreEngine {
     // Returning the in-flight stop promise from inside a stop hook would make
     // that hook await the operation that is itself waiting for the hook.
     // Detect this async call chain explicitly instead of creating a deadlock.
-    if (this.cleanupContext.getStore() === this) {
+    const cleanupContext = this.cleanupContext.getStore();
+    if (cleanupContext?.engine === this && cleanupContext.active) {
       return Promise.reject(new CoreError(
         "INVALID_LIFECYCLE_TRANSITION",
         "Re-entrant stop() from a module cleanup hook is not allowed."
@@ -188,7 +198,7 @@ export class CoreEngine {
   private async cleanupInitializedModules(
     preserveFailureIds: ReadonlySet<string> = new Set()
   ): Promise<unknown[]> {
-    const errors: unknown[] = [];
+    const errors: unknown[] = [...this.cleanupFailures.values()];
     for (const module of [...this.initializedModules].reverse()) {
       try {
         await this.cleanupModule(module, preserveFailureIds.has(module.id));
@@ -205,22 +215,37 @@ export class CoreEngine {
       await inFlight;
       return;
     }
+    if (this.cleanupAttempted.has(module.id)) {
+      if (this.cleanupFailures.has(module.id)) {
+        throw this.cleanupFailures.get(module.id);
+      }
+      return;
+    }
 
-    const cleanup = (async (): Promise<void> => {
+    // Mark before invoking user code so retries/concurrent callers cannot run
+    // the same hook twice, including when the hook throws synchronously.
+    this.cleanupAttempted.add(module.id);
+    const cleanup = Promise.resolve().then(async (): Promise<void> => {
       this.moduleStates.set(module.id, "cleaning");
+      const context: CleanupExecutionContext = { engine: this, active: true };
       try {
-        await this.cleanupContext.run(this, async () => {
+        await this.cleanupContext.run(context, async () => {
           await module.stop?.(this.createContext(module.id));
         });
         this.moduleStates.set(module.id, preserveFailure ? "failed" : "stopped");
+      } catch (error) {
+        this.moduleStates.set(module.id, "failed");
+        this.cleanupFailures.set(module.id, error);
+        throw error;
+      } finally {
+        // Async resources created by the hook retain the same context object.
+        // Deactivating it distinguishes detached callbacks from active re-entry.
+        context.active = false;
         this.initializedModules = this.initializedModules.filter(
           (initialized) => initialized.id !== module.id
         );
-      } catch (error) {
-        this.moduleStates.set(module.id, "failed");
-        throw error;
       }
-    })();
+    });
 
     this.cleanupInFlight.set(module.id, cleanup);
     try {
