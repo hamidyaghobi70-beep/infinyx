@@ -8,6 +8,7 @@ on:
   pull_request:
     branches:
       - foundation/repository-foundation
+      - feature/core-engine-v1
 
 permissions:
   contents: read
