@@ -1,0 +1,72 @@
+name: Import Validated Lockfile
+
+on:
+  push:
+    branches:
+      - foundation/repository-foundation
+    paths:
+      - .github/workflows/import-validated-lockfile.yml
+
+permissions:
+  actions: read
+  contents: write
+
+jobs:
+  import-lockfile:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Foundation branch
+        uses: actions/checkout@v4
+        with:
+          ref: foundation/repository-foundation
+
+      - name: Download approved bootstrap artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: package-lock-json
+          path: ./.lockfile-artifact
+          repository: hamidyaghobi70-beep/infinyx
+          run-id: 40990286582
+          github-token: ${{ github.token }}
+
+      - name: Verify artifact integrity and package metadata
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -s ./.lockfile-artifact/package-lock.json
+          actual="$(sha256sum ./.lockfile-artifact/package-lock.json | awk '{print $1}')"
+          expected="a0dead22ecf61f1ab62745ea4d16da8bdc04a50c2aeafcf5a81ca59e01cdef5f"
+          test "$actual" = "$expected"
+          node --input-type=commonjs -e '
+            const fs = require("node:fs");
+            const pkg = JSON.parse(fs.readFileSync("package.json", "utf8"));
+            const lock = JSON.parse(fs.readFileSync("./.lockfile-artifact/package-lock.json", "utf8"));
+            if (lock.lockfileVersion !== 3) throw new Error("Unexpected lockfileVersion");
+            if (lock.name !== pkg.name || lock.version !== pkg.version) throw new Error("Lockfile metadata mismatch");
+            const root = lock.packages?.[""];
+            if (!root || root.name !== pkg.name || root.version !== pkg.version) throw new Error("Lockfile root package mismatch");
+            for (const field of ["dependencies", "devDependencies", "optionalDependencies", "engines"]) {
+              if (JSON.stringify(root[field] ?? {}) !== JSON.stringify(pkg[field] ?? {})) {
+                throw new Error("Lockfile root " + field + " does not match package.json");
+              }
+            }
+            console.log("Lockfile integrity and package metadata verified.");
+          '
+          {
+            echo "### Validated lockfile import"
+            echo "- SHA-256: $actual"
+            echo "- Source workflow run: 40990286582"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Commit validated lockfile
+        shell: bash
+        run: |
+          set -euo pipefail
+          test ! -e package-lock.json
+          cp ./.lockfile-artifact/package-lock.json ./package-lock.json
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add package-lock.json
+          git commit -m "chore: add validated npm lockfile"
+          git push origin HEAD:refs/heads/foundation/repository-foundation
+          echo "- Lockfile commit: $(git rev-parse HEAD)" >> "$GITHUB_STEP_SUMMARY"
