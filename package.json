@@ -10,7 +10,8 @@
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "typecheck": "tsc --noEmit -p tsconfig.json",
-    "test": "vitest run"
+    "test": "vitest run",
+    "test:process": "node --test test/integration/process-signals.test.mjs"
   },
   "dependencies": {
     "express": "^5.1.0",
