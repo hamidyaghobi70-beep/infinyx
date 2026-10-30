@@ -1,6 +1,7 @@
 name: Vitest 5.0.5 Isolated Remediation Experiment
 
 on:
+  workflow_dispatch:
   push:
     branches:
       - experiment/vitest-5-remediation
