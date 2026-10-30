@@ -1,4 +1,4 @@
-import type { Server } from "node:http";
+import { Server } from "node:http";
 import type { Express } from "express";
 import type { Logger } from "pino";
 import type { CoreEngine } from "./core-engine.js";
@@ -22,8 +22,10 @@ export interface ServerRuntime {
 
 class ShutdownController {
   private server: Server | undefined;
+  private startupPromise: Promise<void> | undefined;
   private shutdownPromise: Promise<void> | undefined;
   private exitPromise: Promise<void> | undefined;
+  private shutdownRequested = false;
   private finalExitCode = 0;
 
   constructor(private readonly options: ServerRuntimeOptions) {}
@@ -43,11 +45,20 @@ class ShutdownController {
     });
   }
 
+  attachStartup(startupPromise: Promise<void>): void {
+    this.startupPromise = startupPromise;
+  }
+
+  isShutdownRequested(): boolean {
+    return this.shutdownRequested;
+  }
+
   attachServer(server: Server): void {
     this.server = server;
   }
 
   shutdown(reason = "manual", fatal = false, error?: unknown): Promise<void> {
+    this.shutdownRequested = true;
     if (fatal) {
       this.finalExitCode = 1;
       this.options.logger.error(
@@ -63,8 +74,19 @@ class ShutdownController {
   }
 
   private async performShutdown(): Promise<void> {
+    // A signal during initialize/start must wait for the startup hook to settle.
+    // This prevents CoreEngine.stop() from racing an in-flight lifecycle hook.
+    if (this.startupPromise) {
+      try {
+        await this.startupPromise;
+      } catch (error) {
+        this.finalExitCode = 1;
+        this.options.logger.error({ err: error }, "Application startup failed during shutdown");
+      }
+    }
+
     try {
-      if (this.server) {
+      if (this.server?.listening) {
         await this.drainHttpServer(this.server);
       }
     } catch (error) {
@@ -125,12 +147,36 @@ class ShutdownController {
 export async function startServerRuntime(
   options: ServerRuntimeOptions
 ): Promise<ServerRuntime> {
-  await options.core.initialize();
-  await options.core.start();
-
   const shutdown = new ShutdownController(options);
-  // Register every process-level shutdown handler before listen() can accept traffic.
+  // Install handlers and publish the startup promise before any startup hook runs.
   shutdown.install();
+
+  const startupPromise = Promise.resolve().then(async () => {
+    await options.core.initialize();
+    // If a signal arrived during initialization, do not start modules just to stop them.
+    if (!shutdown.isShutdownRequested()) {
+      await options.core.start();
+    }
+  });
+  shutdown.attachStartup(startupPromise);
+
+  try {
+    await startupPromise;
+  } catch (error) {
+    if (shutdown.isShutdownRequested()) {
+      await shutdown.shutdown("startup-failed", true, error);
+    }
+    throw error;
+  }
+
+  if (shutdown.isShutdownRequested()) {
+    // Startup was interrupted by a signal. Return a non-listening server handle;
+    // no HTTP traffic is accepted while the pending shutdown completes.
+    return {
+      server: new Server(),
+      shutdown: (reason, fatal) => shutdown.shutdown(reason, fatal)
+    };
+  }
 
   const server = options.app.listen(options.port, options.host, () => {
     options.logger.info(

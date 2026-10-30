@@ -27,6 +27,7 @@ function fixture(options?: {
   const close = vi.fn(options?.close ?? ((callback) => callback()));
   const closeAllConnections = vi.fn();
   const server = {
+    listening: true,
     close,
     closeAllConnections
   } as unknown as Server;
