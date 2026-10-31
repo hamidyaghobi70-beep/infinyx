@@ -105,25 +105,25 @@ A stop request is represented as a state transition plus source/reason metadata,
 | `CREATED` | Begin authorization | `AUTHORIZING` | No protected work may start. |
 | `CREATED` | Authorized stop request wins | `STOP_REQUESTED` | Do not start authorization-dependent work; record source. |
 | `AUTHORIZING` | Affirmative policy decision and no stop/shutdown/deadline has won | `AUTHORIZED` | Record decision reference/version and validity metadata. |
-| `AUTHORIZING` | Deny, indeterminate, invalid, stale, or required policy check fails | `TERMINAL` | Commit `denied`; no protected operation admitted. |
+| `AUTHORIZING` | Deny, indeterminate, invalid, stale, or required policy check fails | `FINALIZING` | Freeze Outcome Candidate `denied`; skip business execution and perform the applicable finalization/commitment checks. Never transition directly to `TERMINAL`. |
 | `AUTHORIZING` | Stop request wins before authorization completes | `STOP_REQUESTED` | Pending decision cannot later reopen this attempt. |
 | `AUTHORIZED` | Start accepted by lifecycle/admission gate | `RUNNING` | Admission checks in section 8 MUST pass. |
-| `AUTHORIZED` | Policy invalid/revoked before admission | `TERMINAL` | Commit `denied`; no protected operation starts. |
+| `AUTHORIZED` | Policy invalid/revoked before admission | `FINALIZING` | Freeze Outcome Candidate `denied`; no protected operation starts; perform finalization/commitment checks before `TERMINAL`. |
 | `AUTHORIZED` | Cancellation, deadline, or shutdown wins | `STOP_REQUESTED` | No execution admission. |
 | `RUNNING` | Caller/shutdown cancellation wins | `STOP_REQUESTED` | Block new admissions; signal active operations and children. |
 | `RUNNING` | Deadline wins | `STOP_REQUESTED` | Block new admissions; signal active operations and children. |
-| `RUNNING` | Required policy revalidation denies/revokes | `STOP_REQUESTED` | Block new admissions; preserve denial as primary stop reason. |
+| `RUNNING` | Required policy revalidation denies/revokes | `STOP_REQUESTED` | Close business admission and signal active work; record pending denial classification. Once local work/children are quiescent, enter `FINALIZING` and freeze candidate `denied`. |
 | `RUNNING` | All work succeeds and completion wins arbitration | `FINALIZING` | No further work; perform required bounded finalization. |
 | `RUNNING` | Operational failure wins arbitration | `FINALIZING` | Stop sibling work as required; retain failure as primary result. |
 | `STOP_REQUESTED` | No operation was admitted/in flight and no governed child is active, or all active work and children are confirmed quiescent | `FINALIZING` | Begin bounded finalization; signal acknowledgement alone is insufficient unless the adapter contract guarantees cessation. |
-| `STOP_REQUESTED` | Stop cannot be confirmed before observation/grace bound | `UNRESOLVED` | Record unconfirmed work; do not claim clean cancellation or close resources it may still use. |
-| `FINALIZING` | Cleanup/child joining completes or its bounded policy permits final classification | `TERMINAL` | Commit exactly one outcome; record cleanup independently. |
-| `FINALIZING` | Cleanup bound expires but execution is quiescent | `TERMINAL` | Commit primary outcome; mark cleanup timed out/failed. |
+| `STOP_REQUESTED` | Stop cannot be confirmed before observation/grace bound | `UNRESOLVED` | Record unconfirmed local work; do not freeze a terminal result, claim clean cancellation, or close resources it may still use. |
+| `FINALIZING` | All registered children, local operations, callbacks, and cleanup are complete or confirmed locally quiescent; all required status fields are recorded | `TERMINAL` | Perform the single Terminal Commitment using the frozen Outcome Candidate; record cleanup and external-effect status independently. |
+| `FINALIZING` | Cleanup bound expires and cleanup cessation is confirmed; all other Terminal Commitment guards hold | `TERMINAL` | Commit the frozen candidate; mark cleanup timed out/failed. If cleanup may still execute, transition to `UNRESOLVED`, not `TERMINAL`. |
 | `UNRESOLVED` | Later authoritative confirmation establishes quiescence | `FINALIZING` | Resume only bounded finalization/reconciliation, not business execution. |
 | `UNRESOLVED` | No confirmation available | `UNRESOLVED` | Preserve unresolved status; no false terminal claim. |
 | `TERMINAL` | Any late cancellation, shutdown, cleanup callback, or duplicate completion | `TERMINAL` | Reject state mutation; optionally append a safe late-event diagnostic. |
 
-All transitions MUST be serialized by one authoritative lifecycle coordinator for the work item. The transition from `RUNNING` to `FINALIZING` on successful completion or operational failure also locks the corresponding outcome candidate at that linearization point; later stop events cannot replace that candidate. Illegal transitions MUST be rejected and surfaced as contract violations; they MUST NOT be silently coerced into success.
+All transitions MUST be serialized by one authoritative lifecycle coordinator for the work item. Entering `FINALIZING` freezes the Outcome Candidate; entering `TERMINAL` is a separate Terminal Commitment and is allowed only when every guard in section 17.1 is satisfied. Denial before execution may move `AUTHORIZING` or `AUTHORIZED` to `FINALIZING`, never directly to `TERMINAL`. An in-flight revocation first closes admission and enters `STOP_REQUESTED`; after local quiescence it enters `FINALIZING` with candidate `denied`. A `FINALIZING` item whose cleanup or other local actor may still execute moves to `UNRESOLVED` rather than `TERMINAL`. Illegal transitions MUST be rejected and surfaced as contract violations; they MUST NOT be silently coerced into success.
 
 ### 5.3 Lifecycle invariants
 
@@ -422,9 +422,12 @@ If local quiescence is unconfirmed, there is no Terminal Commitment.
 ### 17.2 Exact START_COMMITTED contract and adapter boundary
 
 Each operation reservation has monotonic sub-states
-`RESERVED`, then either `INVALIDATED` or `START_COMMITTED`. An
-invalidated reservation is never reusable and each reservation is consumed
-at most once.
+`RESERVED`, then either `INVALIDATED` or `START_COMMITTED`. The at-most-once
+property is strictly **in-process and per live work-item/reservation identity**:
+one coordinator instance may consume a reservation and invoke its adapter
+entry point no more than once. It is not a durable guarantee across process
+crash, restart, host failure, or loss of volatile coordinator state. It does
+not guarantee that an external system applies an effect at most once.
 
 Under one serialized, non-yielding in-process critical section (or reviewed
 equivalent explicit adapter handshake), the Core Platform coordinator MUST:
@@ -454,6 +457,30 @@ the reservation and the adapter MUST NOT be invoked. Stop after step 3
 blocks later admissions and signals the admitted operation under its
 adapter contract. This protocol serializes local initiation; it does not
 make arbitrary remote effects atomic or provide exactly-once semantics.
+
+**Crash/restart boundary:** the ordered record and synchronous adapter call
+are serialized only while the process is alive; they are not one atomic
+transaction spanning process memory and a remote system. A crash can occur
+after recording `START_COMMITTED` but before the adapter call, during the
+call, or after the external effect but before its receipt/result is recorded.
+After restart, absent a separately approved durable recovery protocol, the
+system MUST treat any such operation whose initiation/result cannot be
+proven as `START_UNKNOWN` / `unknown_requires_reconciliation`, MUST NOT
+replay it automatically, and MUST NOT infer `NOT_STARTED` from a missing
+volatile record or missing response. If the process crashes before a
+volatile `START_COMMITTED` record, that fact also cannot be used after
+restart to prove that no external request escaped unless the adapter/system
+provides independent authoritative evidence.
+
+This document specifies no durable journal or cross-restart deduplication.
+A future design seeking at-most-once initiation across restart would require
+an approved durable operation identity and write-ahead state/recovery
+protocol plus an adapter/external-system deduplication contract; even that
+must state its failure assumptions and does not establish exactly-once
+external effects. Recovery must reconcile by stable operation identity and
+authoritative external status before any separately authorized retry. Any
+retry is a new reviewed action with fresh authorization and idempotency
+analysis, not a replay of the old reservation.
 
 ### 17.3 Cleanup deadline expiry and active cleanup
 
@@ -583,7 +610,10 @@ terminal commitment remain separate.
 | 5. Parent cancellation versus child creation | 5.2–5.3, 9.1, 17.5 | V-36–V-37 |
 | 6. Local cessation versus unknown external effect | 4, 6.3, 8.3, 17.6 | V-38–V-39 |
 | 7. denied/cancelled/timed_out precedence | 4, 6.2, 17.7 | V-40–V-41 |
-| 8. Acceptance matrix coverage | 13, 17.8 | V-28–V-41 |
+| 8. Acceptance matrix coverage | 13, 17.8–17.9 | V-28–V-44 |
+| 9. State-matrix alignment and no direct denial-to-terminal path | 5.2, 17.1, 17.7 | V-44 |
+| 10. At-most-once scope across crash/restart | 17.2 | V-42–V-43 |
+| 11. START_COMMITTED crash window | 17.2 | V-42–V-43 |
 
 ### 17.9 Additional future verification scenarios
 
@@ -591,6 +621,9 @@ terminal commitment remain separate.
 |---|---|---|
 | V-28 | Stop after reservation but before START_COMMITTED | Reservation invalidated; adapter is never invoked. |
 | V-29 | START_COMMITTED and adapter receipts | Synchronous handoff is enforced; receipts are classified exactly; possibly post-effect exception is unknown, never assumed not-started. |
+| V-42 | Process crashes between START_COMMITTED record and adapter invocation | Restart does not infer not-started from volatile state; operation is classified unknown unless authoritative evidence proves otherwise; no automatic replay. |
+| V-43 | Process crashes during/after adapter call before result recording | External status is unknown pending reconciliation by stable operation identity; no exactly-once or at-most-once-across-restart claim. |
+| V-44 | Denial/revocation finalization path | Denial enters FINALIZING or STOP_REQUESTED then FINALIZING; TERMINAL is reachable only after all Terminal Commitment guards are met. |
 | V-30 | Candidate frozen while cleanup is pending | Candidate remains provisional; no `TERMINAL` or final result is exposed. |
 | V-31 | Late stop/denial after candidate freeze | Candidate remains immutable; late event cannot rewrite it. |
 | V-32 | Cleanup deadline expires and cessation is confirmed | Cleanup admission closes; status is timed_out; frozen candidate may be committed. |
@@ -606,8 +639,7 @@ terminal commitment remain separate.
 
 ## 18. Final independent review handoff
 
-The eight findings have been addressed as specification text and mapped to
-sections and future verification scenarios. This is not a second independent
+The independent review findings and subsequent clarifications have been addressed as specification text and mapped to sections and future verification scenarios. This is not a second independent
 audit, runtime validation, or implementation approval. Implementation-
 specific decisions in section 15 remain open and require explicit design and
 review before implementation.
