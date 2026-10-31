@@ -1,6 +1,6 @@
 # INFINYX-ENG-001 — Stage 1 Policy Cancellation Hardening
 
-**Status:** Documentation revision — awaiting second technical review  
+**Status:** Documentation revision — awaiting final independent review  
 **Specification maturity:** Proposed contract; not implementation evidence  
 **Stage:** Stage 1 — Policy Cancellation Hardening  
 **Applies to:** Core Platform lifecycle contracts and future policy-governed execution workflows  
@@ -347,7 +347,7 @@ This stage records a contract only. No runtime behavior is asserted to have chan
 
 - [x] Original documentation specification committed on the feature branch.
 - [x] Documentation-only revision prepared for second technical review.
-- [ ] Second technical review — pending.
+- [x] Independent review findings received and addressed at specification level; final independent review — pending.
 - [ ] Implementation authorization — not granted.
 - [ ] Source-code or test changes — not authorized by this revision.
 - [ ] Configuration, dependency, CI, or deployment changes — not authorized.
@@ -383,5 +383,234 @@ More restrictive security controls, repository protections, and explicit approva
 
 ---
 
-**Document status: DOCUMENTATION REVISION — AWAITING SECOND TECHNICAL REVIEW**  
+**Document status: DOCUMENTATION REVISION — AWAITING FINAL INDEPENDENT REVIEW**  
+**Implementation authorization: NOT GRANTED**
+
+
+## 17. Independent review resolution — normative clarifications
+
+This section resolves all eight findings from the independent review of
+`071a1e77dd0725cd71e19721ea81c0487b1a69b6`. It is normative and controls wherever earlier wording in
+sections 4–13 could be read inconsistently. It defines future contracts only;
+it is not implementation evidence.
+
+### 17.1 Outcome Candidate versus Terminal Commitment
+
+An **Outcome Candidate** is a provisional primary classification selected by
+the lifecycle coordinator when it freezes business execution and enters
+`FINALIZING`. Candidate values are `completed`, `failed`, `denied`,
+`cancelled`, and `timed_out`. Candidate selection is not terminal
+commitment, does not make the item `TERMINAL`, and MUST NOT be exposed as a
+final result.
+
+A **Terminal Commitment** is the later, single, irreversible coordinator
+transition that records the frozen candidate as the terminal outcome. It is
+permitted only after: (a) business admission is closed; (b) every locally
+executing operation and adapter callback has completed or confirmed local
+cessation; (c) every registered child is locally quiescent; (d) cleanup has
+completed or its deadline expired and cleanup cessation is confirmed; and
+(e) cleanup and external-effect status are recorded separately. If cleanup
+may still execute, commitment is withheld and the item remains
+`UNRESOLVED`.
+
+The candidate-selection linearization point is the serialized transition to
+`FINALIZING`; the terminal-commitment linearization point is the later
+transition to `TERMINAL`. They are distinct. Events before candidate freeze
+participate in candidate arbitration; events after freeze cannot replace it.
+If local quiescence is unconfirmed, there is no Terminal Commitment.
+
+### 17.2 Exact START_COMMITTED contract and adapter boundary
+
+Each operation reservation has monotonic sub-states
+`RESERVED`, then either `INVALIDATED` or `START_COMMITTED`. An
+invalidated reservation is never reusable and each reservation is consumed
+at most once.
+
+Under one serialized, non-yielding in-process critical section (or reviewed
+equivalent explicit adapter handshake), the Core Platform coordinator MUST:
+1. Verify parent state is `RUNNING`, shutdown admission is open, the
+   reservation is live, and Security Layer authorization affirmatively
+   covers this exact action/resource/context.
+2. Recheck that no stop, deadline, denial, or admission-closure event won.
+3. Record `START_COMMITTED` with a unique operation ID and coordinator
+   sequence.
+4. Immediately invoke the adapter's synchronous `begin/start` entry point
+   before releasing the critical section and before yielding or awaiting.
+   The adapter MUST NOT defer the decision to initiate work until a later
+   task/microtask.
+
+That entry point MUST synchronously return one receipt:
+- `NOT_STARTED`: adapter guarantees no external request/effect was initiated.
+- `STARTED(handle)`: adapter accepted ownership and provides a handle for
+  completion, local-cessation, and external-effect observations.
+- `START_UNKNOWN`: initiation cannot be established; treat as admitted,
+  prohibit retry, and mark external status unknown.
+
+A synchronous exception means `NOT_STARTED` only if the adapter contract
+guarantees it cannot throw after initiating an effect; otherwise it means
+`START_UNKNOWN`. Timeout, disconnect, lost response, or cancellation is
+never proof of `NOT_STARTED`. Stop serialized before step 3 invalidates
+the reservation and the adapter MUST NOT be invoked. Stop after step 3
+blocks later admissions and signals the admitted operation under its
+adapter contract. This protocol serializes local initiation; it does not
+make arbitrary remote effects atomic or provide exactly-once semantics.
+
+### 17.3 Cleanup deadline expiry and active cleanup
+
+Cleanup has its own absolute monotonic deadline and cancellation context.
+At expiry the coordinator MUST close further cleanup admission, signal every
+active cleanup operation, provisionally set `cleanup_status: timed_out`,
+and perform a bounded cessation observation.
+
+If cleanup cessation is confirmed, the candidate may be committed with
+cleanup status `timed_out`. If cleanup may still execute when the
+observation bound expires, the work item MUST remain `UNRESOLVED`, withhold
+Terminal Commitment, preserve `local_quiescence: unconfirmed`, and keep
+resources it may use open. Deadline expiry is not proof of termination and
+does not authorize unsafe forced closure. A separately reviewed adapter/
+resource contract may define safe forced interruption/closure. Later
+authoritative cessation may resume finalization, but MUST NOT restart
+business work or cleanup side effects. Cleanup cannot continue without
+bound.
+
+### 17.4 Cleanup side-effect boundary and independent authorization
+
+An accepted stop permanently closes the attempt's ordinary business
+admission lane. Cleanup cannot reopen it.
+
+**Local teardown** may release owned resources, detach listeners, and
+discard local temporary state; it MUST NOT initiate a new externally
+observable business mutation. Any remote call, write, notification,
+compensation, deletion, transfer, or other externally observable mutation
+is a **protected cleanup action**, not privileged cleanup, and is denied by
+default after cancellation.
+
+Such an action may proceed only if a reviewed cleanup plan declared its
+exact action/target, purpose, bound, idempotency/recovery rule, and required
+approval before execution. It MUST obtain fresh affirmative Security Layer
+authorization for that cleanup action and pass a distinct cleanup admission
+gate serialized against cleanup deadline, shutdown closure, and cleanup
+cancellation. Authorization for the cancelled business operation is never
+inherited. Human approval remains mandatory where required. Compensation
+and reconciliation are separate new actions with their own identity,
+authorization, approval, and audit; cleanup MUST NOT replay the original
+request or silently retry an uncertain effect.
+
+### 17.5 Atomic race: parent cancellation versus child creation
+
+Child creation/registration is one coordinator-controlled operation. A
+child MUST NOT execute domain code, acquire protected resources, or perform
+side effects before registration.
+
+The parent coordinator serializes `REGISTER_CHILD` against parent stop:
+- If stop wins first, registration is rejected and no child work starts.
+- If registration wins first, the child identity and ownership record are
+  atomically inserted into the parent's child set before the child is
+  schedulable. If parent stop wins before child start commit, child start
+  is rejected and no business work executes.
+- If child start commit wins first, it is a registered active child; parent
+  stop propagates to it and parent quiescence waits for child local
+  cessation.
+- Duplicate child identity registration is rejected or idempotent, never a
+  second execution.
+
+A check-then-register sequence with an await/scheduling gap is forbidden.
+Parent stop closes registration and child-start admission in the same
+serialized event. No implicit orphaning, detachment, or ownership transfer
+is permitted.
+
+### 17.6 Local quiescence versus unknown external operation
+
+Report two independent dimensions:
+- `local_quiescence`: `confirmed` or `unconfirmed`, describing whether
+  this process has ceased work-item code, owned children, adapter callbacks,
+  and cleanup code that could issue another request.
+- `external_effect_status`: `none`, `not_started`, `completed`,
+  `stopped_confirmed`, or `unknown_requires_reconciliation`, describing
+  the remote effect only.
+
+A local adapter task/socket may cease while the remote system continues or
+its result is unknown. In that case local quiescence can be confirmed and
+Terminal Commitment may occur, with external status explicitly unknown;
+this MUST NOT be described as remote termination. Conversely, a known
+remote completion does not permit commitment while a local callback or
+cleanup remains active. Earlier uses of `termination_status` mean local
+termination only, never remote cancellation confirmation. Reconciliation
+is a separate authorized action.
+
+### 17.7 Complete precedence: denied, timed_out, cancelled
+
+Every accepted arbitration event receives a strictly increasing
+coordinator sequence; wall-clock order is diagnostic only.
+
+1. **Pre-admission denial:** affirmative deny, missing/invalid/stale
+   decision, or failed mandatory authorization check selects `denied`.
+   Concurrent cancellation/deadline cannot convert unauthorized work to
+   `cancelled` or `timed_out`.
+2. **In-flight revocation:** affirmative policy revocation serialized while
+   business work is active and before candidate freeze selects `denied`,
+   closes business admission, and requests stop. It takes precedence over
+   caller cancellation/deadline observed but not yet frozen.
+3. **Deadline versus cancellation:** absent qualifying denial, whichever
+   event is serialized first selects `timed_out` or `cancelled`.
+   If both enter the same indivisible coordinator batch with no distinct
+   sequence, deterministic tie-break is `timed_out` before `cancelled`.
+4. **Completion/failure versus stop:** successful completion or operational
+   failure freezes `completed`/`failed` only if its transition to
+   `FINALIZING` is serialized before an effective stop. A later stop
+   cannot rewrite it.
+5. **Stop before completion/failure:** if stop is serialized first, later
+   results of already-admitted work are secondary operation results, not
+   replacements for the stop candidate. A qualifying policy revocation
+   still follows rule 2.
+6. **After candidate freeze:** no later event, including denial/deadline,
+   replaces the candidate; it may be recorded as late metadata.
+7. **Commitment:** delayed Terminal Commitment never reopens arbitration.
+
+Thus denial is the fail-closed result for authorization failure known before
+candidate freeze; otherwise deadline/cancellation follow coordinator
+sequence and the explicit same-batch tie-break. Candidate selection and
+terminal commitment remain separate.
+
+### 17.8 Finding-to-section and verification traceability
+
+| Independent finding | Clarified sections | Future verification scenarios |
+|---|---|---|
+| 1. START_COMMITTED and adapter guarantees | 8.1, 9.3, 17.2 | V-28–V-29 |
+| 2. Outcome Candidate versus Terminal Commitment | 5.2, 6.1, 17.1 | V-30–V-31 |
+| 3. Active cleanup after deadline | 11, 17.3 | V-32–V-33 |
+| 4. Cleanup side-effect boundary | 8.2–8.3, 11, 17.4 | V-34–V-35 |
+| 5. Parent cancellation versus child creation | 5.2–5.3, 9.1, 17.5 | V-36–V-37 |
+| 6. Local cessation versus unknown external effect | 4, 6.3, 8.3, 17.6 | V-38–V-39 |
+| 7. denied/cancelled/timed_out precedence | 4, 6.2, 17.7 | V-40–V-41 |
+| 8. Acceptance matrix coverage | 13, 17.8 | V-28–V-41 |
+
+### 17.9 Additional future verification scenarios
+
+| ID | Scenario | Required assertion |
+|---|---|---|
+| V-28 | Stop after reservation but before START_COMMITTED | Reservation invalidated; adapter is never invoked. |
+| V-29 | START_COMMITTED and adapter receipts | Synchronous handoff is enforced; receipts are classified exactly; possibly post-effect exception is unknown, never assumed not-started. |
+| V-30 | Candidate frozen while cleanup is pending | Candidate remains provisional; no `TERMINAL` or final result is exposed. |
+| V-31 | Late stop/denial after candidate freeze | Candidate remains immutable; late event cannot rewrite it. |
+| V-32 | Cleanup deadline expires and cessation is confirmed | Cleanup admission closes; status is timed_out; frozen candidate may be committed. |
+| V-33 | Cleanup deadline expires while cleanup may still execute | Item remains UNRESOLVED; no commitment; potentially used resources remain open absent reviewed safe-force-close. |
+| V-34 | Cleanup attempts remote mutation after business cancellation | Default denial; no inherited business authorization or implicit bypass. |
+| V-35 | Predeclared protected cleanup action has fresh authorization/approval | Only exact scoped action passes separate gate; denial/expiry blocks start; no replay. |
+| V-36 | Parent stop precedes child registration | Registration rejected atomically; child code/adapter never starts. |
+| V-37 | Registration wins, then parent stop races with child start | Child registered before schedulable; later start blocked or active child stopped; parent awaits local cessation. |
+| V-38 | Local adapter ends but remote result is unknown | Local quiescence may be confirmed; external status remains unknown_requires_reconciliation; no remote-stop claim. |
+| V-39 | Remote result known but local callback/cleanup remains active | Local quiescence unconfirmed; no Terminal Commitment. |
+| V-40 | Denial/revocation races with cancellation/deadline before freeze | Qualifying denial selects denied; unauthorized work never starts. |
+| V-41 | Deadline/cancellation same-batch and separate-sequence races | Same-batch tie is timed_out; otherwise first coordinator sequence wins; frozen candidate is immutable. |
+
+## 18. Final independent review handoff
+
+The eight findings have been addressed as specification text and mapped to
+sections and future verification scenarios. This is not a second independent
+audit, runtime validation, or implementation approval. Implementation-
+specific decisions in section 15 remain open and require explicit design and
+review before implementation.
+
+**Document status: DOCUMENTATION REVISION — AWAITING FINAL INDEPENDENT REVIEW**  
 **Implementation authorization: NOT GRANTED**
