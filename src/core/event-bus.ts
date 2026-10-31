@@ -31,7 +31,9 @@ export class InMemoryEventBus implements EventBusPort {
     });
     const handlers = [...(this.handlers.get(type) ?? [])];
     const results = await Promise.allSettled(
-      handlers.map((handler) => handler(envelope as EventEnvelope<unknown>))
+      handlers.map((handler) =>
+        Promise.resolve().then(() => handler(envelope as EventEnvelope<unknown>))
+      )
     );
     const failures = results
       .filter((result): result is PromiseRejectedResult => result.status === "rejected")
