@@ -20,7 +20,7 @@ Evidence reviewed:
 
 Decision: continue from Shutdown v6, not from `main` or the earlier feature branch.
 
-## Stage 1 — process shutdown hardening (in progress)
+## Stage 1 — process shutdown hardening (complete; CI evidence recorded)
 
 Current v6 coverage includes:
 - Real child-process SIGINT/SIGTERM scenarios on POSIX platforms.
@@ -50,9 +50,9 @@ Evidence:
 - Dependency Security Audit run `41149899902` succeeded.
 - Windows skips are platform-expected, not failures.
 
-Stage 1 CI acceptance is satisfied for the recorded commit. The subsequent Stage 2 changes are a different revision and require their own CI run.
+Stage 1 acceptance is satisfied for the recorded commit `ec31eba7ce8b87ea5d21873ff998ca22b9c2c0e3`. The evidence above is commit-specific; later stages have separate CI evidence below.
 
-## Stage 2 — lifecycle and module-registry contract verification
+## Stage 2 — lifecycle and module-registry contract verification (complete)
 
 Audit the existing implementation before changing it. Verify and add regression tests, where missing, for:
 - Duplicate module identifiers.
@@ -88,7 +88,7 @@ Verify:
 
 Keep policy evaluation separate from execution. Do not enable agent or tool execution as part of this stage.
 
-## Stage 3 — Event Bus and Policy Engine audit
+## Stage 3 — Event Bus and Policy Engine audit (complete; independent review accepted)
 
 ### Event Bus behavior verified
 - Subscribers are held in per-event Set buckets; unsubscribe deletes the handler and removes an empty bucket.
@@ -117,10 +117,15 @@ Keep policy evaluation separate from execution. Do not enable agent or tool exec
 - Regression coverage in `test/core/fail-closed-policy-engine.test.ts` covers null/undefined and malformed evaluator decisions, malformed required request fields, invalid context/attributes shapes, rejection before evaluator invocation, and acceptance of a valid context envelope.
 - Open risk retained: timeout returns deny to the caller but does not cancel the underlying evaluator. The current PolicyEngine contract has no AbortSignal/cancellation protocol; a timed-out evaluator may continue consuming resources or performing its own internal work. This must be addressed before any future execution-sensitive integration.
 
-### Stage 3 status
-- Changes are committed to the isolated work branch. The Stage 3 implementation and tests passed the three-platform CI run recorded above.
-- CI run 41151324141 completed successfully for Stage 3 code commit 495abda249ee5c67f670273b8eb020c51a59064d: Ubuntu, macOS, and Windows all succeeded. Ubuntu and macOS each passed 61/61 Vitest tests and 6/6 process integration tests. Windows passed 61/61 Vitest tests and 3 process integration tests; 3 POSIX-only signal cases were skipped as expected. Type check, build, and dependency audit succeeded on all three platforms; npm audit reported 0 vulnerabilities.
-- No merge, release, or deployment is authorized.
+### Stage 3 status — accepted by independent review
+- Independent review by Hanieh accepted Stage 3 code, Policy contract, regression tests, and three-platform CI on final code/test SHA `016d98609a725246d2aca105f6b8560d55d1df52`.
+- Final verification run [41151990059](https://github.com/hamidyaghobi70-beep/infinyx/actions/runs/41151990059) completed successfully on that exact SHA. Ubuntu and macOS each passed 80/80 Vitest tests and 6/6 process integration tests. Windows passed 80/80 Vitest tests and 3 process integration tests; 3 POSIX-only signal cases were skipped as expected. Type check, build, and dependency security audit succeeded on all three platforms; npm audit reported 0 vulnerabilities.
+- Earlier Stage 3 implementation CI run [41151324141](https://github.com/hamidyaghobi70-beep/infinyx/actions/runs/41151324141) passed for its then-current code commit `495abda249ee5c67f670273b8eb020c51a59064d`. It is historical evidence for that SHA, not a substitute for the final run above.
+- Open risk retained: the timeout boundary returns deny but cannot cancel the underlying evaluator because the PolicyEngine contract has no AbortSignal/cancellation protocol. This remains unresolved and must be addressed before execution-sensitive integration.
+- Technical debt recorded from Hanieh's independent review: a Node.js deprecation warning concerning `url.parse()`. Track and replace the deprecated API in a separately scoped change; this documentation update does not claim the warning is fixed.
+- Agent and Tool Execution remain out of scope and disabled.
+- No merge, release, or deployment is authorized by this roadmap update.
+
 
 ## Stage 4 — memory and persistence boundary
 
@@ -159,6 +164,15 @@ After earlier stages pass:
 - Produce an operations runbook and incident test plan.
 
 Production deployment remains a separately authorized action.
+
+## Merge governance and PR target
+
+- PR #3 targets `fix/core-engine-shutdown-v6`; that is the intended integration base. It does not target `main`.
+- Hanieh, as Project Leader, owns the readiness decision and issues the explicit instruction to merge a specific PR/head SHA after technical acceptance.
+- Parvaneh performs GitHub operations only in response to Hanieh's explicit merge instruction for that specific PR/head SHA.
+- Hamid, as Founder & Owner, separately authorizes each Release and each Deployment. Neither merge readiness nor a merge instruction authorizes either action.
+- `main`, Release, and Deployment are outside the scope of the current PR #3 operation. No merge or deployment is to occur before Hanieh's final review and instruction.
+- Agent and Tool Execution remain out of scope.
 
 ## Change and review protocol
 
