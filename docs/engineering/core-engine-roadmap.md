@@ -107,6 +107,16 @@ Keep policy evaluation separate from execution. Do not enable agent or tool exec
 - Separation: the policy component only evaluates a PolicyRequest and returns a PolicyDecision. CoreEngine does not execute actions based on that decision; no Agent or Tool Execution path was enabled or added.
 - Timeout limitation: the interface has no cancellation signal, so a timed-out evaluator is denied at the boundary but its underlying work is not forcibly cancelled.
 
+### Policy decision validation and request/context contract
+
+- The Policy boundary validates evaluator output before returning it to callers. Only a plain object with an exact `effect` value of `allow` or `deny` and a non-empty string `reason` is accepted. `null`, `undefined`, primitives, arrays, missing fields, invalid effects, and blank reasons become an explicit deny.
+- Policy input is validated before invoking injected evaluator code. `actorId`, `action`, and `resource` are mandatory non-empty strings (whitespace-only values are rejected; accepted values are not silently rewritten).
+- `context` is optional. When present it must be a plain object matching `PolicyContext`.
+- `PolicyContext.attributes` is optional and, when present, must be a plain string-keyed object. Attribute values remain opaque to Core Engine v1. Empty/whitespace attribute keys are rejected.
+- `attributes` is not itself the Context; it is the optional attribute map nested under `context`. No authentication or semantic validation of individual attribute values is implied by this structural contract.
+- Regression coverage in `test/core/fail-closed-policy-engine.test.ts` covers null/undefined and malformed evaluator decisions, malformed required request fields, invalid context/attributes shapes, rejection before evaluator invocation, and acceptance of a valid context envelope.
+- Open risk retained: timeout returns deny to the caller but does not cancel the underlying evaluator. The current PolicyEngine contract has no AbortSignal/cancellation protocol; a timed-out evaluator may continue consuming resources or performing its own internal work. This must be addressed before any future execution-sensitive integration.
+
 ### Stage 3 status
 - Changes are committed to the isolated work branch. The Stage 3 implementation and tests passed the three-platform CI run recorded above.
 - CI run 41151324141 completed successfully for Stage 3 code commit 495abda249ee5c67f670273b8eb020c51a59064d: Ubuntu, macOS, and Windows all succeeded. Ubuntu and macOS each passed 61/61 Vitest tests and 6/6 process integration tests. Windows passed 61/61 Vitest tests and 3 process integration tests; 3 POSIX-only signal cases were skipped as expected. Type check, build, and dependency audit succeeded on all three platforms; npm audit reported 0 vulnerabilities.
