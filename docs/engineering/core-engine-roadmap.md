@@ -70,7 +70,7 @@ Audit the existing implementation before changing it. Verify and add regression 
 - Root cause: object spread (`{ ...module }`) copies only own enumerable properties. A valid class instance implementing `CoreModule` has lifecycle methods on its prototype; these hooks are omitted from the registered snapshot. The module then appears registered but its `initialize`, `start`, and `stop` methods are not invoked. Methods depending on instance state also require their original receiver.
 - Change: build an immutable metadata snapshot and bind present lifecycle hooks to the source instance.
 - Regression acceptance: register a class implementing `CoreModule` with instance-state-dependent `initialize`, `start`, and `stop`; drive it through `CoreEngine.initialize()`, `start()`, and `stop()`; assert all three hooks execute once with the correct instance context.
-- Status: fix and regression test committed to the work branch; CI for this new revision is pending.
+- Status: fix and regression test committed to the work branch. CI run 41150444754 for Stage 2 commit 9a54726fbafd0d120e6d7b039e5a6b1d0c32331b completed successfully on Ubuntu, Windows, and macOS; all steps in all three jobs passed.
 
 Existing checks confirmed in v6: duplicate identifiers, missing dependencies, dependency cycles, dependency-first ordering, registration cutoff, startup/initialization rollback, cleanup retry, reverse-order stop, concurrent stop promise sharing, and re-entrant stop protection.
 
@@ -87,6 +87,30 @@ Verify:
 - Explicit actor, action, resource, and context requirements.
 
 Keep policy evaluation separate from execution. Do not enable agent or tool execution as part of this stage.
+
+## Stage 3 — Event Bus and Policy Engine audit
+
+### Event Bus behavior verified
+- Subscribers are held in per-event Set buckets; unsubscribe deletes the handler and removes an empty bucket.
+- publish() snapshots the current subscriber set. Handlers are invoked in subscription order.
+- Handler work is concurrent rather than serial; publish() waits for every returned promise to settle, then reports collected failures in an AggregateError.
+- A synchronous throw previously escaped the map() expression before Promise.allSettled() was reached, preventing later subscribers from running. This was a confirmed failure-isolation defect.
+- Fix: schedule each handler invocation through Promise.resolve().then(...), so synchronous throws become rejected promises and every subscriber is dispatched.
+- Regression: test/core/event-bus.test.ts verifies that a synchronous throw does not block sibling handlers and that publication waits for a gated asynchronous handler before rejecting.
+- Disposal: the implementation removes disposed handlers and deletes empty buckets; the existing unsubscribe test confirms disposed handlers are not called by later publishes. No retained-listener leak was demonstrated by this implementation/test scope.
+
+### Policy behavior and boundary
+- The built-in DefaultDenyPolicyEngine returns deny when no explicit policy is injected; existing CoreEngine tests assert this default.
+- Before this stage, an injected evaluator was passed through directly. A thrown/rejected evaluator error escaped as a rejection, and a never-settling evaluator had no deadline. The boundary therefore did not itself guarantee a deny decision on evaluator failure or timeout.
+- Fix: add FailClosedPolicyEngine and wrap injected policies in CoreEngine. Evaluation errors and configured timeouts return explicit deny decisions. Default timeout is 5,000 ms and can be configured through CoreEngineOptions.policyTimeoutMs (must be positive and finite).
+- Regression coverage: test/core/fail-closed-policy-engine.test.ts covers explicit allow preservation, synchronous and asynchronous evaluator errors, timeout denial, CoreEngine injection wrapping, and invalid timeout configuration.
+- Separation: the policy component only evaluates a PolicyRequest and returns a PolicyDecision. CoreEngine does not execute actions based on that decision; no Agent or Tool Execution path was enabled or added.
+- Timeout limitation: the interface has no cancellation signal, so a timed-out evaluator is denied at the boundary but its underlying work is not forcibly cancelled.
+
+### Stage 3 status
+- Changes are committed to the isolated work branch.
+- Three-platform CI is required for the exact current head before this stage can be marked verified.
+- No merge, release, or deployment is authorized.
 
 ## Stage 4 — memory and persistence boundary
 
