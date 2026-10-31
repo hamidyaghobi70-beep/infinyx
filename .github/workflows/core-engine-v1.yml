@@ -12,7 +12,6 @@ on:
     branches:
       - foundation/repository-foundation
       - feature/core-engine-v1
-      - work/core-engine-v1-hardening
 
 permissions:
   contents: read
