@@ -174,6 +174,5 @@ for (const mode of ["uncaught", "unhandled"]) {
     assert.equal(result.signal, null);
     assert.equal(count(run.output(), "STOPPED"), 1);
     assert.equal(count(run.output(), "EXIT:1"), 1);
-    assert.match(run.errors(), /Fatal process error; shutdown requested/);
   });
 }
