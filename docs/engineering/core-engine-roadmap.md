@@ -41,7 +41,16 @@ Acceptance gate:
 5. CI evidence is recorded against the exact reviewed commit.
 6. Independent review findings are reconciled before merge is considered.
 
-Status: code and draft PR prepared; CI result for this revision has not yet been observed.
+Status: CI passed for commit `ec31eba7ce8b87ea5d21873ff998ca22b9c2c0e3`.
+
+Evidence:
+- Core Engine matrix run `41149899891`: Ubuntu, macOS, and Windows jobs all succeeded.
+- Ubuntu and macOS each passed 54 Vitest tests and all 6 process-level tests.
+- Windows passed 54 Vitest tests; process-level suite reported 3 Passed and 3 Skipped (POSIX-only SIGINT/SIGTERM cases), with IPC coverage executed.
+- Dependency Security Audit run `41149899902` succeeded.
+- Windows skips are platform-expected, not failures.
+
+Stage 1 CI acceptance is satisfied for the recorded commit. The subsequent Stage 2 changes are a different revision and require their own CI run.
 
 ## Stage 2 — lifecycle and module-registry contract verification
 
@@ -55,7 +64,17 @@ Audit the existing implementation before changing it. Verify and add regression 
 - Re-entrant and concurrent stop calls.
 - State transitions after partial failures.
 
-Do not add a new lifecycle abstraction unless the audit identifies a concrete contract gap.
+### Audit finding (medium severity): class-based module hooks are lost at registration
+
+- File: `src/core/module-registry.ts`, `register()`.
+- Root cause: object spread (`{ ...module }`) copies only own enumerable properties. A valid class instance implementing `CoreModule` has lifecycle methods on its prototype; these hooks are omitted from the registered snapshot. The module then appears registered but its `initialize`, `start`, and `stop` methods are not invoked. Methods depending on instance state also require their original receiver.
+- Change: build an immutable metadata snapshot and bind present lifecycle hooks to the source instance.
+- Regression acceptance: register a class implementing `CoreModule` with instance-state-dependent `initialize`, `start`, and `stop`; drive it through `CoreEngine.initialize()`, `start()`, and `stop()`; assert all three hooks execute once with the correct instance context.
+- Status: fix and regression test committed to the work branch; CI for this new revision is pending.
+
+Existing checks confirmed in v6: duplicate identifiers, missing dependencies, dependency cycles, dependency-first ordering, registration cutoff, startup/initialization rollback, cleanup retry, reverse-order stop, concurrent stop promise sharing, and re-entrant stop protection.
+
+Remaining coverage opportunities (not yet established as defects): very deep dependency graphs, repeated dependency declarations, malformed runtime inputs from untyped JavaScript callers, and explicit state-transition tables for every partial-failure boundary. These should be tested before deciding whether code changes are warranted.
 
 ## Stage 3 — event and policy boundaries
 
