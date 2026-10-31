@@ -185,13 +185,15 @@ The Security Layer owns policy decisions; the Core Platform owns the mechanics t
 
 A check followed by an unrelated operation is insufficient: cancellation or policy revocation could occur between the check and the side effect. Therefore, “check immediately before the side effect” is necessary but not sufficient.
 
-Every protected side effect MUST pass through a defined admission gate owned by the Core Platform and supplied with an affirmative authorization result from the Security Layer. The gate serializes admission against cancellation, deadline, shutdown admission closure, and terminal arbitration. It creates a bounded admission record/reservation for that specific operation. Only after the reservation is accepted may the adapter begin the operation.
+Every protected side effect MUST pass through a defined admission gate owned by the Core Platform and supplied with an affirmative authorization result from the Security Layer. The gate serializes admission against cancellation, deadline, shutdown admission closure, and terminal arbitration. It may create a bounded reservation, but reservation alone is not permission to invoke the side effect.
 
-The gate's atomic decision is the ordering boundary:
-- If stop/denial/shutdown closure wins first, admission is rejected and the side effect MUST NOT begin.
-- If admission wins first, the operation is considered already admitted/in flight. A later stop request prevents additional admissions and signals the admitted operation, but cannot claim that the operation never began or guarantee rollback.
+The operation has two distinct admission sub-states: `RESERVED` and `START_COMMITTED`. The gate MUST serialize the transition to `START_COMMITTED` against stop events. The adapter's invocation MUST be initiated as part of that same non-yielding in-process handoff (or an equivalent explicit start handshake); there must be no asynchronous gap in which a stop can win while an uncommitted reservation is later used to start work. If a stop/denial/shutdown event wins while the operation is only `RESERVED`, the reservation is invalidated and the adapter MUST NOT be invoked. Expired, abandoned, or invalidated reservations can never be reused.
+
+The gate's start-commit decision is the ordering boundary:
+- If stop/denial/shutdown closure wins before `START_COMMITTED`, admission is rejected and the side effect MUST NOT begin.
+- If `START_COMMITTED` wins first, the operation is considered admitted/in flight. A later stop request prevents additional admissions and signals the admitted operation, but cannot claim that the operation never began or guarantee rollback.
 - The adapter MUST report whether the operation was not started, stopped with confirmation, completed, or has unknown status.
-- Admission reservation MUST be bounded and consumed/released exactly once. An expired or abandoned reservation cannot be used later to start work.
+- Each reservation and start-commit MUST be bounded and consumed/released exactly once. An expired or abandoned reservation cannot be used later to start work.
 
 ### 8.2 Authorization consistency
 
