@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import type { CoreModule, ModuleContext } from "../../src/core/contracts.js";
 import { CoreError } from "../../src/core/core-error.js";
 import { ModuleRegistry } from "../../src/core/module-registry.js";
 
@@ -28,5 +29,28 @@ describe("ModuleRegistry", () => {
     cyclic.register({ id: "alpha", version: "1.0.0", dependencies: ["beta"] });
     cyclic.register({ id: "beta", version: "1.0.0", dependencies: ["alpha"] });
     expect(() => cyclic.resolveStartOrder()).toThrowError(/dependency cycle/i);
+  });
+
+  it("preserves prototype lifecycle hooks and their instance context", async () => {
+    class StatefulModule implements CoreModule {
+      readonly id = "stateful";
+      readonly version = "1.0.0";
+      initializedBy: string | undefined;
+
+      initialize() {
+        this.initializedBy = this.id;
+      }
+    }
+
+    const registry = new ModuleRegistry();
+    const source = new StatefulModule();
+    registry.register(source);
+
+    const registered = registry.get("stateful");
+    expect(registered).toBeDefined();
+    await registered?.initialize?.({} as ModuleContext);
+
+    expect(source.initializedBy).toBe("stateful");
+    expect(registered?.initialize).toBeTypeOf("function");
   });
 });
