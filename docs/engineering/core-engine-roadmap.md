@@ -1,0 +1,119 @@
+# INFINYX Core Engine — staged engineering plan
+
+## Operating constraints
+
+- Repository: `hamidyaghobi70-beep/infinyx`.
+- Current engineering baseline: `fix/core-engine-shutdown-v6`.
+- Work is isolated on `work/core-engine-v1-hardening`.
+- `main` is out of scope and must remain unchanged.
+- No merge, auto-merge, release, or deployment without separate explicit project-owner approval.
+- Existing Core Engine v1 code is the baseline; do not rewrite working subsystems without a demonstrated defect and regression test.
+
+## Stage 0 — repository inventory (complete)
+
+Evidence reviewed:
+- All seven repository branches returned by branch search.
+- Foundation package manifest, lockfile, and Vitest configuration.
+- Branch comparisons from Foundation to feature, experiment, and Shutdown revisions v4/v5/v6.
+- Core Engine contracts, lifecycle implementation, server runtime, tests, CI workflow, and engineering documents on v6.
+- All discoverable repository PRs at the time of review, including their review submissions and inline threads.
+
+Decision: continue from Shutdown v6, not from `main` or the earlier feature branch.
+
+## Stage 1 — process shutdown hardening (in progress)
+
+Current v6 coverage includes:
+- Real child-process SIGINT/SIGTERM scenarios on POSIX platforms.
+- IPC graceful-shutdown coverage for platforms without POSIX signal semantics.
+- Exactly-once cleanup and exit assertions.
+- Unit/integration coverage for fatal-event handling and shutdown races.
+
+This revision adds real child-process scenarios for:
+- `uncaughtException`.
+- `unhandledRejection`.
+- Exactly one module cleanup and a non-zero process exit for either fatal event.
+
+Acceptance gate:
+1. Node 22 lockfile installation succeeds.
+2. Typecheck, build, Vitest, and process-level tests pass.
+3. Linux and macOS execute POSIX signal tests; Windows reports those tests as Skip and runs IPC coverage.
+4. Dependency audit has no unaccepted high-severity findings.
+5. CI evidence is recorded against the exact reviewed commit.
+6. Independent review findings are reconciled before merge is considered.
+
+Status: code and draft PR prepared; CI result for this revision has not yet been observed.
+
+## Stage 2 — lifecycle and module-registry contract verification
+
+Audit the existing implementation before changing it. Verify and add regression tests, where missing, for:
+- Duplicate module identifiers.
+- Missing dependencies and dependency cycles.
+- Deterministic dependency ordering.
+- Registration restrictions after initialization begins.
+- Initialization/start rollback and reverse-order cleanup.
+- Failed cleanup retry semantics and idempotency expectations.
+- Re-entrant and concurrent stop calls.
+- State transitions after partial failures.
+
+Do not add a new lifecycle abstraction unless the audit identifies a concrete contract gap.
+
+## Stage 3 — event and policy boundaries
+
+Verify:
+- Event handler ordering and async completion semantics.
+- Failure isolation/reporting for multiple subscribers.
+- Subscription disposal and memory-leak behavior.
+- Default-deny policy behavior.
+- Fail-closed handling when a policy implementation errors or times out.
+- Explicit actor, action, resource, and context requirements.
+
+Keep policy evaluation separate from execution. Do not enable agent or tool execution as part of this stage.
+
+## Stage 4 — memory and persistence boundary
+
+The current Core Engine defines a MemoryPort contract but does not provide a persistence adapter.
+
+Before implementing an adapter, document and approve:
+- Data classification and tenant isolation.
+- Encryption at rest and in transit.
+- Key ownership and rotation.
+- Retention, deletion, and backup policy.
+- Access-control enforcement and audit events.
+- Failure behavior and migration strategy.
+
+Implement storage behind the existing port only after these controls have testable acceptance criteria.
+
+## Stage 5 — identity, agent runtime, and tool execution
+
+These capabilities are not enabled by the reviewed Core Engine v1 scope.
+
+Design provider-neutral interfaces first. Require:
+- Authenticated principal and tenant context.
+- Explicit capability grants and per-action policy checks.
+- Least-privilege execution boundaries.
+- Timeouts, cancellation, quotas, and idempotency.
+- Immutable audit records and secret redaction.
+- Sandboxed execution and denial-by-default behavior.
+
+Do not connect real providers, credentials, financial operations, or external tools until their dedicated security review and owner authorization are complete.
+
+## Stage 6 — operational readiness
+
+After earlier stages pass:
+- Define health/readiness semantics and structured operational events.
+- Verify graceful shutdown under active HTTP requests and long-lived connections.
+- Define resource limits, restart policy, and deployment rollback criteria.
+- Produce an operations runbook and incident test plan.
+
+Production deployment remains a separately authorized action.
+
+## Change and review protocol
+
+For every stage:
+1. Record base and head commit SHAs.
+2. Work only on a dedicated branch.
+3. Make small changes with focused regression tests.
+4. Run all applicable checks and preserve actual results.
+5. Obtain independent review of the exact head commit.
+6. Record unresolved risks explicitly.
+7. Stop before merge or deployment pending separate owner approval.
