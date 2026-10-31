@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import type { CoreModule, ModuleContext } from "../../src/core/contracts.js";
+import type { CoreModule } from "../../src/core/contracts.js";
+import { CoreEngine } from "../../src/core/core-engine.js";
 import { CoreError } from "../../src/core/core-error.js";
 import { ModuleRegistry } from "../../src/core/module-registry.js";
 
@@ -35,22 +36,33 @@ describe("ModuleRegistry", () => {
     class StatefulModule implements CoreModule {
       readonly id = "stateful";
       readonly version = "1.0.0";
-      initializedBy: string | undefined;
+      readonly calls: string[] = [];
 
       initialize() {
-        this.initializedBy = this.id;
+        this.calls.push("initialize:" + this.id);
+      }
+
+      start() {
+        this.calls.push("start:" + this.id);
+      }
+
+      stop() {
+        this.calls.push("stop:" + this.id);
       }
     }
 
-    const registry = new ModuleRegistry();
+    const engine = new CoreEngine();
     const source = new StatefulModule();
-    registry.register(source);
+    engine.register(source);
 
-    const registered = registry.get("stateful");
-    expect(registered).toBeDefined();
-    await registered?.initialize?.({} as ModuleContext);
+    await engine.initialize();
+    await engine.start();
+    await engine.stop();
 
-    expect(source.initializedBy).toBe("stateful");
-    expect(registered?.initialize).toBeTypeOf("function");
+    expect(source.calls).toEqual([
+      "initialize:stateful",
+      "start:stateful",
+      "stop:stateful"
+    ]);
   });
 });
