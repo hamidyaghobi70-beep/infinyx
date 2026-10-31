@@ -40,7 +40,7 @@ describe("FailClosedPolicyEngine", () => {
   it("denies when an evaluator does not complete before the configured timeout", async () => {
     vi.useFakeTimers();
     const policy = new FailClosedPolicyEngine({
-      evaluate: () => new Promise(() => undefined)
+      evaluate: () => new Promise<never>(() => undefined)
     }, 25);
 
     const decision = policy.evaluate(request);
