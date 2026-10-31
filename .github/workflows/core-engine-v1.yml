@@ -7,10 +7,12 @@ on:
       - fix/core-engine-shutdown-v4
       - fix/core-engine-shutdown-v5
       - fix/core-engine-shutdown-v6
+      - work/core-engine-v1-hardening
   pull_request:
     branches:
       - foundation/repository-foundation
       - feature/core-engine-v1
+      - work/core-engine-v1-hardening
 
 permissions:
   contents: read
