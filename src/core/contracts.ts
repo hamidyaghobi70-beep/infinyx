@@ -71,8 +71,6 @@ export interface ModuleContext {
   readonly events: EventBusPort;
   readonly policy: PolicyEngine;
   readonly memory?: MemoryPort;
-  /** Maximum time allowed for an injected policy evaluation. Defaults to 5 seconds. */
-  readonly policyTimeoutMs?: number;
 }
 
 export interface CoreModule {
