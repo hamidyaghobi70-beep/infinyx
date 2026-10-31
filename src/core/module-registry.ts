@@ -21,7 +21,19 @@ export class ModuleRegistry {
       throw new CoreError("MODULE_DEPENDENCY_CYCLE", 'Module "' + module.id + '" cannot depend on itself.');
     }
 
-    this.modules.set(module.id, Object.freeze({ ...module, dependencies: Object.freeze(dependencies) }));
+    // Snapshot registry metadata while retaining the source instance as the
+    // receiver for prototype methods on class-based CoreModule implementations.
+    // Object spread alone drops prototype lifecycle hooks and their receiver.
+    const registered: CoreModule = {
+      id: module.id,
+      version: module.version,
+      dependencies: Object.freeze(dependencies),
+      ...(module.initialize ? { initialize: module.initialize.bind(module) } : {}),
+      ...(module.start ? { start: module.start.bind(module) } : {}),
+      ...(module.stop ? { stop: module.stop.bind(module) } : {})
+    };
+
+    this.modules.set(module.id, Object.freeze(registered));
   }
 
   get(id: string): CoreModule | undefined {

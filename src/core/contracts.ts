@@ -50,11 +50,27 @@ export interface MemoryPort {
   delete(address: MemoryAddress): Promise<void>;
 }
 
+/**
+ * Optional, caller-supplied policy context. Context is a structured envelope;
+ * arbitrary key/value attributes belong inside context.attributes and are not
+ * themselves the Context object.
+ */
+export interface PolicyContext {
+  readonly attributes?: Readonly<Record<string, unknown>>;
+}
+
+/**
+ * Authorization input contract:
+ * - actorId, action, and resource are required non-empty strings.
+ * - context is optional; when present it must be a PolicyContext object.
+ * - context.attributes is optional and, when present, must be a string-keyed
+ *   object. Attribute values are opaque to the core policy boundary.
+ */
 export interface PolicyRequest {
   readonly actorId: string;
   readonly action: string;
   readonly resource: string;
-  readonly attributes?: Readonly<Record<string, unknown>>;
+  readonly context?: PolicyContext;
 }
 
 export interface PolicyDecision {

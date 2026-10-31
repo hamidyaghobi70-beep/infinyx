@@ -9,6 +9,7 @@ import type {
   PolicyEngine
 } from "./contracts.js";
 import { DefaultDenyPolicyEngine } from "./default-policy-engine.js";
+import { FailClosedPolicyEngine } from "./fail-closed-policy-engine.js";
 import { InMemoryEventBus } from "./event-bus.js";
 import { CoreError } from "./core-error.js";
 import { ModuleRegistry } from "./module-registry.js";
@@ -22,6 +23,8 @@ export interface CoreEngineOptions {
   readonly events?: EventBusPort;
   readonly policy?: PolicyEngine;
   readonly memory?: MemoryPort;
+  /** Maximum time allowed for an injected policy evaluation. Defaults to 5 seconds. */
+  readonly policyTimeoutMs?: number;
 }
 
 export class CoreEngine {
@@ -38,7 +41,9 @@ export class CoreEngine {
 
   constructor(private readonly options: CoreEngineOptions = {}) {
     this.events = options.events ?? new InMemoryEventBus();
-    this.policy = options.policy ?? new DefaultDenyPolicyEngine();
+    this.policy = options.policy
+      ? new FailClosedPolicyEngine(options.policy, options.policyTimeoutMs)
+      : new DefaultDenyPolicyEngine();
   }
 
   get state(): CoreLifecycleState {

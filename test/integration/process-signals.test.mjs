@@ -111,7 +111,6 @@ test("real SIGTERM shuts down a running child process exactly once", {
   assert.equal(count(run.output(), "EXIT:0"), 1);
 });
 
-
 test("a second real signal joins the existing shutdown without rerunning cleanup", {
   skip: process.platform === "win32" ? "POSIX signal semantics are not available on Windows" : false
 }, async (t) => {
@@ -130,7 +129,7 @@ test("a second real signal joins the existing shutdown without rerunning cleanup
   assert.equal(run.child.kill("SIGTERM"), true);
   await waitForOutput(run.child, run.output, "SIGNAL:SIGTERM");
 
-  run.child.stdin.write("RELEASE\\n");
+  run.child.stdin.write("RELEASE\n");
   const result = await exited;
 
   assert.equal(result.code, 0, run.errors());
@@ -150,7 +149,7 @@ test("IPC requests graceful shutdown for platforms without POSIX signal semantic
 
   await waitForOutput(run.child, run.output, "READY");
   const exited = waitForExit(run.child);
-  run.child.stdin.write("SHUTDOWN\\n");
+  run.child.stdin.write("SHUTDOWN\n");
   const result = await exited;
 
   assert.equal(result.code, 0, run.errors());
@@ -159,3 +158,21 @@ test("IPC requests graceful shutdown for platforms without POSIX signal semantic
   assert.equal(count(run.output(), "STOPPED"), 1);
   assert.equal(count(run.output(), "EXIT:0"), 1);
 });
+
+
+for (const mode of ["uncaught", "unhandled"]) {
+  test(`fatal process event (${mode}) drains and stops exactly once with exit code 1`, async (t) => {
+    const run = launch(mode);
+    t.after(() => {
+      if (run.child.exitCode === null && run.child.signalCode === null) run.child.kill("SIGKILL");
+    });
+
+    await waitForOutput(run.child, run.output, "READY");
+    const result = await waitForExit(run.child);
+
+    assert.equal(result.code, 1, run.errors());
+    assert.equal(result.signal, null);
+    assert.equal(count(run.output(), "STOPPED"), 1);
+    assert.equal(count(run.output(), "EXIT:1"), 1);
+  });
+}

@@ -1,4 +1,6 @@
 import { describe, expect, it } from "vitest";
+import type { CoreModule } from "../../src/core/contracts.js";
+import { CoreEngine } from "../../src/core/core-engine.js";
 import { CoreError } from "../../src/core/core-error.js";
 import { ModuleRegistry } from "../../src/core/module-registry.js";
 
@@ -28,5 +30,39 @@ describe("ModuleRegistry", () => {
     cyclic.register({ id: "alpha", version: "1.0.0", dependencies: ["beta"] });
     cyclic.register({ id: "beta", version: "1.0.0", dependencies: ["alpha"] });
     expect(() => cyclic.resolveStartOrder()).toThrowError(/dependency cycle/i);
+  });
+
+  it("preserves prototype lifecycle hooks and their instance context", async () => {
+    class StatefulModule implements CoreModule {
+      readonly id = "stateful";
+      readonly version = "1.0.0";
+      readonly calls: string[] = [];
+
+      initialize() {
+        this.calls.push("initialize:" + this.id);
+      }
+
+      start() {
+        this.calls.push("start:" + this.id);
+      }
+
+      stop() {
+        this.calls.push("stop:" + this.id);
+      }
+    }
+
+    const engine = new CoreEngine();
+    const source = new StatefulModule();
+    engine.register(source);
+
+    await engine.initialize();
+    await engine.start();
+    await engine.stop();
+
+    expect(source.calls).toEqual([
+      "initialize:stateful",
+      "start:stateful",
+      "stop:stateful"
+    ]);
   });
 });
