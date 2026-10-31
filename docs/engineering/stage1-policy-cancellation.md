@@ -73,11 +73,11 @@ The minimum terminal outcomes are:
 | `failed` | An operational failure won arbitration and was not superseded by a previously serialized policy denial or stop condition. |
 
 A terminal outcome MUST be accompanied by separate execution/cleanup metadata where applicable. At minimum distinguish:
-- `termination_status`: `confirmed` or `unconfirmed`;
+- `termination_status`: `confirmed` for a terminal work item; `unconfirmed` is reserved for a non-terminal `UNRESOLVED` record;
 - `cleanup_status`: `not_required`, `pending`, `succeeded`, `failed`, or `timed_out`;
 - `external_effect_status`: `none`, `completed`, `not_started`, or `unknown_requires_reconciliation`.
 
-An attempt MUST NOT be marked `cancelled` or `timed_out` merely because a signal was sent or a grace period elapsed. If work may still be executing, its lifecycle remains stop-pending/unresolved and the termination status remains unconfirmed. If an implementation needs to close its local request while a remote operation remains uncertain, it MUST represent that uncertainty explicitly and MUST NOT claim the remote operation stopped.
+An attempt MUST NOT be marked `cancelled` or `timed_out` merely because a signal was sent or a grace period elapsed. If governed work may still be executing, its lifecycle remains stop-pending/unresolved, it has no terminal outcome, and its termination status remains unconfirmed. A terminal work item requires confirmed local quiescence; uncertainty about a remote side effect is represented separately as `external_effect_status: unknown_requires_reconciliation`. If an implementation needs to close its local request while a remote operation remains uncertain, it MUST represent that uncertainty explicitly and MUST NOT claim the remote operation stopped.
 
 Reason codes and diagnostics MUST be bounded and non-sensitive. They MUST NOT contain credentials, tokens, policy secrets, or sensitive payloads.
 
@@ -115,7 +115,7 @@ A stop request is represented as a state transition plus source/reason metadata,
 | `RUNNING` | Required policy revalidation denies/revokes | `STOP_REQUESTED` | Block new admissions; preserve denial as primary stop reason. |
 | `RUNNING` | All work succeeds and completion wins arbitration | `FINALIZING` | No further work; perform required bounded finalization. |
 | `RUNNING` | Operational failure wins arbitration | `FINALIZING` | Stop sibling work as required; retain failure as primary result. |
-| `STOP_REQUESTED` | Active work acknowledges stop and no governed child remains active | `FINALIZING` | Acknowledgement is evidence only to the extent guaranteed by adapter contract. |
+| `STOP_REQUESTED` | No operation was admitted/in flight and no governed child is active, or all active work and children are confirmed quiescent | `FINALIZING` | Begin bounded finalization; signal acknowledgement alone is insufficient unless the adapter contract guarantees cessation. |
 | `STOP_REQUESTED` | Stop cannot be confirmed before observation/grace bound | `UNRESOLVED` | Record unconfirmed work; do not claim clean cancellation or close resources it may still use. |
 | `FINALIZING` | Cleanup/child joining completes or its bounded policy permits final classification | `TERMINAL` | Commit exactly one outcome; record cleanup independently. |
 | `FINALIZING` | Cleanup bound expires but execution is quiescent | `TERMINAL` | Commit primary outcome; mark cleanup timed out/failed. |
@@ -123,7 +123,7 @@ A stop request is represented as a state transition plus source/reason metadata,
 | `UNRESOLVED` | No confirmation available | `UNRESOLVED` | Preserve unresolved status; no false terminal claim. |
 | `TERMINAL` | Any late cancellation, shutdown, cleanup callback, or duplicate completion | `TERMINAL` | Reject state mutation; optionally append a safe late-event diagnostic. |
 
-All transitions MUST be serialized by one authoritative lifecycle coordinator for the work item. Illegal transitions MUST be rejected and surfaced as contract violations; they MUST NOT be silently coerced into success.
+All transitions MUST be serialized by one authoritative lifecycle coordinator for the work item. The transition from `RUNNING` to `FINALIZING` on successful completion or operational failure also locks the corresponding outcome candidate at that linearization point; later stop events cannot replace that candidate. Illegal transitions MUST be rejected and surfaced as contract violations; they MUST NOT be silently coerced into success.
 
 ### 5.3 Lifecycle invariants
 
