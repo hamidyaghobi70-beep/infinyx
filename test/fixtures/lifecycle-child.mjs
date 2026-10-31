@@ -49,7 +49,7 @@ const runtime = await startServerRuntime({
         process.stdout.write(`SIGNAL:${fields.reason}\n`);
       }
     },
-    error: (...args) => process.stderr.write(`${args.map(String).join(" ")}\\n`)
+    error: (...args) => process.stderr.write(`${args.map(String).join(" ")}\n`)
   },
   host: "127.0.0.1",
   port: 0,
@@ -70,4 +70,16 @@ if (mode === "startup" && !runtime.server.listening) {
 } else {
   if (!runtime.server.listening) await once(runtime.server, "listening");
   process.stdout.write("READY\n");
+}
+
+if (mode === "uncaught") {
+  setImmediate(() => {
+    throw new Error("intentional uncaught exception for shutdown integration test");
+  });
+}
+
+if (mode === "unhandled") {
+  setImmediate(() => {
+    void Promise.reject(new Error("intentional unhandled rejection for shutdown integration test"));
+  });
 }
