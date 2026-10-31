@@ -12,6 +12,7 @@ on:
     branches:
       - foundation/repository-foundation
       - feature/core-engine-v1
+      - fix/core-engine-shutdown-v6
 
 permissions:
   contents: read
