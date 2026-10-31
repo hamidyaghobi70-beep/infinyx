@@ -108,8 +108,8 @@ Keep policy evaluation separate from execution. Do not enable agent or tool exec
 - Timeout limitation: the interface has no cancellation signal, so a timed-out evaluator is denied at the boundary but its underlying work is not forcibly cancelled.
 
 ### Stage 3 status
-- Changes are committed to the isolated work branch.
-- Three-platform CI is required for the exact current head before this stage can be marked verified.
+- Changes are committed to the isolated work branch. The Stage 3 implementation and tests passed the three-platform CI run recorded above.
+- CI run 41151324141 completed successfully for Stage 3 code commit 495abda249ee5c67f670273b8eb020c51a59064d: Ubuntu, macOS, and Windows all succeeded. Ubuntu and macOS each passed 61/61 Vitest tests and 6/6 process integration tests. Windows passed 61/61 Vitest tests and 3 process integration tests; 3 POSIX-only signal cases were skipped as expected. Type check, build, and dependency audit succeeded on all three platforms; npm audit reported 0 vulnerabilities.
 - No merge, release, or deployment is authorized.
 
 ## Stage 4 — memory and persistence boundary
