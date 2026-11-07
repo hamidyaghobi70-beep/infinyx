@@ -7,7 +7,7 @@ on:
       - fix/core-engine-shutdown-v4
       - fix/core-engine-shutdown-v5
       - fix/core-engine-shutdown-v6
-      - work/core-engine-v1-hardening
+      - work/core-engine-v1-hardening\n      - remediation/**
   pull_request:
     branches:
       - foundation/repository-foundation

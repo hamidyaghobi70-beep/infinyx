@@ -47,6 +47,6 @@ Unknown routes return a JSON 404. The initial runtime does not register business
 
 Agent tool execution is deliberately unavailable. Blockchain functionality, when introduced, must remain read-only in the first release. Financial operations, wallet/private-key operations, privileged module execution, and unrestricted external API access are prohibited.
 
-The injected policy evaluator is not safe for sensitive authorization use: `Promise.race()` bounds the wait but does not cancel evaluator execution. The default policy denies all requests. Do not inject an evaluator for sensitive operations.
+Injected policy evaluation receives a detached, deeply frozen request snapshot and an AbortSignal. The deadline aborts the signal and returns deny. Cancellation is cooperative: delegates that ignore the signal can continue running in-process; hard termination requires a worker/process boundary. This wrapper is not approved for sensitive authorization. The default policy denies all requests.
 
 Shutdown Timeout Contract v6.2 remains outside this release implementation scope and is not changed by this branch.

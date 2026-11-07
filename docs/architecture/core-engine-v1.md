@@ -23,7 +23,7 @@ Registration is closed after initialization begins. Modules are initialized and 
 ## Security boundaries and non-goals
 
 - Default policy evaluation denies every request. This is not authentication, identity management or a complete authorization system.
-- The policy engine must be explicitly replaced with a reviewed implementation before protected operations are enabled.
+- Injected policy evaluation receives a detached, deeply frozen data snapshot and an AbortSignal. The wrapper aborts the signal at its deadline and returns deny. Cancellation is cooperative: a delegate that ignores the signal may continue running in-process. Hard termination requires a worker/process isolation boundary. This wrapper is not approved for sensitive authorization.
 - The memory port is an interface only. No data is persisted by Core Engine v1. Encryption, retention, tenant isolation, access control and deletion guarantees remain design requirements for any adapter.
 - The event bus is process-local, non-durable, and has no retry, replay, dead-letter or cross-process delivery guarantees.
 - No agent execution, tool execution, automation, external network access or financial action is enabled.
@@ -45,6 +45,6 @@ The repository minimum runtime is Node.js `22.12.0`, matching the minimum Node 2
 
 The HTTP composition root uses a single shutdown controller. SIGINT, SIGTERM, uncaughtException and unhandledRejection all converge on the same shutdown Promise; no handler calls the exit function independently. Fatal events set the final exit code to 1 even when a signal-initiated shutdown is already in progress. The exit function is guarded by a shared exit Promise and is invoked at most once.
 
-Shutdown drains the HTTP server before stopping Core Engine. The drain timeout defaults to 10 seconds; if it expires, remaining HTTP connections are closed and the final exit code becomes 1. HTTP close errors and Core Engine stop errors also produce a non-zero exit code. Process handlers are installed after Core Engine startup but before the HTTP server's listen call.
+Shutdown drains the HTTP server before stopping Core Engine. The HTTP drain timeout defaults to 10 seconds; if it expires, remaining HTTP connections are closed and the final exit code becomes 1. This is not a timeout for Core Engine module cleanup: module stop hooks are awaited and may remain pending indefinitely. Dependencies remain live while dependent cleanup is pending or has failed. HTTP close errors and Core Engine stop errors also produce a non-zero exit code. Shutdown v6.2 remains on hold; this remediation does not change its contract. Process handlers are installed after Core Engine startup but before the HTTP server's listen call.
 
 The runtime accepts an injected exit function. Tests provide a spy rather than process.exit, so exercising signal and fatal-event handlers never terminates the Vitest process. The integration tests measure both the Core Engine stop call count and final exit call count.

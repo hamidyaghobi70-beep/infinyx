@@ -115,7 +115,7 @@ Keep policy evaluation separate from execution. Do not enable agent or tool exec
 - `PolicyContext.attributes` is optional and, when present, must be a plain string-keyed object. Attribute values remain opaque to Core Engine v1. Empty/whitespace attribute keys are rejected.
 - `attributes` is not itself the Context; it is the optional attribute map nested under `context`. No authentication or semantic validation of individual attribute values is implied by this structural contract.
 - Regression coverage in `test/core/fail-closed-policy-engine.test.ts` covers null/undefined and malformed evaluator decisions, malformed required request fields, invalid context/attributes shapes, rejection before evaluator invocation, and acceptance of a valid context envelope.
-- Open risk retained: timeout returns deny to the caller but does not cancel the underlying evaluator. The current PolicyEngine contract has no AbortSignal/cancellation protocol; a timed-out evaluator may continue consuming resources or performing its own internal work. This must be addressed before any future execution-sensitive integration.
+- Open risk retained: timeout returns deny to the caller but does not cancel the underlying evaluator. The PolicyEngine contract carries an optional AbortSignal evaluation option, and the fail-closed wrapper always supplies it. Cancellation remains cooperative; a delegate that ignores the signal may continue running in-process. This must be addressed before any future execution-sensitive integration.
 
 ### Stage 3 status — accepted by independent review
 - Independent review by Hanieh accepted Stage 3 code, Policy contract, regression tests, and three-platform CI on final code/test SHA `016d98609a725246d2aca105f6b8560d55d1df52`.
@@ -126,6 +126,8 @@ Keep policy evaluation separate from execution. Do not enable agent or tool exec
 - Agent and Tool Execution remain out of scope and disabled.
 - No merge, release, or deployment is authorized by this roadmap update.
 
+
+Shutdown remediation preserves the existing Shutdown v6.2 implementation hold. The HTTP drain timeout is not a Core Engine module-cleanup timeout; module cleanup remains awaited and may remain pending if a hook never settles. Dependency cleanup is blocked while dependents remain queued, pending, or failed.
 
 ## Stage 4 — memory and persistence boundary
 

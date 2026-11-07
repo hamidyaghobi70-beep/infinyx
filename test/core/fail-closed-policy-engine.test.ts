@@ -112,6 +112,70 @@ describe("FailClosedPolicyEngine", () => {
       effect: "allow",
       reason: "context accepted"
     });
-    expect(evaluator).toHaveBeenCalledWith(contextualRequest);
+    expect(evaluator).toHaveBeenCalledWith(expect.objectContaining({ actorId: contextualRequest.actorId }), expect.objectContaining({ signal: expect.any(AbortSignal) }));
+  });
+});
+
+
+describe("Policy snapshot and cancellation regressions", () => {
+  it("passes a detached deeply immutable request snapshot", async () => {
+    const original: PolicyRequest = {
+      ...request,
+      context: { attributes: { nested: { level: 1 } } }
+    };
+    let received: PolicyRequest | undefined;
+    const policy = new FailClosedPolicyEngine({
+      evaluate: async (input) => {
+        received = input;
+        return { effect: "allow", reason: "snapshot accepted" };
+      }
+    });
+    const evaluation = policy.evaluate(original);
+    (original.context!.attributes!.nested as { level: number }).level = 99;
+    await expect(evaluation).resolves.toMatchObject({ effect: "allow" });
+    expect(received?.context?.attributes?.nested).toEqual({ level: 1 });
+    expect(Object.isFrozen(received)).toBe(true);
+    expect(Object.isFrozen(received?.context)).toBe(true);
+    expect(Object.isFrozen(received?.context?.attributes?.nested)).toBe(true);
+  });
+
+  it("returns a detached immutable decision snapshot", async () => {
+    const mutable = { effect: "allow" as const, reason: "approved" };
+    const policy = new FailClosedPolicyEngine({ evaluate: async () => mutable });
+    const decision = await policy.evaluate(request);
+    mutable.effect = "deny";
+    mutable.reason = "changed later";
+    expect(decision).toEqual({ effect: "allow", reason: "approved" });
+    expect(Object.isFrozen(decision)).toBe(true);
+  });
+
+  it("aborts the delegate signal at timeout before returning deny", async () => {
+    vi.useFakeTimers();
+    let signal: AbortSignal | undefined;
+    const policy = new FailClosedPolicyEngine({
+      evaluate: (_input, options) => {
+        signal = options!.signal;
+        return new Promise<never>(() => undefined);
+      }
+    }, 25);
+    const result = policy.evaluate(request);
+    await Promise.resolve();
+    await vi.advanceTimersByTimeAsync(25);
+    await expect(result).resolves.toMatchObject({
+      effect: "deny",
+      reason: "Policy evaluation timed out; access denied."
+    });
+    expect(signal?.aborted).toBe(true);
+  });
+
+  it("denies unsupported mutable values instead of passing them through", async () => {
+    const evaluator = vi.fn(async () => ({ effect: "allow" as const, reason: "unexpected" }));
+    const policy = new FailClosedPolicyEngine({ evaluate: evaluator });
+    const invalid = {
+      ...request,
+      context: { attributes: { map: new Map([["key", "value"]]) } }
+    };
+    await expect(policy.evaluate(invalid)).resolves.toMatchObject({ effect: "deny" });
+    expect(evaluator).not.toHaveBeenCalled();
   });
 });

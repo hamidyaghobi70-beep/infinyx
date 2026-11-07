@@ -34,7 +34,7 @@ The following capabilities are not provided or must remain disabled:
 - Persistent memory or storage of user/tenant data.
 - Any irreversible operation without a separately reviewed approval mechanism.
 
-The default policy engine denies requests. The optional injected policy wrapper is not approved for sensitive authorization: `Promise.race()` enforces a response deadline but does not cancel or contain an evaluator that continues running after timeout. This limitation must not be interpreted as cancellation. No sensitive operation may rely on this wrapper.
+The default policy engine denies requests. Injected policy evaluators receive a detached, deeply frozen request snapshot and an AbortSignal. On timeout the wrapper aborts the signal before returning deny. Cancellation is cooperative: a delegate that ignores the signal may continue consuming in-process resources, and already-started side effects cannot be undone. This is not a hard execution sandbox and is not approved for sensitive authorization. No sensitive operation may rely on this wrapper.
 
 ## Authentication, authorization, and audit limitations
 

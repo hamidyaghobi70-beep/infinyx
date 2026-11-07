@@ -201,6 +201,21 @@ export class CoreEngine {
   ): Promise<unknown[]> {
     const errors: unknown[] = [];
     for (const module of [...this.initializedModules].reverse()) {
+      // Never tear down a dependency while a dependent is still pending,
+      // cleaning, or has failed cleanup. Successful dependents leave this queue.
+      const unresolvedDependents = this.initializedModules.filter((dependent) =>
+        dependent.id !== module.id &&
+        (dependent.dependencies ?? []).includes(module.id)
+      );
+      if (unresolvedDependents.length > 0) {
+        const names = unresolvedDependents.map((dependent) => dependent.id).join(", ");
+        errors.push(new CoreError(
+          "MODULE_DEPENDENCY_CLEANUP_BLOCKED",
+          'Cannot clean up dependency "' + module.id +
+            '" while dependent module(s) remain unresolved: ' + names + "."
+        ));
+        continue;
+      }
       try {
         await this.cleanupModule(module, preserveFailureIds.has(module.id));
       } catch (error) {

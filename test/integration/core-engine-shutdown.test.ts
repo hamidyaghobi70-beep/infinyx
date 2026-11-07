@@ -154,6 +154,36 @@ describe("Core Engine shutdown integration and regression (Revision v5)", () => 
     expect(runtime.server.listening).toBe(false);
   });
 
+  it("I05: shutdown keeps dependencies alive until late dependent cleanup settlement", async () => {
+    const engine = new CoreEngine();
+    const calls: string[] = [];
+    const cleanupStarted = deferred();
+    const cleanupGate = deferred();
+    engine.register({
+      id: "database", version: "1.0.0",
+      stop: () => { calls.push("database:stop"); }
+    });
+    engine.register({
+      id: "api", version: "1.0.0", dependencies: ["database"],
+      stop: async () => {
+        calls.push("api:stop:start");
+        cleanupStarted.resolve();
+        await cleanupGate.promise;
+        calls.push("api:stop:end");
+      }
+    });
+    const setup = runtimeFixture(engine);
+    const runtime = await setup.start();
+    setup.fakeProcess.emit("SIGTERM");
+    await cleanupStarted.promise;
+    expect(calls).toEqual(["api:stop:start"]);
+    cleanupGate.resolve();
+    await runtime.shutdown();
+    expect(calls).toEqual(["api:stop:start", "api:stop:end", "database:stop"]);
+    expect(engine.state).toBe("stopped");
+    expect(setup.exit).toHaveBeenCalledOnce();
+  });
+
   it("I04: startup signal plus failed rollback retries only the remaining resource and exits non-zero", async () => {
     const engine = new CoreEngine();
     const initStarted = deferred();

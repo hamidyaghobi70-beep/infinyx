@@ -78,8 +78,13 @@ export interface PolicyDecision {
   readonly reason: string;
 }
 
+/** Cooperative cancellation passed to policy implementations. */
+export interface PolicyEvaluationOptions {
+  readonly signal: AbortSignal;
+}
+
 export interface PolicyEngine {
-  evaluate(request: PolicyRequest): Promise<PolicyDecision>;
+  evaluate(request: PolicyRequest, options?: PolicyEvaluationOptions): Promise<PolicyDecision>;
 }
 
 export interface ModuleContext {
