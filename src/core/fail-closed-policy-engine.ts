@@ -60,7 +60,7 @@ function snapshotRequest(request: PolicyRequest): PolicyRequest | undefined {
   }
 }
 
-function isValidPolicyRequest(value: unknown): value is PolicyRequest {
+export function isValidPolicyRequest(value: unknown): value is PolicyRequest {
   if (!isPlainRecord(value)) return false;
   if (!isNonEmptyString(value.actorId) || !isNonEmptyString(value.action) ||
       !isNonEmptyString(value.resource)) return false;
@@ -72,11 +72,15 @@ function isValidPolicyRequest(value: unknown): value is PolicyRequest {
       Object.keys(attributes).every((key) => key.trim().length > 0));
 }
 
+export function isValidPolicyDecision(value: unknown): value is PolicyDecision {
+  return isPlainRecord(value) &&
+    (value.effect === "allow" || value.effect === "deny") &&
+    isNonEmptyString(value.reason);
+}
+
 function snapshotDecision(value: unknown): PolicyDecision | undefined {
   try {
-    if (!isPlainRecord(value) ||
-        (value.effect !== "allow" && value.effect !== "deny") ||
-        !isNonEmptyString(value.reason)) return undefined;
+    if (!isValidPolicyDecision(value)) return undefined;
     // Copy only the contract fields: never expose the evaluator's mutable object.
     return Object.freeze({ effect: value.effect, reason: value.reason });
   } catch {
@@ -119,12 +123,13 @@ export class FailClosedPolicyEngine implements PolicyEngine {
     });
 
     try {
-      const evaluation = Promise.resolve().then(() =>
-        this.delegate.evaluate(input, { signal: controller.signal })
-      );
-      const result: unknown = await Promise.race([evaluation, deadline]);
-      return snapshotDecision(result) ??
-        deny("Policy evaluator returned an invalid decision; access denied.");
+      // Snapshot immediately when the delegate settles, before racing the
+      // deadline, so later mutation of its result cannot change our decision.
+      const evaluation = Promise.resolve()
+        .then(() => this.delegate.evaluate(input, { signal: controller.signal }))
+        .then((result) => snapshotDecision(result));
+      const result = await Promise.race([evaluation, deadline]);
+      return result ?? deny("Policy evaluator returned an invalid decision; access denied.");
     } catch {
       return timedOut
         ? deny("Policy evaluation timed out; access denied.")
