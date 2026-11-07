@@ -275,8 +275,8 @@ describe("multi-level dependency cleanup retry", () => {
 
     // A failed dependent blocks cleanup of every dependency below it.
     expect(calls).toEqual(["worker:1"]);
-    expect(engine.getModuleStates().get("foundation")).toBe("registered");
-    expect(engine.getModuleStates().get("service")).toBe("registered");
+    expect(engine.getModuleStates().get("foundation")).toBe("initialized");
+    expect(engine.getModuleStates().get("service")).toBe("initialized");
     expect(engine.getModuleStates().get("worker")).toBe("failed");
 
     // Retry starts at the failed leaf, then proceeds toward its dependencies.
