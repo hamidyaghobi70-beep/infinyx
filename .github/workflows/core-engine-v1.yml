@@ -7,9 +7,11 @@ on:
       - fix/core-engine-shutdown-v4
       - fix/core-engine-shutdown-v5
       - fix/core-engine-shutdown-v6
-      - work/core-engine-v1-hardening\n      - remediation/**
+      - work/core-engine-v1-hardening
+      - remediation/**
   pull_request:
     branches:
+      - main
       - foundation/repository-foundation
       - feature/core-engine-v1
       - fix/core-engine-shutdown-v6
@@ -42,9 +44,9 @@ jobs:
         run: npm run typecheck
       - name: Build
         run: npm run build
-      - name: Test
+      - name: Unit tests
         run: npm test
-      - name: Real process signal integration
+      - name: Integration tests
         run: npm run test:process
       - name: Dependency security audit
         run: npm audit --audit-level=high
