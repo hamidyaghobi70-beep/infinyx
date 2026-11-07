@@ -6,41 +6,47 @@ INFINYX is a Modular Autonomous Intelligence Platform. The approved starting poi
 
 ## Repository status
 
-This branch establishes the repository foundation. It is not a production-ready autonomous-agent platform.
+This branch prepares a restricted, non-production Private Alpha v0.1.0 for architecture validation. It is not a production-ready autonomous-agent platform.
 
 - Runtime baseline: Node.js 22+
 - Language: TypeScript (strict mode)
 - HTTP: Express 5
 - Validation: Zod
 - Logging: Pino with sensitive-field redaction
-- Tests: Vitest and Supertest
+- Tests: Vitest, Supertest, and Node.js process tests
 - Initial persistence: none
 
-## Local development
+## Local installation and execution
 
 ```sh
 nvm use
-npm install
+npm ci
 npm run typecheck
 npm run build
 npm test
+npm run test:process
 npm start
 ```
 
-The initial repository intentionally does not include a lockfile. Generate and review `package-lock.json` with the selected npm version, then use `npm ci` in CI before treating dependency resolution as reproducible.
-
-Copy `.env.example` to `.env` for local configuration. Do not commit real credentials or secrets.
+The runtime listens on `127.0.0.1:3000` by default. Copy `.env.example` to `.env` only for local configuration. Do not commit real credentials or secrets.
 
 ## Initial API
 
-- `GET /health` — process liveness only; it does not claim database or dependency health.
+- `GET /health` — process liveness only; it does not claim readiness, database health, dependency health, or module health.
 
-The server binds to `127.0.0.1` by default. Do not expose it publicly until authentication, authorization, deployment controls, and an appropriate rate-limit strategy are implemented and reviewed.
+Unknown routes return a JSON 404. The initial runtime does not register business modules or expose business operations.
+
+**Do not expose this server to the public internet.** Authentication, authorization, tenant isolation, durable audit, production secret management, and deployment controls are not implemented.
 
 ## Architecture and security
 
 - [Architecture overview](docs/architecture/overview.md)
 - [Module boundaries](docs/architecture/module-boundaries.md)
 - [Security baseline](docs/security/security-baseline.md)
+- [Private Alpha v0.1.0 scope and restrictions](docs/releases/private-alpha-v0.1.0.md)
 
-Agent tool execution is deliberately unavailable. Blockchain functionality, when introduced, must remain read-only in the first release.
+Agent tool execution is deliberately unavailable. Blockchain functionality, when introduced, must remain read-only in the first release. Financial operations, wallet/private-key operations, privileged module execution, and unrestricted external API access are prohibited.
+
+The injected policy evaluator is not safe for sensitive authorization use: `Promise.race()` bounds the wait but does not cancel evaluator execution. The default policy denies all requests. Do not inject an evaluator for sensitive operations.
+
+Shutdown Timeout Contract v6.2 remains outside this release implementation scope and is not changed by this branch.
