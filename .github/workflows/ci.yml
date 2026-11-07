@@ -40,6 +40,31 @@ jobs:
         run: npm run build
       - name: Unit and API tests
         run: npm test
+      - name: Private Alpha runtime smoke test
+        shell: bash
+        run: |
+          set -e
+          HOST=127.0.0.1 PORT=43123 NODE_ENV=test npm start > /tmp/infinyx-alpha-runtime.log 2>&1 &
+          server_pid=$!
+          cleanup() {
+            kill -TERM "$server_pid" 2>/dev/null || true
+            wait "$server_pid" || true
+          }
+          trap cleanup EXIT
+          for attempt in $(seq 1 30); do
+            if curl --fail --silent http://127.0.0.1:43123/health; then
+              echo
+              exit 0
+            fi
+            if ! kill -0 "$server_pid" 2>/dev/null; then
+              cat /tmp/infinyx-alpha-runtime.log
+              exit 1
+            fi
+            sleep 1
+          done
+          cat /tmp/infinyx-alpha-runtime.log
+          echo "Runtime did not become healthy within 30 seconds."
+          exit 1
       - name: Process lifecycle tests
         run: npm run test:process
 
