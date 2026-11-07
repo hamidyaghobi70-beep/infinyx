@@ -52,8 +52,8 @@ function freezeDeep<T>(value: T): T {
 
 /** Clone before calling policy code, then recursively freeze the detached graph. */
 function snapshotRequest(request: PolicyRequest): PolicyRequest | undefined {
-  if (!isSafeData(request)) return undefined;
   try {
+    if (!isSafeData(request)) return undefined;
     return freezeDeep(structuredClone(request));
   } catch {
     return undefined;
@@ -73,11 +73,15 @@ function isValidPolicyRequest(value: unknown): value is PolicyRequest {
 }
 
 function snapshotDecision(value: unknown): PolicyDecision | undefined {
-  if (!isPlainRecord(value) ||
-      (value.effect !== "allow" && value.effect !== "deny") ||
-      !isNonEmptyString(value.reason)) return undefined;
-  // Copy only the contract fields: never expose the evaluator's mutable object.
-  return Object.freeze({ effect: value.effect, reason: value.reason });
+  try {
+    if (!isPlainRecord(value) ||
+        (value.effect !== "allow" && value.effect !== "deny") ||
+        !isNonEmptyString(value.reason)) return undefined;
+    // Copy only the contract fields: never expose the evaluator's mutable object.
+    return Object.freeze({ effect: value.effect, reason: value.reason });
+  } catch {
+    return undefined;
+  }
 }
 
 /**
@@ -97,9 +101,11 @@ export class FailClosedPolicyEngine implements PolicyEngine {
   }
 
   async evaluate(request: PolicyRequest): Promise<PolicyDecision> {
-    if (!isValidPolicyRequest(request)) return deny("Policy request is invalid; access denied.");
+    // Clone first, then validate the detached data graph so the validation
+    // result and the evaluator's input are the same immutable object graph.
     const input = snapshotRequest(request);
     if (!input) return deny("Policy request cannot be safely snapshotted; access denied.");
+    if (!isValidPolicyRequest(input)) return deny("Policy request is invalid; access denied.");
 
     const controller = new AbortController();
     let timeout: ReturnType<typeof setTimeout> | undefined;
