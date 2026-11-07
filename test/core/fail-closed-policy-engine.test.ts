@@ -139,7 +139,7 @@ describe("Policy snapshot and cancellation regressions", () => {
     expect(Object.isFrozen(received?.context?.attributes?.nested)).toBe(true);
   });
 
-  it("returns a detached immutable decision snapshot", async () => {
+  it("snapshots an evaluator decision immediately when the evaluator settles", async () => {
     const mutable = { effect: "allow" as const, reason: "approved" };
     const policy = new FailClosedPolicyEngine({ evaluate: async () => mutable });
     const decision = await policy.evaluate(request);
@@ -177,5 +177,46 @@ describe("Policy snapshot and cancellation regressions", () => {
     };
     await expect(policy.evaluate(invalid)).resolves.toMatchObject({ effect: "deny" });
     expect(evaluator).not.toHaveBeenCalled();
+  });
+});
+
+
+describe("cooperative evaluator cancellation", () => {
+  it("stops evaluator work after the AbortSignal is aborted by the deadline", async () => {
+    vi.useFakeTimers();
+    let workTicks = 0;
+    let stoppedByAbort = false;
+    let signal: AbortSignal | undefined;
+    let evaluatorStarted!: () => void;
+    const started = new Promise<void>((resolve) => { evaluatorStarted = resolve; });
+
+    const policy = new FailClosedPolicyEngine({
+      evaluate: (_input, options) => {
+        signal = options!.signal;
+        return new Promise((resolve) => {
+          const interval = setInterval(() => { workTicks += 1; }, 1);
+          evaluatorStarted();
+          signal!.addEventListener("abort", () => {
+            stoppedByAbort = true;
+            clearInterval(interval);
+            resolve({ effect: "deny", reason: "Evaluator cooperatively stopped." });
+          }, { once: true });
+        });
+      }
+    }, 25);
+
+    const decision = policy.evaluate(request);
+    await started;
+    await vi.advanceTimersByTimeAsync(25);
+    await expect(decision).resolves.toEqual({
+      effect: "deny",
+      reason: "Policy evaluation timed out; access denied."
+    });
+
+    expect(signal?.aborted).toBe(true);
+    expect(stoppedByAbort).toBe(true);
+    const ticksAtSettlement = workTicks;
+    await vi.advanceTimersByTimeAsync(100);
+    expect(workTicks).toBe(ticksAtSettlement);
   });
 });
