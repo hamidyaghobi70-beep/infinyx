@@ -6,7 +6,8 @@ export type CoreErrorCode =
   | "INVALID_LIFECYCLE_TRANSITION"
   | "MODULE_INITIALIZATION_FAILED"
   | "MODULE_START_FAILED"
-  | "MODULE_STOP_FAILED";
+  | "MODULE_STOP_FAILED"
+  | "MODULE_DEPENDENCY_CLEANUP_BLOCKED";
 
 export class CoreError extends Error {
   constructor(
