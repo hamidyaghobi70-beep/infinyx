@@ -193,7 +193,7 @@ describe("cooperative evaluator cancellation", () => {
     const policy = new FailClosedPolicyEngine({
       evaluate: (_input, options) => {
         signal = options!.signal;
-        return new Promise((resolve) => {
+        return new Promise<{ effect: "deny"; reason: string }>((resolve) => {
           const interval = setInterval(() => { workTicks += 1; }, 1);
           evaluatorStarted();
           signal!.addEventListener("abort", () => {
