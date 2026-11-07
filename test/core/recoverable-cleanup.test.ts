@@ -185,8 +185,9 @@ describe("Recoverable Cleanup (Revision v5)", () => {
 
     await expect(engine.initialize()).rejects.toThrow(/rollback failed/i);
     expect(engine.getModuleStates().get("broken")).toBe("failed");
-    expect(engine.getModuleStates().get("platform")).toBe("stopped");
-    expect(dependencyStops).toBe(1);
+    // A dependency must remain live while the dependent's rollback cleanup failed.
+    expect(engine.getModuleStates().get("platform")).toBe("initialized");
+    expect(dependencyStops).toBe(0);
     expect(brokenStops).toBe(1);
 
     await engine.stop();
