@@ -1,0 +1,15 @@
+node_modules/
+dist/
+coverage/
+.env
+.env.*
+!.env.example
+*.log
+npm-debug.log*
+.DS_Store
+.idea/
+.vscode/
+*.pem
+*.key
+*.p12
+*.pfx
