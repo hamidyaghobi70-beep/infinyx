@@ -6,6 +6,7 @@ on:
       - foundation/repository-foundation
       - release/**
       - fix/infinyx-core-policy-cancellation
+      - feat/gap-002-protected-operation-executor
   pull_request:
     branches:
       - foundation/repository-foundation
