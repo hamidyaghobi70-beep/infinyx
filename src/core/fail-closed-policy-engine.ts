@@ -59,6 +59,12 @@ export function snapshotPolicyRequest(request: PolicyRequest): PolicyRequest | u
   } catch {
     return undefined;
   }
+
+  async shutdown(): Promise<void> {
+    this.shuttingDown = true;
+    for (const stop of [...this.activeStops]) stop("RUNTIME_SHUTDOWN");
+    await this.delegate.shutdown?.();
+  }
 }
 
 export function isValidPolicyRequest(value: unknown): value is PolicyRequest {
@@ -117,6 +123,9 @@ function reasonFromSignal(signal: AbortSignal, fallback: PolicyStopReason): Poli
  * hard execution termination is required.
  */
 export class FailClosedPolicyEngine implements PolicyEngine {
+  private shuttingDown = false;
+  private readonly activeStops = new Set<(reason: PolicyStopReason) => void>();
+
   constructor(
     private readonly delegate: PolicyEngine,
     private readonly timeoutMs = DEFAULT_POLICY_TIMEOUT_MS
@@ -130,6 +139,7 @@ export class FailClosedPolicyEngine implements PolicyEngine {
     request: PolicyRequest,
     options?: PolicyEvaluationOptions
   ): Promise<PolicyDecision> {
+    if (this.shuttingDown) return deny("Policy runtime is shutting down; access denied.");
     const input = snapshotPolicyRequest(request);
     if (!input) return deny("Policy request cannot be safely snapshotted; access denied.");
     if (!isValidPolicyRequest(input)) return deny("Policy request is invalid; access denied.");
@@ -171,6 +181,8 @@ export class FailClosedPolicyEngine implements PolicyEngine {
       resolveAbort(deny(cause.message));
     };
 
+    this.activeStops.add(stop);
+
     if (options?.signal) {
       callerAbort = () => stop(reasonFromSignal(options.signal!, "CALLER_CANCELLED"));
       options.signal.addEventListener("abort", callerAbort, { once: true });
@@ -210,6 +222,7 @@ export class FailClosedPolicyEngine implements PolicyEngine {
         ? deny(cancellationMessage(stopReason))
         : deny("Policy evaluation failed; access denied.");
     } finally {
+      this.activeStops.delete(stop);
       if (timeout !== undefined) clearTimeout(timeout);
       if (callerAbort && options?.signal) {
         options.signal.removeEventListener("abort", callerAbort);

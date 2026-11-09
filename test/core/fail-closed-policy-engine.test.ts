@@ -295,5 +295,33 @@ describe("FailClosedPolicyEngine caller and parent cancellation", () => {
       reason: "Parent operation cancelled policy evaluation; access denied."
     });
   });
-});
 
+
+  it("blocks new evaluations and cancels active work during policy runtime shutdown", async () => {
+    let evaluatorStarted!: () => void;
+    const started = new Promise<void>((resolve) => { evaluatorStarted = resolve; });
+    let observedSignal: AbortSignal | undefined;
+    const delegate = {
+      evaluate: (_input: typeof request, options?: { signal?: AbortSignal }) =>
+        new Promise<{ effect: "deny"; reason: string }>((resolve) => {
+          observedSignal = options?.signal;
+          evaluatorStarted();
+          observedSignal?.addEventListener("abort", () => {
+            resolve({ effect: "deny", reason: "stopped" });
+          }, { once: true });
+        }),
+      shutdown: async () => undefined
+    };
+    const policy = new FailClosedPolicyEngine(delegate);
+    const inFlight = policy.evaluate(request);
+    await started;
+    await policy.shutdown();
+    await expect(inFlight).resolves.toMatchObject({ effect: "deny" });
+    expect(observedSignal?.aborted).toBe(true);
+    await expect(policy.evaluate(request)).resolves.toMatchObject({
+      effect: "deny",
+      reason: "Policy runtime is shutting down; access denied."
+    });
+  });
+
+});

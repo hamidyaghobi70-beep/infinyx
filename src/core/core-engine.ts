@@ -133,9 +133,6 @@ export class CoreEngine {
   }
 
   stop(): Promise<void> {
-    // Returning the in-flight stop promise from inside a stop hook would make
-    // that hook await the operation that is itself waiting for the hook.
-    // Detect this async call chain explicitly instead of creating a deadlock.
     const cleanupContext = this.cleanupContext.getStore();
     if (cleanupContext?.engine === this && cleanupContext.active) {
       return Promise.reject(new CoreError(
@@ -145,11 +142,7 @@ export class CoreEngine {
     }
     if (this.stopPromise) return this.stopPromise;
     if (this.lifecycle === "stopped") return Promise.resolve();
-    if (this.lifecycle === "created") {
-      this.lifecycle = "stopped";
-      return Promise.resolve();
-    }
-    if (!["initialized", "running", "failed"].includes(this.lifecycle)) {
+    if (!["created", "initialized", "running", "failed"].includes(this.lifecycle)) {
       return Promise.reject(new CoreError(
         "INVALID_LIFECYCLE_TRANSITION",
         'Cannot stop Core Engine while it is "' + this.lifecycle + '".'
@@ -157,10 +150,43 @@ export class CoreEngine {
     }
 
     this.lifecycle = "stopping";
-    // Defer execution one microtask so the shared promise is installed before
-    // any module stop hook can re-enter CoreEngine.stop().
-    const stopPromise = Promise.resolve().then(() => this.performStop());
+    // Install the shared promise before invoking shutdown hooks. The policy
+    // runtime stops accepting new work synchronously before module cleanup.
+    const stopPromise = this.installStopPromise(() => {
+      const policyShutdown = this.beginPolicyShutdown();
+      if (this.initializedModules.length === 0) {
+        return policyShutdown.then(
+          () => { this.lifecycle = "stopped"; },
+          (error: unknown) => {
+            this.lifecycle = "failed";
+            throw new CoreError(
+              "MODULE_STOP_FAILED",
+              "Policy runtime failed to stop.",
+              { cause: error }
+            );
+          }
+        );
+      }
+      return this.performStop(policyShutdown);
+    });
+    return stopPromise;
+  }
+
+  private installStopPromise(start: () => Promise<void>): Promise<void> {
+    let resolveWork!: () => void;
+    let rejectWork!: (reason?: unknown) => void;
+    const stopPromise = new Promise<void>((resolve, reject) => {
+      resolveWork = resolve;
+      rejectWork = reject;
+    });
     this.stopPromise = stopPromise;
+
+    try {
+      void start().then(resolveWork, rejectWork);
+    } catch (error) {
+      rejectWork(error);
+    }
+
     void stopPromise.then(
       () => {
         if (this.stopPromise === stopPromise) this.stopPromise = undefined;
@@ -172,7 +198,26 @@ export class CoreEngine {
     return stopPromise;
   }
 
-  private async performStop(): Promise<void> {
+  private beginPolicyShutdown(): Promise<void> {
+    try {
+      return this.policy.shutdown?.() ?? Promise.resolve();
+    } catch (error) {
+      return Promise.reject(error);
+    }
+  }
+
+  private async performStop(policyShutdown: Promise<void>): Promise<void> {
+    try {
+      await policyShutdown;
+    } catch (error) {
+      this.lifecycle = "failed";
+      throw new CoreError(
+        "MODULE_STOP_FAILED",
+        "Policy runtime failed to stop; module cleanup was not started.",
+        { cause: error }
+      );
+    }
+
     const errors = await this.cleanupInitializedModules();
     this.lifecycle = errors.length ? "failed" : "stopped";
 

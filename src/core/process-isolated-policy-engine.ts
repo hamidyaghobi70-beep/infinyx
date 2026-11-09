@@ -445,6 +445,9 @@ export class ProcessIsolatedPolicyEngine implements PolicyEngine {
     this.shuttingDown = true;
     const executions = [...this.active.values()];
     for (const execution of executions) execution.cancel("RUNTIME_SHUTDOWN");
-    await Promise.all(executions.map((execution) => execution.completion));
+    const results = await Promise.all(executions.map((execution) => execution.completion));
+    if (results.some((result) => result.outcome === "UNRESOLVED")) {
+      throw new Error("One or more policy child processes remain unresolved.");
+    }
   }
 }

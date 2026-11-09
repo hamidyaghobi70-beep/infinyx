@@ -4,6 +4,11 @@ export { CoreError } from "./core-error.js";
 export type { CoreErrorCode } from "./core-error.js";
 export { DefaultDenyPolicyEngine } from "./default-policy-engine.js";
 export { FailClosedPolicyEngine } from "./fail-closed-policy-engine.js";
+export { ProcessIsolatedPolicyEngine } from "./process-isolated-policy-engine.js";
+export type {
+  PolicyExecutionEvent,
+  ProcessIsolatedPolicyEngineOptions
+} from "./process-isolated-policy-engine.js";
 export { InMemoryEventBus } from "./event-bus.js";
 export { ModuleRegistry } from "./module-registry.js";
 export type {
@@ -16,7 +21,15 @@ export type {
   MemoryPort,
   ModuleContext,
   ModuleLifecycleState,
+  PolicyCancellationCause,
+  PolicyCleanupStatus,
   PolicyDecision,
   PolicyEngine,
-  PolicyRequest
+  PolicyEvaluationOptions,
+  PolicyExecutionLifecycleState,
+  PolicyExecutionRecord,
+  PolicyRequest,
+  PolicyRuntimeStatus,
+  PolicyStopReason,
+  PolicyTerminalOutcome
 } from "./contracts.js";

@@ -127,6 +127,8 @@ export interface PolicyEvaluationOptions {
 
 export interface PolicyEngine {
   evaluate(request: PolicyRequest, options?: PolicyEvaluationOptions): Promise<PolicyDecision>;
+  /** Stop accepting work and request termination of active policy evaluations. */
+  shutdown?(): Promise<void>;
 }
 
 export interface ModuleContext {
