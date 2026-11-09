@@ -94,10 +94,59 @@ export interface PolicyEngine {
   ): Promise<PolicyDecision>;
 }
 
+
+/** Caller-supplied authorization attributes. actorId is not authenticated by Core. */
+export interface ProtectedOperationCaller {
+  readonly actorId: string;
+  readonly context?: PolicyContext;
+}
+
+/** Opaque operation reference; valid references are issued by the Core composition root. */
+declare const protectedOperationHandleBrand: unique symbol;
+export interface ProtectedOperationHandle<TInput = unknown, TOutput = unknown> {
+  readonly id: string;
+  readonly [protectedOperationHandleBrand]: {
+    readonly input: (value: TInput) => TInput;
+    readonly output: () => TOutput;
+  };
+}
+
+export interface ProtectedOperationContext {
+  readonly operationId: string;
+  readonly signal: AbortSignal;
+}
+
+export interface ProtectedOperationDefinition<TInput, TOutput> {
+  readonly id: string;
+  readonly action: string;
+  readonly resource: string;
+  readonly validateInput: (value: unknown) => value is TInput;
+  readonly handler: (
+    input: TInput,
+    context: ProtectedOperationContext
+  ) => TOutput | Promise<TOutput>;
+}
+
+export type ProtectedOperationResult<TOutput> =
+  | { readonly status: "executed"; readonly value: TOutput }
+  | { readonly status: "denied"; readonly reason: string }
+  | { readonly status: "failed"; readonly reason: string };
+
+/** Execute-only capability supplied to modules; registration is not exposed. */
+export interface ProtectedOperationPort {
+  execute<TInput, TOutput>(
+    operation: ProtectedOperationHandle<TInput, TOutput>,
+    caller: ProtectedOperationCaller,
+    input: TInput,
+    options?: PolicyEvaluationOptions
+  ): Promise<ProtectedOperationResult<TOutput>>;
+}
+
 export interface ModuleContext {
   readonly moduleId: string;
   readonly events: EventBusPort;
   readonly policy: PolicyEngine;
+  readonly protectedOperations: ProtectedOperationPort;
   readonly memory?: MemoryPort;
 }
 
