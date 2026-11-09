@@ -36,9 +36,22 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
+const startedEngines = new WeakMap<CoreEngine, Promise<void>>();
+async function ensureStarted(engine: CoreEngine): Promise<void> {
+  if (engine.state === "running") return;
+  let pending = startedEngines.get(engine);
+  if (!pending) {
+    pending = (async () => { await engine.initialize(); await engine.start(); })();
+    startedEngines.set(engine, pending);
+  }
+  await pending;
+}
+
+
 describe("ProtectedOperationExecutor", () => {
   it("executes a handler only after a valid Allow decision", async () => {
     const { engine, operation, handler } = makeEngine();
+    await ensureStarted(engine);
     const result = await engine.protectedOperations.execute(operation, caller, { value: "ok" });
     expect(result).toEqual({ status: "executed", value: "OK" });
     expect(handler).toHaveBeenCalledTimes(1);
@@ -46,6 +59,7 @@ describe("ProtectedOperationExecutor", () => {
 
   it("never invokes a handler after Deny", async () => {
     const { engine, operation, handler } = makeEngine(async () => deny);
+    await ensureStarted(engine);
     const result = await engine.protectedOperations.execute(operation, caller, { value: "no" });
     expect(result).toMatchObject({ status: "denied" });
     expect(handler).not.toHaveBeenCalled();
@@ -55,6 +69,7 @@ describe("ProtectedOperationExecutor", () => {
     const { engine, operation, handler } = makeEngine(async () => {
       throw new Error("policy unavailable");
     });
+    await ensureStarted(engine);
     const result = await engine.protectedOperations.execute(operation, caller, { value: "no" });
     expect(result).toMatchObject({ status: "denied" });
     expect(handler).not.toHaveBeenCalled();
@@ -65,6 +80,7 @@ describe("ProtectedOperationExecutor", () => {
       effect: "permit",
       reason: "not an Allow/Deny decision"
     } as unknown as PolicyDecision));
+    await ensureStarted(engine);
     const result = await engine.protectedOperations.execute(operation, caller, { value: "no" });
     expect(result).toMatchObject({ status: "denied" });
     expect(handler).not.toHaveBeenCalled();
@@ -74,6 +90,7 @@ describe("ProtectedOperationExecutor", () => {
     const controller = new AbortController();
     controller.abort();
     const { engine, operation, handler } = makeEngine();
+    await ensureStarted(engine);
     const result = await engine.protectedOperations.execute(
       operation, caller, { value: "no" }, { signal: controller.signal }
     );
@@ -88,6 +105,7 @@ describe("ProtectedOperationExecutor", () => {
       evaluatorSignal = options?.signal;
       return new Promise<PolicyDecision>(() => undefined);
     });
+    await ensureStarted(engine);
     const pending = engine.protectedOperations.execute(
       operation, caller, { value: "no" }, { signal: controller.signal }
     );
@@ -117,6 +135,7 @@ describe("ProtectedOperationExecutor", () => {
       validateInput: (value: unknown): value is string => typeof value === "string",
       handler
     });
+    await ensureStarted(engine);
     const pending = engine.protectedOperations.execute(operation, caller, "x");
     await Promise.resolve();
     await vi.advanceTimersByTimeAsync(20);
@@ -129,6 +148,7 @@ describe("ProtectedOperationExecutor", () => {
   it("validates input before policy evaluation and handler execution", async () => {
     const evaluator = vi.fn(async () => allow);
     const { engine, operation, handler } = makeEngine(evaluator);
+    await ensureStarted(engine);
     const result = await engine.protectedOperations.execute(operation, caller, { value: 7 } as never);
     expect(result).toMatchObject({ status: "denied" });
     expect(evaluator).not.toHaveBeenCalled();
@@ -141,6 +161,7 @@ describe("ProtectedOperationExecutor", () => {
       observed = request;
       return allow;
     });
+    await ensureStarted(engine);
     await engine.protectedOperations.execute(operation, {
       actorId: "caller-1",
       context: { attributes: { requestedAction: "admin.delete" } }
@@ -153,6 +174,7 @@ describe("ProtectedOperationExecutor", () => {
   it("rejects forged or cross-executor operation handles", async () => {
     const first = makeEngine();
     const second = makeEngine();
+    await ensureStarted(second.engine);
     const result = await second.engine.protectedOperations.execute(
       first.operation as ProtectedOperationHandle<{ readonly value: string }, string>,
       caller,
@@ -168,7 +190,9 @@ describe("ProtectedOperationExecutor", () => {
       new Promise<PolicyDecision>((resolve) => { release = resolve; })
     );
     const sameCaller = { actorId: "caller-duplicate" };
+    await ensureStarted(engine);
     const first = engine.protectedOperations.execute(operation, sameCaller, { value: "one" });
+    await ensureStarted(engine);
     const second = await engine.protectedOperations.execute(operation, sameCaller, { value: "two" });
     expect(second).toMatchObject({ status: "denied" });
     release(allow);
@@ -196,6 +220,7 @@ describe("ProtectedOperationExecutor", () => {
       }
     });
     const controller = new AbortController();
+    await ensureStarted(engine);
     await engine.protectedOperations.execute(operation, caller, "x", { signal: controller.signal });
     expect(handlerSignal).toBeInstanceOf(AbortSignal);
     expect(handlerSignal?.aborted).toBe(false);
@@ -219,6 +244,7 @@ describe("ProtectedOperationExecutor", () => {
       controller.abort();
       return allow;
     });
+    await ensureStarted(engine);
     const result = await engine.protectedOperations.execute(
       operation, caller, { value: "no" }, { signal: controller.signal }
     );
@@ -250,8 +276,91 @@ describe("ProtectedOperationExecutor", () => {
       validateInput: (value: unknown): value is string => typeof value === "string",
       handler
     });
+    await ensureStarted(engine);
     const result = await engine.protectedOperations.execute(operation, caller, "x");
     expect(result).toMatchObject({ status: "failed" });
     expect(handler).toHaveBeenCalledTimes(1);
   });
+
+  it("rejects protected operations until CoreEngine is running", async () => {
+    const { engine, operation, handler } = makeEngine();
+    const result = await engine.protectedOperations.execute(operation, caller, { value: "early" });
+    expect(result).toMatchObject({ status: "denied" });
+    expect(handler).not.toHaveBeenCalled();
+  });
+
+  it("does not expose PolicyEngine through ModuleContext", async () => {
+    const { engine } = makeEngine();
+    let context: unknown;
+    engine.register({ id: "policy-isolation", version: "1.0.0", initialize: (ctx) => { context = ctx; } });
+    await engine.initialize();
+    expect(context).not.toHaveProperty("policy");
+    expect(context).toHaveProperty("protectedOperations");
+  });
+
+  it("denies an in-flight policy result if shutdown begins before handler admission", async () => {
+    let release!: (decision: PolicyDecision) => void;
+    const { engine, operation, handler } = makeEngine(() =>
+      new Promise<PolicyDecision>((resolve) => { release = resolve; })
+    );
+    await ensureStarted(engine);
+    const pending = engine.protectedOperations.execute(operation, { actorId: "race" }, { value: "x" });
+    await Promise.resolve();
+    const stopping = engine.stop();
+    release(allow);
+    expect(await pending).toMatchObject({ status: "denied" });
+    expect(handler).not.toHaveBeenCalled();
+    await stopping;
+  });
+
+  it("passes a detached deeply frozen context snapshot to asynchronous policy", async () => {
+    let release!: (decision: PolicyDecision) => void;
+    let observed: PolicyRequest | undefined;
+    const { engine, operation } = makeEngine(async (request) => {
+      observed = request;
+      return new Promise<PolicyDecision>((resolve) => { release = resolve; });
+    });
+    await ensureStarted(engine);
+    const attributes = { nested: { label: "before" } };
+    const mutableCaller = { actorId: "snapshot", context: { attributes } };
+    await ensureStarted(engine);
+    const pending = engine.protectedOperations.execute(operation, mutableCaller, { value: "ok" });
+    await Promise.resolve();
+    attributes.nested.label = "after";
+    release(allow);
+    await pending;
+    expect(observed?.context?.attributes?.nested).toEqual({ label: "before" });
+    expect(Object.isFrozen(observed?.context)).toBe(true);
+    expect(Object.isFrozen(observed?.context?.attributes)).toBe(true);
+    expect(Object.isFrozen(observed?.context?.attributes?.nested)).toBe(true);
+  });
+
+  it("fails closed for cyclic policy context before calling PolicyEngine", async () => {
+    const evaluator = vi.fn(async () => allow);
+    const { engine, operation, handler } = makeEngine(evaluator);
+    await ensureStarted(engine);
+    const cyclic: Record<string, unknown> = {};
+    cyclic.self = cyclic;
+    await ensureStarted(engine);
+    const result = await engine.protectedOperations.execute(
+      operation, { actorId: "cycle", context: { attributes: cyclic } }, { value: "x" }
+    );
+    expect(result).toMatchObject({ status: "denied" });
+    expect(evaluator).not.toHaveBeenCalled();
+    expect(handler).not.toHaveBeenCalled();
+  });
+
+  it("documents identity-only duplicate suppression: a new caller object is distinct", async () => {
+    const { engine, operation, handler } = makeEngine();
+    await ensureStarted(engine);
+    const firstCaller = { actorId: "same-fields" };
+    expect(await engine.protectedOperations.execute(operation, firstCaller, { value: "a" }))
+      .toMatchObject({ status: "executed" });
+    expect(await engine.protectedOperations.execute(operation, firstCaller, { value: "b" }))
+      .toMatchObject({ status: "denied" });
+    expect(await engine.protectedOperations.execute(operation, { actorId: "same-fields" }, { value: "c" }))
+      .toMatchObject({ status: "executed" });
+    expect(handler).toHaveBeenCalledTimes(2);
+  });
+
 });

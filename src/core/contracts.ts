@@ -140,7 +140,6 @@ export interface ProtectedOperationPort {
 export interface ModuleContext {
   readonly moduleId: string;
   readonly events: EventBusPort;
-  readonly policy: PolicyEngine;
   readonly protectedOperations: ProtectedOperationPort;
   readonly memory?: MemoryPort;
 }

@@ -51,7 +51,7 @@ export class CoreEngine {
     this.policy = options.policy
       ? new FailClosedPolicyEngine(options.policy, options.policyTimeoutMs)
       : new DefaultDenyPolicyEngine();
-    this.protectedOperationExecutor = new ProtectedOperationExecutor(this.policy);
+    this.protectedOperationExecutor = new ProtectedOperationExecutor(this.policy, () => this.lifecycle === "running");
     // Expose an execute-only facade. Registration remains on the composition-root
     // CoreEngine API and is never included in a module context.
     this.protectedOperations = Object.freeze({
@@ -220,7 +220,6 @@ export class CoreEngine {
     const base = {
       moduleId,
       events: this.events,
-      policy: this.policy,
       protectedOperations: this.protectedOperations
     };
     return Object.freeze(
