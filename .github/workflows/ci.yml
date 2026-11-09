@@ -12,6 +12,7 @@ on:
     branches:
       - foundation/repository-foundation
       - main
+      - feat/gap-002-protected-operation-executor
 
 permissions:
   contents: read
