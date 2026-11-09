@@ -366,10 +366,13 @@ describe("ProtectedOperationExecutor", () => {
 
   it("keeps an already-admitted handler in flight during shutdown without claiming cancellation", async () => {
     let release!: (value: string) => void;
+    let signalHandlerStarted!: () => void;
+    const handlerStarted = new Promise<void>((resolve) => { signalHandlerStarted = resolve; });
     let handlerSignal: AbortSignal | undefined;
     const engine = new CoreEngine({ policy: { evaluate: async () => allow } });
     const handler = vi.fn((_input: string, context: { operationId: string; signal: AbortSignal }) => {
       handlerSignal = context.signal;
+      signalHandlerStarted();
       return new Promise<string>((resolve) => { release = resolve; });
     });
     const operation = engine.registerProtectedOperation({
@@ -381,7 +384,7 @@ describe("ProtectedOperationExecutor", () => {
     });
     await ensureStarted(engine);
     const pending = engine.protectedOperations.execute(operation, { actorId: "in-flight" }, "work");
-    await Promise.resolve();
+    await handlerStarted;
     expect(handler).toHaveBeenCalledTimes(1);
     const stopping = engine.stop();
     await stopping;
