@@ -363,4 +363,45 @@ describe("ProtectedOperationExecutor", () => {
     expect(handler).toHaveBeenCalledTimes(2);
   });
 
+
+  it("keeps an already-admitted handler in flight during shutdown without claiming cancellation", async () => {
+    let release!: (value: string) => void;
+    let handlerSignal: AbortSignal | undefined;
+    const engine = new CoreEngine({ policy: { evaluate: async () => allow } });
+    const handler = vi.fn((_input: string, context: { operationId: string; signal: AbortSignal }) => {
+      handlerSignal = context.signal;
+      return new Promise<string>((resolve) => { release = resolve; });
+    });
+    const operation = engine.registerProtectedOperation({
+      id: "records.in-flight",
+      action: "record.write",
+      resource: "record:in-flight",
+      validateInput: (value: unknown): value is string => typeof value === "string",
+      handler
+    });
+    await ensureStarted(engine);
+    const pending = engine.protectedOperations.execute(operation, { actorId: "in-flight" }, "work");
+    await Promise.resolve();
+    expect(handler).toHaveBeenCalledTimes(1);
+    const stopping = engine.stop();
+    await stopping;
+    expect(handlerSignal?.aborted).toBe(false);
+    release("completed");
+    expect(await pending).toEqual({ status: "executed", value: "completed" });
+  });
+
+  it("fails closed for non-cloneable context values before PolicyEngine", async () => {
+    const evaluator = vi.fn(async () => allow);
+    const { engine, operation, handler } = makeEngine(evaluator);
+    await ensureStarted(engine);
+    const result = await engine.protectedOperations.execute(
+      operation,
+      { actorId: "non-cloneable", context: { attributes: { invalid: new Date() } } },
+      { value: "x" }
+    );
+    expect(result).toMatchObject({ status: "denied" });
+    expect(evaluator).not.toHaveBeenCalled();
+    expect(handler).not.toHaveBeenCalled();
+  });
+
 });
