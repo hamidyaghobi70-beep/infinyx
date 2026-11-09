@@ -6,6 +6,8 @@ export { DefaultDenyPolicyEngine } from "./default-policy-engine.js";
 export { FailClosedPolicyEngine } from "./fail-closed-policy-engine.js";
 export { InMemoryEventBus } from "./event-bus.js";
 export { ModuleRegistry } from "./module-registry.js";
+export { ProcessIsolatedPolicyEngine } from "./process-isolated-policy-engine.js";
+export type { ProcessIsolatedPolicyEngineOptions, PolicyExecutionEvent } from "./process-isolated-policy-engine.js";
 export type {
   CoreLifecycleState,
   CoreModule,
@@ -18,6 +20,13 @@ export type {
   ModuleLifecycleState,
   PolicyDecision,
   PolicyEngine,
+  PolicyEvaluationOptions,
+  PolicyExecutionRecord,
+  PolicyExecutionLifecycleState,
+  PolicyStopReason,
+  PolicyTerminalOutcome,
+  PolicyCleanupStatus,
+  PolicyRuntimeStatus,
   PolicyRequest,
   ProtectedOperationCaller,
   ProtectedOperationContext,
