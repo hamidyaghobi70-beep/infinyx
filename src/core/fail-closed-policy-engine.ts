@@ -59,12 +59,6 @@ export function snapshotPolicyRequest(request: PolicyRequest): PolicyRequest | u
   } catch {
     return undefined;
   }
-
-  async shutdown(): Promise<void> {
-    this.shuttingDown = true;
-    for (const stop of [...this.activeStops]) stop("RUNTIME_SHUTDOWN");
-    await this.delegate.shutdown?.();
-  }
 }
 
 export function isValidPolicyRequest(value: unknown): value is PolicyRequest {
@@ -231,5 +225,11 @@ export class FailClosedPolicyEngine implements PolicyEngine {
         options.parentSignal.removeEventListener("abort", parentAbort);
       }
     }
+  }
+
+  async shutdown(): Promise<void> {
+    this.shuttingDown = true;
+    for (const stop of [...this.activeStops]) stop("RUNTIME_SHUTDOWN");
+    await this.delegate.shutdown?.();
   }
 }
