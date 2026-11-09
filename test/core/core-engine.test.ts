@@ -240,3 +240,55 @@ describe("CoreEngine", () => {
       .toThrow(/only be registered before initialization/);
   });
 });
+
+
+describe("multi-level dependency cleanup retry", () => {
+  it("preserves dependencies after a leaf cleanup failure and retries in dependent-first order", async () => {
+    const engine = new CoreEngine();
+    const calls: string[] = [];
+    let leafAttempts = 0;
+
+    engine.register({
+      id: "foundation",
+      version: "1.0.0",
+      stop: () => { calls.push("foundation"); }
+    });
+    engine.register({
+      id: "service",
+      version: "1.0.0",
+      dependencies: ["foundation"],
+      stop: () => { calls.push("service"); }
+    });
+    engine.register({
+      id: "worker",
+      version: "1.0.0",
+      dependencies: ["service"],
+      stop: () => {
+        leafAttempts += 1;
+        calls.push("worker:" + leafAttempts);
+        if (leafAttempts === 1) throw new Error("temporary leaf cleanup failure");
+      }
+    });
+
+    await engine.initialize();
+    await expect(engine.stop()).rejects.toThrow(/failed to stop/i);
+
+    // A failed dependent blocks cleanup of every dependency below it.
+    expect(calls).toEqual(["worker:1"]);
+    expect(engine.getModuleStates().get("foundation")).toBe("initialized");
+    expect(engine.getModuleStates().get("service")).toBe("initialized");
+    expect(engine.getModuleStates().get("worker")).toBe("failed");
+
+    // Retry starts at the failed leaf, then proceeds toward its dependencies.
+    await engine.stop();
+    expect(calls).toEqual(["worker:1", "worker:2", "service", "foundation"]);
+    expect(engine.getModuleStates().get("worker")).toBe("stopped");
+    expect(engine.getModuleStates().get("service")).toBe("stopped");
+    expect(engine.getModuleStates().get("foundation")).toBe("stopped");
+    expect(engine.state).toBe("stopped");
+
+    // A further stop is idempotent; successful cleanup hooks never rerun.
+    await engine.stop();
+    expect(calls).toEqual(["worker:1", "worker:2", "service", "foundation"]);
+  });
+});
