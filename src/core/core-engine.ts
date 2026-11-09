@@ -6,13 +6,17 @@ import type {
   MemoryPort,
   ModuleContext,
   ModuleLifecycleState,
-  PolicyEngine
+  PolicyEngine,
+  ProtectedOperationDefinition,
+  ProtectedOperationHandle,
+  ProtectedOperationPort
 } from "./contracts.js";
 import { DefaultDenyPolicyEngine } from "./default-policy-engine.js";
 import { FailClosedPolicyEngine } from "./fail-closed-policy-engine.js";
 import { InMemoryEventBus } from "./event-bus.js";
 import { CoreError } from "./core-error.js";
 import { ModuleRegistry } from "./module-registry.js";
+import { ProtectedOperationExecutor } from "./protected-operation-executor.js";
 
 interface CleanupExecutionContext {
   readonly engine: CoreEngine;
@@ -30,7 +34,9 @@ export interface CoreEngineOptions {
 export class CoreEngine {
   readonly events: EventBusPort;
   readonly policy: PolicyEngine;
+  readonly protectedOperations: ProtectedOperationPort;
 
+  private readonly protectedOperationExecutor: ProtectedOperationExecutor;
   private readonly moduleRegistry = new ModuleRegistry();
   private lifecycle: CoreLifecycleState = "created";
   private readonly moduleStates = new Map<string, ModuleLifecycleState>();
@@ -44,6 +50,12 @@ export class CoreEngine {
     this.policy = options.policy
       ? new FailClosedPolicyEngine(options.policy, options.policyTimeoutMs)
       : new DefaultDenyPolicyEngine();
+    this.protectedOperationExecutor = new ProtectedOperationExecutor(this.policy);
+    // Expose an execute-only facade. Registration remains on the composition-root
+    // CoreEngine API and is never included in a module context.
+    this.protectedOperations = Object.freeze({
+      execute: this.protectedOperationExecutor.execute.bind(this.protectedOperationExecutor)
+    });
   }
 
   get state(): CoreLifecycleState {
@@ -52,6 +64,19 @@ export class CoreEngine {
 
   getModules(): readonly CoreModule[] {
     return this.moduleRegistry.list();
+  }
+
+  /** Register protected handlers during composition, before modules receive context. */
+  registerProtectedOperation<TInput, TOutput>(
+    definition: ProtectedOperationDefinition<TInput, TOutput>
+  ): ProtectedOperationHandle<TInput, TOutput> {
+    if (this.lifecycle !== "created") {
+      throw new CoreError(
+        "INVALID_LIFECYCLE_TRANSITION",
+        "Protected operations can only be registered before initialization."
+      );
+    }
+    return this.protectedOperationExecutor.register(definition);
   }
 
   register(module: CoreModule): void {
@@ -189,7 +214,8 @@ export class CoreEngine {
     const base = {
       moduleId,
       events: this.events,
-      policy: this.policy
+      policy: this.policy,
+      protectedOperations: this.protectedOperations
     };
     return Object.freeze(
       this.options.memory ? { ...base, memory: this.options.memory } : base
