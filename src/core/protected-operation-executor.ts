@@ -99,7 +99,7 @@ export class ProtectedOperationExecutor implements ProtectedOperationPort {
       throw new TypeError("Protected operation registration is invalid.");
     }
     if (this.operationIds.has(definition.id)) throw new TypeError("Protected operation ID is already registered.");
-    const handle: InternalHandle = Object.freeze({ id: definition.id, [handleBrand]: true });
+    const handle: InternalHandle = Object.freeze({ id: definition.id, [handleBrand]: true as const });
     const registration: RegisteredOperation<TInput, TOutput> = Object.freeze({
       id: definition.id, action: definition.action, resource: definition.resource,
       validateInput: definition.validateInput, handler: definition.handler
