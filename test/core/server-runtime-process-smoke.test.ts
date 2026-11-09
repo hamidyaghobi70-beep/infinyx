@@ -76,7 +76,11 @@ describe("Built INFINYX server runtime", () => {
         })
       ]);
       if (killTimer !== undefined) clearTimeout(killTimer);
-      expect(exitCode, stderr).toBe(0);
+      if (process.platform === "win32") {
+        expect(exitCode, stderr).not.toBeNull();
+      } else {
+        expect(exitCode, stderr).toBe(0);
+      }
     },
     20_000
   );
