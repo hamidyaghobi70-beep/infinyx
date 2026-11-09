@@ -102,13 +102,8 @@ export interface ProtectedOperationCaller {
 }
 
 /** Opaque operation reference; valid references are issued by the Core composition root. */
-declare const protectedOperationHandleBrand: unique symbol;
 export interface ProtectedOperationHandle<TInput = unknown, TOutput = unknown> {
   readonly id: string;
-  readonly [protectedOperationHandleBrand]: {
-    readonly input: (value: TInput) => TInput;
-    readonly output: () => TOutput;
-  };
 }
 
 export interface ProtectedOperationContext {
