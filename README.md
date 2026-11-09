@@ -43,6 +43,7 @@ Unknown routes return a JSON 404. The initial runtime does not register business
 - [Architecture overview](docs/architecture/overview.md)
 - [Module boundaries](docs/architecture/module-boundaries.md)
 - [Security baseline](docs/security/security-baseline.md)
+- [Policy cancellation and runtime containment](docs/security/policy-cancellation-runtime-containment.md)
 - [Private Alpha v0.1.0 scope and restrictions](docs/releases/private-alpha-v0.1.0.md)
 
 Agent tool execution is deliberately unavailable. Blockchain functionality, when introduced, must remain read-only in the first release. Financial operations, wallet/private-key operations, privileged module execution, and unrestricted external API access are prohibited.

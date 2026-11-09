@@ -50,22 +50,10 @@ export interface MemoryPort {
   delete(address: MemoryAddress): Promise<void>;
 }
 
-/**
- * Optional, caller-supplied policy context. Context is a structured envelope;
- * arbitrary key/value attributes belong inside context.attributes and are not
- * themselves the Context object.
- */
 export interface PolicyContext {
   readonly attributes?: Readonly<Record<string, unknown>>;
 }
 
-/**
- * Authorization input contract:
- * - actorId, action, and resource are required non-empty strings.
- * - context is optional; when present it must be a PolicyContext object.
- * - context.attributes is optional and, when present, must be a string-keyed
- *   object. Attribute values are opaque to the core policy boundary.
- */
 export interface PolicyRequest {
   readonly actorId: string;
   readonly action: string;
@@ -78,9 +66,63 @@ export interface PolicyDecision {
   readonly reason: string;
 }
 
-/** Cooperative cancellation passed to policy implementations. */
+export type PolicyExecutionLifecycleState =
+  | "CREATED"
+  | "AUTHORIZING"
+  | "AUTHORIZED"
+  | "RUNNING"
+  | "STOP_REQUESTED"
+  | "FINALIZING"
+  | "TERMINAL"
+  | "UNRESOLVED";
+
+export type PolicyStopReason =
+  | "CALLER_CANCELLED"
+  | "POLICY_TIMEOUT"
+  | "RUNTIME_SHUTDOWN"
+  | "PARENT_CANCELLED";
+
+export type PolicyTerminalOutcome =
+  | "COMPLETED"
+  | "CANCELLED"
+  | "DENIED"
+  | "TIMED_OUT"
+  | "FAILED"
+  | "UNRESOLVED";
+
+export type PolicyCleanupStatus =
+  | "NOT_REQUIRED"
+  | "PENDING"
+  | "COMPLETED"
+  | "FAILED"
+  | "UNRESOLVED";
+
+export type PolicyRuntimeStatus =
+  | "NOT_STARTED"
+  | "RUNNING"
+  | "STOP_REQUESTED"
+  | "STOPPED"
+  | "UNRESOLVED";
+
+export interface PolicyExecutionRecord {
+  readonly lifecycle: PolicyExecutionLifecycleState;
+  readonly outcome: PolicyTerminalOutcome;
+  readonly decision: PolicyDecision;
+  readonly runtimeStatus: PolicyRuntimeStatus;
+  readonly cleanupStatus: PolicyCleanupStatus;
+  readonly stopReason?: PolicyStopReason;
+  readonly candidateFrozen: true;
+}
+
+export interface PolicyCancellationCause {
+  readonly code: PolicyStopReason;
+  readonly message: string;
+}
+
 export interface PolicyEvaluationOptions {
-  readonly signal: AbortSignal;
+  readonly signal?: AbortSignal;
+  readonly parentSignal?: AbortSignal;
+  readonly deadlineAt?: number;
 }
 
 export interface PolicyEngine {

@@ -5,6 +5,7 @@ on:
     branches:
       - foundation/repository-foundation
       - release/**
+      - work/**
   pull_request:
     branches:
       - foundation/repository-foundation

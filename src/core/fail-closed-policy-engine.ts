@@ -1,7 +1,10 @@
 import type {
+  PolicyCancellationCause,
   PolicyDecision,
   PolicyEngine,
-  PolicyRequest
+  PolicyEvaluationOptions,
+  PolicyRequest,
+  PolicyStopReason
 } from "./contracts.js";
 
 const DEFAULT_POLICY_TIMEOUT_MS = 5_000;
@@ -20,7 +23,6 @@ function isNonEmptyString(value: unknown): value is string {
   return typeof value === "string" && value.trim().length > 0;
 }
 
-/** Reject accessors, symbols, cycles, class instances and non-data values. */
 function isSafeData(value: unknown, ancestors = new Set<object>()): boolean {
   if (value === null || typeof value === "string" || typeof value === "boolean" ||
       typeof value === "undefined") return true;
@@ -50,8 +52,7 @@ function freezeDeep<T>(value: T): T {
   return value;
 }
 
-/** Clone before calling policy code, then recursively freeze the detached graph. */
-function snapshotRequest(request: PolicyRequest): PolicyRequest | undefined {
+export function snapshotPolicyRequest(request: PolicyRequest): PolicyRequest | undefined {
   try {
     if (!isSafeData(request)) return undefined;
     return freezeDeep(structuredClone(request));
@@ -78,21 +79,42 @@ export function isValidPolicyDecision(value: unknown): value is PolicyDecision {
     isNonEmptyString(value.reason);
 }
 
-function snapshotDecision(value: unknown): PolicyDecision | undefined {
+export function snapshotPolicyDecision(value: unknown): PolicyDecision | undefined {
   try {
     if (!isValidPolicyDecision(value)) return undefined;
-    // Copy only the contract fields: never expose the evaluator's mutable object.
     return Object.freeze({ effect: value.effect, reason: value.reason });
   } catch {
     return undefined;
   }
 }
 
+function cancellationMessage(reason: PolicyStopReason): string {
+  switch (reason) {
+    case "CALLER_CANCELLED":
+      return "Policy evaluation cancelled by caller; access denied.";
+    case "PARENT_CANCELLED":
+      return "Parent operation cancelled policy evaluation; access denied.";
+    case "RUNTIME_SHUTDOWN":
+      return "Runtime shutdown cancelled policy evaluation; access denied.";
+    case "POLICY_TIMEOUT":
+      return "Policy evaluation timed out; access denied.";
+  }
+}
+
+function reasonFromSignal(signal: AbortSignal, fallback: PolicyStopReason): PolicyStopReason {
+  const reason: unknown = signal.reason;
+  if (typeof reason === "object" && reason !== null && "code" in reason) {
+    const code = reason.code;
+    if (code === "CALLER_CANCELLED" || code === "POLICY_TIMEOUT" ||
+        code === "RUNTIME_SHUTDOWN" || code === "PARENT_CANCELLED") return code;
+  }
+  return fallback;
+}
+
 /**
- * Timeout aborts the evaluator signal before returning deny. Cancellation is
- * cooperative, not forced termination: a delegate that ignores AbortSignal
- * may continue running in this process. Use a worker/process boundary when
- * hard resource termination is required.
+ * This wrapper is cooperative only. A delegate that ignores AbortSignal may
+ * continue executing after this method returns. Use a process boundary when
+ * hard execution termination is required.
  */
 export class FailClosedPolicyEngine implements PolicyEngine {
   constructor(
@@ -104,38 +126,86 @@ export class FailClosedPolicyEngine implements PolicyEngine {
     }
   }
 
-  async evaluate(request: PolicyRequest): Promise<PolicyDecision> {
-    // Clone first, then validate the detached data graph so the validation
-    // result and the evaluator's input are the same immutable object graph.
-    const input = snapshotRequest(request);
+  async evaluate(
+    request: PolicyRequest,
+    options?: PolicyEvaluationOptions
+  ): Promise<PolicyDecision> {
+    const input = snapshotPolicyRequest(request);
     if (!input) return deny("Policy request cannot be safely snapshotted; access denied.");
     if (!isValidPolicyRequest(input)) return deny("Policy request is invalid; access denied.");
 
+    if (options?.signal?.aborted) {
+      return deny(cancellationMessage(reasonFromSignal(options.signal, "CALLER_CANCELLED")));
+    }
+    if (options?.parentSignal?.aborted) {
+      return deny(cancellationMessage("PARENT_CANCELLED"));
+    }
+
+    const remainingDeadlineMs = options?.deadlineAt === undefined
+      ? this.timeoutMs
+      : options.deadlineAt - Date.now();
+    if (remainingDeadlineMs <= 0) return deny(cancellationMessage("POLICY_TIMEOUT"));
+
+    const effectiveTimeoutMs = Math.min(this.timeoutMs, remainingDeadlineMs);
     const controller = new AbortController();
+    let stopReason: PolicyStopReason | undefined;
     let timeout: ReturnType<typeof setTimeout> | undefined;
-    let timedOut = false;
-    const deadline = new Promise<never>((_resolve, reject) => {
-      timeout = setTimeout(() => {
-        timedOut = true;
-        controller.abort(new Error("Policy evaluation timed out."));
-        reject(new Error("Policy evaluation timed out."));
-      }, this.timeoutMs);
+    let callerAbort: (() => void) | undefined;
+    let parentAbort: (() => void) | undefined;
+
+    let resolveAbort!: (decision: PolicyDecision) => void;
+    const aborted = new Promise<PolicyDecision>((resolve) => {
+      resolveAbort = resolve;
     });
 
+    const stop = (reason: PolicyStopReason): void => {
+      if (controller.signal.aborted) return;
+      stopReason = reason;
+      const cause: PolicyCancellationCause = {
+        code: reason,
+        message: cancellationMessage(reason)
+      };
+      controller.abort(cause);
+      resolveAbort(deny(cause.message));
+    };
+
+    if (options?.signal) {
+      callerAbort = () => stop(reasonFromSignal(options.signal!, "CALLER_CANCELLED"));
+      options.signal.addEventListener("abort", callerAbort, { once: true });
+    }
+    if (options?.parentSignal) {
+      parentAbort = () => stop("PARENT_CANCELLED");
+      options.parentSignal.addEventListener("abort", parentAbort, { once: true });
+    }
+
+    timeout = setTimeout(() => stop("POLICY_TIMEOUT"), effectiveTimeoutMs);
+
     try {
-      // Snapshot immediately when the delegate settles, before racing the
-      // deadline, so later mutation of its result cannot change our decision.
+      if (options?.signal?.aborted) stop(reasonFromSignal(options.signal, "CALLER_CANCELLED"));
+      if (options?.parentSignal?.aborted) stop("PARENT_CANCELLED");
+
+      const delegateOptions: PolicyEvaluationOptions = {
+        signal: controller.signal,
+        ...(options?.deadlineAt === undefined ? {} : { deadlineAt: options.deadlineAt })
+      };
       const evaluation = Promise.resolve()
-        .then(() => this.delegate.evaluate(input, { signal: controller.signal }))
-        .then((result) => snapshotDecision(result));
-      const result = await Promise.race([evaluation, deadline]);
+        .then(() => this.delegate.evaluate(input, delegateOptions))
+        .then((result) => snapshotPolicyDecision(result));
+      const result = await Promise.race([evaluation, aborted]);
+      if (stopReason !== undefined) return deny(cancellationMessage(stopReason));
       return result ?? deny("Policy evaluator returned an invalid decision; access denied.");
     } catch {
-      return timedOut
-        ? deny("Policy evaluation timed out; access denied.")
+      return stopReason !== undefined
+        ? deny(cancellationMessage(stopReason))
         : deny("Policy evaluation failed; access denied.");
     } finally {
       if (timeout !== undefined) clearTimeout(timeout);
+      if (callerAbort && options?.signal) {
+        options.signal.removeEventListener("abort", callerAbort);
+      }
+      if (parentAbort && options?.parentSignal) {
+        options.parentSignal.removeEventListener("abort", parentAbort);
+      }
     }
   }
 }

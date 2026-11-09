@@ -9,6 +9,7 @@ on:
       - fix/core-engine-shutdown-v6
       - work/core-engine-v1-hardening
       - remediation/**
+      - work/**
   pull_request:
     branches:
       - main
