@@ -73,13 +73,25 @@ export interface PolicyRequest {
   readonly context?: PolicyContext;
 }
 
+/** Optional cancellation controls for a single policy evaluation. */
+export interface PolicyEvaluationOptions {
+  readonly signal?: AbortSignal;
+}
+
 export interface PolicyDecision {
   readonly effect: "allow" | "deny";
   readonly reason: string;
 }
 
 export interface PolicyEngine {
-  evaluate(request: PolicyRequest): Promise<PolicyDecision>;
+  /**
+   * The options argument is optional to preserve existing evaluate(request)
+   * call sites and implementations that only accept the original argument.
+   */
+  evaluate(
+    request: PolicyRequest,
+    options?: PolicyEvaluationOptions
+  ): Promise<PolicyDecision>;
 }
 
 export interface ModuleContext {
