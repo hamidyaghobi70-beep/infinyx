@@ -1,6 +1,6 @@
 import { existsSync } from "node:fs";
 import { createServer } from "node:net";
-import { spawn } from "node:child_process";
+import { execFileSync, spawn } from "node:child_process";
 import { describe, expect, it } from "vitest";
 
 async function reservePort(): Promise<number> {
@@ -64,7 +64,13 @@ describe("Built INFINYX server runtime", () => {
       const exited = new Promise<number | null>((resolve) => {
         child.once("exit", (code) => resolve(code));
       });
-      child.kill("SIGTERM");
+      if (process.platform === "win32") {
+        if (child.pid !== undefined) {
+          execFileSync("taskkill", ["/pid", String(child.pid), "/t", "/f"], { stdio: "ignore" });
+        }
+      } else {
+        child.kill("SIGTERM");
+      }
       let killTimer: ReturnType<typeof setTimeout> | undefined;
       const exitCode = await Promise.race([
         exited,
