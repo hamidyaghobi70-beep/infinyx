@@ -201,6 +201,45 @@ describe("ProtectedOperationExecutor", () => {
     expect(handlerSignal?.aborted).toBe(false);
   });
 
+
+  it("rejects duplicate operation identifiers at registration", () => {
+    const { engine } = makeEngine();
+    expect(() => engine.registerProtectedOperation({
+      id: "records.read",
+      action: "record.write",
+      resource: "record:other",
+      validateInput: isRecordInput,
+      handler: async (input) => input.value
+    })).toThrow(/already registered/);
+  });
+
+  it("denies when the caller cancels after Allow resolves but before handler admission", async () => {
+    const controller = new AbortController();
+    const { engine, operation, handler } = makeEngine(async () => {
+      controller.abort();
+      return allow;
+    });
+    const result = await engine.protectedOperations.execute(
+      operation, caller, { value: "no" }, { signal: controller.signal }
+    );
+    expect(result).toMatchObject({ status: "denied" });
+    expect(handler).not.toHaveBeenCalled();
+  });
+
+  it("provides modules with only the central execute-only port", async () => {
+    const { engine } = makeEngine();
+    let modulePort: unknown;
+    engine.register({
+      id: "domain",
+      version: "1.0.0",
+      initialize: (context) => { modulePort = context.protectedOperations; }
+    });
+    await engine.initialize();
+    expect(modulePort).toBe(engine.protectedOperations);
+    expect(modulePort).not.toHaveProperty("register");
+    expect(modulePort).not.toHaveProperty("registerProtectedOperation");
+  });
+
   it("reports handler failure without turning it into an authorization grant", async () => {
     const engine = new CoreEngine({ policy: { evaluate: async () => allow } });
     const handler = vi.fn(() => { throw new Error("handler failed"); });
