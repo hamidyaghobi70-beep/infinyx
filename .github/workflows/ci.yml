@@ -5,6 +5,7 @@ on:
     branches:
       - foundation/repository-foundation
       - release/**
+      - fix/infinyx-core-policy-cancellation
   pull_request:
     branches:
       - foundation/repository-foundation
