@@ -44,8 +44,9 @@ separately verified trusted caller path.
   cancellation propagation, and fail-closed decision enforcement.
 - **Security:** supplies the trusted policy implementation and, in a later
   separately approved stage, authenticated principal/context integration.
-- **Domain modules:** receive only the execute-only port and operation handles;
-  they do not receive registered handler references or registration methods.
+- **Domain modules:** receive only the execute-only port and, when needed,
+  opaque operation handles explicitly passed by the composition root; they do
+  not receive registered handler references or registration methods.
 
 This is an in-process TypeScript boundary, not a hostile-code sandbox. Code
 that can execute arbitrary JavaScript in the same process can bypass any
