@@ -25,6 +25,7 @@ const DEFAULT_TIMEOUT_MS = 5_000;
 const DEFAULT_TERMINATION_GRACE_MS = 100;
 const DEFAULT_KILL_WAIT_MS = 1_000;
 const DEFAULT_MAX_CONCURRENT = 4;
+const DEFAULT_MAX_OLD_SPACE_SIZE_MB = 128;
 
 interface Candidate {
   readonly outcome: PolicyTerminalOutcome;
@@ -48,6 +49,7 @@ export interface ProcessIsolatedPolicyEngineOptions {
   readonly terminationGraceMs?: number;
   readonly killWaitMs?: number;
   readonly maxConcurrent?: number;
+  readonly maxOldSpaceSizeMb?: number;
   readonly onStateChange?: (event: PolicyExecutionEvent) => void;
 }
 
@@ -131,6 +133,7 @@ export class ProcessIsolatedPolicyEngine implements PolicyEngine {
   private readonly terminationGraceMs: number;
   private readonly killWaitMs: number;
   private readonly maxConcurrent: number;
+  private readonly maxOldSpaceSizeMb: number;
   private readonly onStateChange: ((event: PolicyExecutionEvent) => void) | undefined;
   private readonly active = new Map<string, ActiveExecution>();
   private shuttingDown = false;
@@ -141,12 +144,14 @@ export class ProcessIsolatedPolicyEngine implements PolicyEngine {
     this.terminationGraceMs = options.terminationGraceMs ?? DEFAULT_TERMINATION_GRACE_MS;
     this.killWaitMs = options.killWaitMs ?? DEFAULT_KILL_WAIT_MS;
     this.maxConcurrent = options.maxConcurrent ?? DEFAULT_MAX_CONCURRENT;
+    this.maxOldSpaceSizeMb = options.maxOldSpaceSizeMb ?? DEFAULT_MAX_OLD_SPACE_SIZE_MB;
     this.onStateChange = options.onStateChange;
 
     if (!Number.isFinite(this.timeoutMs) || this.timeoutMs <= 0 ||
         !Number.isFinite(this.terminationGraceMs) || this.terminationGraceMs < 0 ||
         !Number.isFinite(this.killWaitMs) || this.killWaitMs <= 0 ||
-        !Number.isInteger(this.maxConcurrent) || this.maxConcurrent < 1) {
+        !Number.isInteger(this.maxConcurrent) || this.maxConcurrent < 1 ||
+        !Number.isInteger(this.maxOldSpaceSizeMb) || this.maxOldSpaceSizeMb < 16) {
       throw new RangeError("Policy runtime limits must be finite and positive.");
     }
   }
@@ -210,7 +215,7 @@ export class ProcessIsolatedPolicyEngine implements PolicyEngine {
     const child = fork(runner.path, [this.moduleUrl], {
       cwd: process.cwd(),
       env: { NODE_ENV: "production" },
-      execArgv: runner.execArgv,
+      execArgv: [...runner.execArgv, `--max-old-space-size=${this.maxOldSpaceSizeMb}`],
       silent: true,
       serialization: "advanced",
       windowsHide: true

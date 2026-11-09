@@ -21,6 +21,14 @@ export default {
     if (request.action === "deny") {
       return { effect: "deny", reason: "Explicit fixture denial." };
     }
+    if (request.action === "heap-limit") {
+      const v8 = await import("node:v8");
+      return {
+        effect: v8.getHeapStatistics().heap_size_limit < 256 * 1024 * 1024 ? "allow" : "deny",
+        reason: "V8 heap limit inspected."
+      };
+    }
+
     if (request.action === "deadline") {
       return {
         effect: typeof options.deadlineAt === "number" ? "allow" : "deny",

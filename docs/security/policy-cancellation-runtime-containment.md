@@ -38,7 +38,7 @@ No automatic retry is performed. No external side-effect rollback is attempted.
 
 A child process is a stronger execution-termination boundary than Promise.race or AbortSignal alone. It is not a complete operating-system security sandbox.
 
-The child runs under the same operating-system user and inherits the host's general filesystem and network permissions unless the deployment environment imposes additional controls. The child can also attempt to create its own subprocesses. This implementation does not claim filesystem isolation, network isolation, syscall filtering, CPU quotas, or a memory hard limit.
+The child runs under the same operating-system user and inherits the host's general filesystem and network permissions unless the deployment environment imposes additional controls. A configurable V8 old-space ceiling is passed with max-old-space-size; this limits the V8 old generation, not total resident memory or native allocations. Wall-clock deadlines bound CPU time indirectly, but no OS CPU quota is configured. The child can also attempt to create its own subprocesses. This implementation does not claim filesystem isolation, network isolation, syscall filtering, CPU quotas, or a memory hard limit.
 
 Worker Threads are not selected as the hard containment boundary because they share the parent process and are not an OS privilege boundary. Worker termination can stop a worker thread, but does not provide process-level fault separation.
 

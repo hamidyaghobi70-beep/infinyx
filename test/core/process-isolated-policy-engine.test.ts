@@ -219,4 +219,47 @@ describe("ProcessIsolatedPolicyEngine", () => {
     expect(rejected.outcome).toBe("CANCELLED");
     expect(rejected.runtimeStatus).toBe("NOT_STARTED");
   });
+
+
+  it("applies the configured V8 old-space limit to the child process", async () => {
+    const engine = new ProcessIsolatedPolicyEngine({
+      moduleUrl: fixtureUrl,
+      maxOldSpaceSizeMb: 64
+    });
+    const result = await engine.evaluateDetailed(request("heap-limit"));
+    expect(result.outcome).toBe("COMPLETED");
+    expect(result.decision.effect).toBe("allow");
+  });
+
+  it("keeps the first stop reason when caller and parent cancellation race", async () => {
+    const observer = stateObserver("RUNNING");
+    const engine = new ProcessIsolatedPolicyEngine({
+      moduleUrl: fixtureUrl,
+      onStateChange: observer.onStateChange
+    });
+    const caller = new AbortController();
+    const parent = new AbortController();
+    const evaluation = engine.evaluateDetailed(request("hang"), {
+      signal: caller.signal,
+      parentSignal: parent.signal
+    });
+    await observer.reached;
+    caller.abort();
+    parent.abort();
+    const result = await evaluation;
+    expect(result.outcome).toBe("CANCELLED");
+    expect(result.stopReason).toBe("CALLER_CANCELLED");
+  });
+
+  it("fails closed when the configured evaluator module cannot be imported", async () => {
+    const missingUrl = pathToFileURL(
+      fileURLToPath(new URL("../fixtures/missing-policy-module.mjs", import.meta.url))
+    ).href;
+    const engine = new ProcessIsolatedPolicyEngine({ moduleUrl: missingUrl });
+    const result = await engine.evaluateDetailed(request());
+    expect(result.outcome).toBe("FAILED");
+    expect(result.decision.effect).toBe("deny");
+    expect(result.runtimeStatus).toBe("STOPPED");
+  });
+
 });
