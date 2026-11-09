@@ -1,6 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { CoreEngine } from "../../src/core/core-engine.js";
-import { ProtectedOperationExecutor } from "../../src/core/protected-operation-executor.js";
 import type {
   PolicyDecision,
   PolicyRequest,
@@ -17,7 +16,7 @@ function isRecordInput(value: unknown): value is { readonly value: string } {
 }
 
 function makeEngine(
-  evaluate: (request: PolicyRequest, options?: { readonly signal?: AbortSignal }) => Promise<unknown> =
+  evaluate: (request: PolicyRequest, options?: { readonly signal?: AbortSignal }) => Promise<PolicyDecision> =
     async () => allow
 ) {
   const engine = new CoreEngine({ policy: { evaluate } });
@@ -65,7 +64,7 @@ describe("ProtectedOperationExecutor", () => {
     const { engine, operation, handler } = makeEngine(async () => ({
       effect: "permit",
       reason: "not an Allow/Deny decision"
-    }));
+    } as unknown as PolicyDecision));
     const result = await engine.protectedOperations.execute(operation, caller, { value: "no" });
     expect(result).toMatchObject({ status: "denied" });
     expect(handler).not.toHaveBeenCalled();
