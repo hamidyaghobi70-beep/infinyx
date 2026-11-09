@@ -149,6 +149,7 @@ export class FailClosedPolicyEngine implements PolicyEngine {
     const effectiveTimeoutMs = Math.min(this.timeoutMs, remainingDeadlineMs);
     const controller = new AbortController();
     let stopReason: PolicyStopReason | undefined;
+    let candidateFrozen = false;
     let timeout: ReturnType<typeof setTimeout> | undefined;
     let callerAbort: (() => void) | undefined;
     let parentAbort: (() => void) | undefined;
@@ -159,7 +160,7 @@ export class FailClosedPolicyEngine implements PolicyEngine {
     });
 
     const stop = (reason: PolicyStopReason): void => {
-      if (controller.signal.aborted) return;
+      if (controller.signal.aborted || candidateFrozen) return;
       stopReason = reason;
       const cause: PolicyCancellationCause = {
         code: reason,
@@ -189,8 +190,17 @@ export class FailClosedPolicyEngine implements PolicyEngine {
         ...(options?.deadlineAt === undefined ? {} : { deadlineAt: options.deadlineAt })
       };
       const evaluation = Promise.resolve()
-        .then(() => this.delegate.evaluate(input, delegateOptions))
-        .then((result) => snapshotPolicyDecision(result));
+        .then(() => {
+          if (controller.signal.aborted) return undefined;
+          return this.delegate.evaluate(input, delegateOptions);
+        })
+        .then((result) => {
+          if (candidateFrozen) return undefined;
+          const decision = snapshotPolicyDecision(result) ??
+            deny("Policy evaluator returned an invalid decision; access denied.");
+          candidateFrozen = true;
+          return decision;
+        });
       const result = await Promise.race([evaluation, aborted]);
       if (stopReason !== undefined) return deny(cancellationMessage(stopReason));
       return result ?? deny("Policy evaluator returned an invalid decision; access denied.");

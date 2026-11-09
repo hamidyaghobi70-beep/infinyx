@@ -220,3 +220,80 @@ describe("cooperative evaluator cancellation", () => {
     expect(workTicks).toBe(ticksAtSettlement);
   });
 });
+
+
+describe("FailClosedPolicyEngine caller and parent cancellation", () => {
+  it("does not invoke the evaluator when caller cancellation precedes evaluation", async () => {
+    const controller = new AbortController();
+    controller.abort();
+    const evaluator = vi.fn(async () => ({
+      effect: "allow" as const,
+      reason: "must not execute"
+    }));
+    const policy = new FailClosedPolicyEngine({ evaluate: evaluator });
+    await expect(policy.evaluate(request, { signal: controller.signal }))
+      .resolves.toMatchObject({ effect: "deny" });
+    expect(evaluator).not.toHaveBeenCalled();
+  });
+
+  it("propagates caller cancellation to a cooperative evaluator", async () => {
+    const controller = new AbortController();
+    let observedSignal: AbortSignal | undefined;
+    let evaluatorStarted!: () => void;
+    const started = new Promise<void>((resolve) => { evaluatorStarted = resolve; });
+    const policy = new FailClosedPolicyEngine({
+      evaluate: (_input, options) => new Promise((resolve) => {
+        observedSignal = options?.signal;
+        evaluatorStarted();
+        observedSignal?.addEventListener("abort", () => {
+          resolve({ effect: "deny", reason: "cooperatively stopped" });
+        }, { once: true });
+      })
+    });
+
+    const decision = policy.evaluate(request, { signal: controller.signal });
+    await started;
+    controller.abort();
+    await expect(decision).resolves.toMatchObject({ effect: "deny" });
+    expect(observedSignal?.aborted).toBe(true);
+  });
+
+  it("does not allow cancellation after a settled result to rewrite that result", async () => {
+    const controller = new AbortController();
+    const policy = new FailClosedPolicyEngine({
+      evaluate: async () => ({ effect: "allow", reason: "completed first" })
+    });
+    const result = await policy.evaluate(request, { signal: controller.signal });
+    controller.abort();
+    expect(result).toEqual({ effect: "allow", reason: "completed first" });
+  });
+
+  it("denies an expired parent deadline without invoking the evaluator", async () => {
+    const evaluator = vi.fn(async () => ({
+      effect: "allow" as const,
+      reason: "must not execute"
+    }));
+    const policy = new FailClosedPolicyEngine({ evaluate: evaluator });
+    await expect(policy.evaluate(request, { deadlineAt: Date.now() - 1 }))
+      .resolves.toMatchObject({ effect: "deny" });
+    expect(evaluator).not.toHaveBeenCalled();
+  });
+
+  it("distinguishes parent cancellation from caller cancellation", async () => {
+    const parent = new AbortController();
+    const policy = new FailClosedPolicyEngine({
+      evaluate: (_input, options) => new Promise((resolve) => {
+        options?.signal?.addEventListener("abort", () => {
+          resolve({ effect: "deny", reason: "stopped" });
+        }, { once: true });
+      })
+    });
+    const decision = policy.evaluate(request, { parentSignal: parent.signal });
+    parent.abort();
+    await expect(decision).resolves.toMatchObject({
+      effect: "deny",
+      reason: "Parent operation cancelled policy evaluation; access denied."
+    });
+  });
+});
+

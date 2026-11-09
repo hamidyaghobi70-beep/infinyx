@@ -7,7 +7,7 @@ import type {
   PolicyCleanupStatus,
   PolicyDecision,
   PolicyEngine,
-  PolicyEvaluationLifecycleState,
+  PolicyExecutionLifecycleState,
   PolicyEvaluationOptions,
   PolicyExecutionRecord,
   PolicyRequest,
@@ -39,7 +39,7 @@ interface ActiveExecution {
 
 export interface PolicyExecutionEvent {
   readonly executionId: string;
-  readonly state: PolicyEvaluationLifecycleState;
+  readonly state: PolicyExecutionLifecycleState;
 }
 
 export interface ProcessIsolatedPolicyEngineOptions {
@@ -131,7 +131,7 @@ export class ProcessIsolatedPolicyEngine implements PolicyEngine {
   private readonly terminationGraceMs: number;
   private readonly killWaitMs: number;
   private readonly maxConcurrent: number;
-  private readonly onStateChange?: (event: PolicyExecutionEvent) => void;
+  private readonly onStateChange: ((event: PolicyExecutionEvent) => void) | undefined;
   private readonly active = new Map<string, ActiveExecution>();
   private shuttingDown = false;
 
@@ -203,7 +203,9 @@ export class ProcessIsolatedPolicyEngine implements PolicyEngine {
 
     const executionId = randomUUID();
     const timeoutMs = Math.min(this.timeoutMs, deadlineRemaining);
-    const deadlineAt = Date.now() + timeoutMs;
+    const deadlineAt = options?.deadlineAt === undefined
+      ? Date.now() + timeoutMs
+      : Math.min(options.deadlineAt, Date.now() + this.timeoutMs);
     const runner = getChildRunnerPath();
     const child = fork(runner.path, [this.moduleUrl], {
       cwd: process.cwd(),
@@ -310,6 +312,7 @@ export class ProcessIsolatedPolicyEngine implements PolicyEngine {
       if (candidateFrozen || resolved || closed) return;
       candidateFrozen = true;
       candidate = next;
+      if (next.outcome === "COMPLETED") notify("AUTHORIZED");
       notify("FINALIZING");
       scheduleHardTermination();
     };
@@ -337,7 +340,6 @@ export class ProcessIsolatedPolicyEngine implements PolicyEngine {
         killWaitTimer = setTimeout(finishUnresolved, this.killWaitMs);
         return;
       }
-      notify("RUNNING");
       try {
         child.send({ type: "evaluate", request: input, deadlineAt });
       } catch {
@@ -352,6 +354,7 @@ export class ProcessIsolatedPolicyEngine implements PolicyEngine {
       if (typeof raw !== "object" || raw === null || Array.isArray(raw)) return;
       const message = raw as Record<string, unknown>;
       if (message.type === "started") {
+        if (!candidateFrozen && !resolved) notify("RUNNING");
         return;
       }
       if (message.type === "result") {
