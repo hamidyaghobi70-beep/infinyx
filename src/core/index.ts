@@ -5,7 +5,6 @@ export type { CoreErrorCode } from "./core-error.js";
 export { DefaultDenyPolicyEngine } from "./default-policy-engine.js";
 export { FailClosedPolicyEngine } from "./fail-closed-policy-engine.js";
 export { InMemoryEventBus } from "./event-bus.js";
-export { ProtectedOperationExecutor } from "./protected-operation-executor.js";
 export { ModuleRegistry } from "./module-registry.js";
 export type {
   CoreLifecycleState,
