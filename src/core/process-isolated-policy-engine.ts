@@ -56,7 +56,7 @@ function deny(reason: string): PolicyDecision {
 }
 
 function makeRecord(
-  lifecycle: PolicyEvaluationLifecycleState,
+  lifecycle: PolicyExecutionLifecycleState,
   outcome: PolicyTerminalOutcome,
   decision: PolicyDecision,
   runtimeStatus: PolicyRuntimeStatus,
@@ -239,7 +239,7 @@ export class ProcessIsolatedPolicyEngine implements PolicyEngine {
     let callerAbort: (() => void) | undefined;
     let parentAbort: (() => void) | undefined;
 
-    const notify = (state: PolicyEvaluationLifecycleState): void => {
+    const notify = (state: PolicyExecutionLifecycleState): void => {
       try {
         this.onStateChange?.({ executionId, state });
       } catch {

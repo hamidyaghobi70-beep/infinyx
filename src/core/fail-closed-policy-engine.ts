@@ -161,6 +161,7 @@ export class FailClosedPolicyEngine implements PolicyEngine {
 
     const stop = (reason: PolicyStopReason): void => {
       if (controller.signal.aborted || candidateFrozen) return;
+      candidateFrozen = true;
       stopReason = reason;
       const cause: PolicyCancellationCause = {
         code: reason,
