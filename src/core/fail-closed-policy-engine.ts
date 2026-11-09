@@ -45,9 +45,9 @@ export function isValidPolicyDecision(value: unknown): value is PolicyDecision {
 }
 
 /**
- * Wraps an injected evaluator so malformed inputs/outputs, failures, and
- * deadlines can never become an authorization grant. Evaluation only; no
- * action execution occurs here.
+ * Wraps an injected evaluator so malformed inputs, failures, caller
+ * cancellation, and deadlines can never become an authorization grant.
+ * Evaluation only; no action execution occurs here.
  */
 export class FailClosedPolicyEngine implements PolicyEngine {
   constructor(
@@ -59,35 +59,69 @@ export class FailClosedPolicyEngine implements PolicyEngine {
     }
   }
 
-  async evaluate(request: PolicyRequest): Promise<PolicyDecision> {
+  async evaluate(
+    request: PolicyRequest,
+    options?: { readonly signal?: AbortSignal }
+  ): Promise<PolicyDecision> {
+    if (!isValidPolicyRequest(request)) {
+      return deny("Policy request is invalid; access denied.");
+    }
+
+    const callerSignal = options?.signal;
+    if (callerSignal?.aborted) {
+      return deny("Policy evaluation was cancelled; access denied.");
+    }
+
+    const controller = new AbortController();
     let timeout: ReturnType<typeof setTimeout> | undefined;
+    let callerAbortListener: (() => void) | undefined;
+    let resolveCancellation!: (decision: PolicyDecision) => void;
+
+    const cancellation = new Promise<PolicyDecision>((resolve) => {
+      resolveCancellation = resolve;
+    });
+
+    const cancel = (reason: "timeout" | "caller"): void => {
+      if (controller.signal.aborted) return;
+      controller.abort();
+      resolveCancellation(
+        reason === "timeout"
+          ? deny("Policy evaluation timed out; access denied.")
+          : deny("Policy evaluation was cancelled; access denied.")
+      );
+    };
 
     try {
-      if (!isValidPolicyRequest(request)) {
-        return deny("Policy request is invalid; access denied.");
+      if (callerSignal) {
+        callerAbortListener = () => cancel("caller");
+        callerSignal.addEventListener("abort", callerAbortListener, { once: true });
+        // Close the race between the initial check and listener registration.
+        if (callerSignal.aborted) cancel("caller");
       }
 
-      const result: unknown = await Promise.race([
-        Promise.resolve().then(() => this.delegate.evaluate(request)),
-        new Promise<never>((_resolve, reject) => {
-          timeout = setTimeout(
-            () => reject(new Error("Policy evaluation timed out.")),
-            this.timeoutMs
-          );
-        })
-      ]);
+      timeout = setTimeout(() => cancel("timeout"), this.timeoutMs);
 
+      const evaluation = Promise.resolve().then(() => {
+        // A caller may abort after listener registration but before this
+        // microtask runs. In that case the evaluator must never be invoked.
+        if (controller.signal.aborted) {
+          return deny("Policy evaluation was cancelled; access denied.");
+        }
+        return this.delegate.evaluate(request, { signal: controller.signal });
+      });
+
+      const result: unknown = await Promise.race([evaluation, cancellation]);
       if (!isValidPolicyDecision(result)) {
         return deny("Policy evaluator returned an invalid decision; access denied.");
       }
       return result;
-    } catch (error) {
-      if (error instanceof Error && error.message === "Policy evaluation timed out.") {
-        return deny("Policy evaluation timed out; access denied.");
-      }
+    } catch {
       return deny("Policy evaluation failed; access denied.");
     } finally {
       if (timeout !== undefined) clearTimeout(timeout);
+      if (callerSignal && callerAbortListener) {
+        callerSignal.removeEventListener("abort", callerAbortListener);
+      }
     }
   }
 }
