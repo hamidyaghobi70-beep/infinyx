@@ -7,6 +7,7 @@ import type {
   ModuleContext,
   ModuleLifecycleState,
   PolicyEngine,
+  ProtectedOperationCaller,
   ProtectedOperationDefinition,
   ProtectedOperationHandle,
   ProtectedOperationPort
@@ -54,7 +55,7 @@ export class CoreEngine {
     // Expose an execute-only facade. Registration remains on the composition-root
     // CoreEngine API and is never included in a module context.
     this.protectedOperations = Object.freeze({
-      execute: <TInput, TOutput>(\n        operation: ProtectedOperationHandle<TInput, TOutput>,\n        caller: import("./contracts.js").ProtectedOperationCaller,\n        input: TInput,\n        options?: { readonly signal?: AbortSignal }\n      ) => this.protectedOperationExecutor.execute(operation, caller, input, options)
+      execute: <TInput, TOutput>(\n        operation: ProtectedOperationHandle<TInput, TOutput>,\n        caller: ProtectedOperationCaller,\n        input: TInput,\n        options?: { readonly signal?: AbortSignal }\n      ) => this.protectedOperationExecutor.execute(operation, caller, input, options)
     });
   }
 
