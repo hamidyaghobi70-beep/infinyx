@@ -65,15 +65,17 @@ describe("Built INFINYX server runtime", () => {
         child.once("exit", (code) => resolve(code));
       });
       child.kill("SIGTERM");
+      let killTimer: ReturnType<typeof setTimeout> | undefined;
       const exitCode = await Promise.race([
         exited,
         new Promise<number | null>((resolve) => {
-          setTimeout(() => {
+          killTimer = setTimeout(() => {
             child.kill("SIGKILL");
             resolve(null);
           }, 5_000);
         })
       ]);
+      if (killTimer !== undefined) clearTimeout(killTimer);
       expect(exitCode, stderr).toBe(0);
     },
     20_000
