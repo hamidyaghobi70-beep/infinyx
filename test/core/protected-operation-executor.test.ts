@@ -407,4 +407,16 @@ describe("ProtectedOperationExecutor", () => {
     expect(handler).not.toHaveBeenCalled();
   });
 
+
+  it("rejects new requests after shutdown begins without invoking PolicyEngine", async () => {
+    const evaluator = vi.fn(async () => allow);
+    const { engine, operation, handler } = makeEngine(evaluator);
+    await ensureStarted(engine);
+    await engine.stop();
+    const result = await engine.protectedOperations.execute(operation, { actorId: "after-stop" }, { value: "x" });
+    expect(result).toMatchObject({ status: "denied" });
+    expect(evaluator).not.toHaveBeenCalled();
+    expect(handler).not.toHaveBeenCalled();
+  });
+
 });
