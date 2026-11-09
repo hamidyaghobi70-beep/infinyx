@@ -1,5 +1,4 @@
 import type {
-  PolicyDecision,
   PolicyEngine,
   PolicyRequest,
   ProtectedOperationCaller,
@@ -37,6 +36,7 @@ interface RegisteredOperation<TInput = unknown, TOutput = unknown> {
  */
 export class ProtectedOperationExecutor implements ProtectedOperationPort {
   private readonly registrations = new WeakMap<object, RegisteredOperation>();
+  private readonly operationIds = new Set<string>();
   private readonly usedRequests = new WeakMap<object, WeakSet<object>>();
 
   constructor(private readonly policy: PolicyEngine) {}
@@ -58,6 +58,10 @@ export class ProtectedOperationExecutor implements ProtectedOperationPort {
       throw new TypeError("Protected operation registration is invalid.");
     }
 
+    if (this.operationIds.has(definition.id)) {
+      throw new TypeError("Protected operation ID is already registered.");
+    }
+
     const handle: InternalHandle = Object.freeze({
       id: definition.id,
       [handleBrand]: true
@@ -70,6 +74,7 @@ export class ProtectedOperationExecutor implements ProtectedOperationPort {
       handler: definition.handler
     });
     this.registrations.set(handle, registration as RegisteredOperation);
+    this.operationIds.add(definition.id);
     return handle;
   }
 
@@ -86,12 +91,26 @@ export class ProtectedOperationExecutor implements ProtectedOperationPort {
     if (!registration) {
       return this.denied("Unknown or unregistered protected operation.");
     }
-    if (!caller || typeof caller !== "object" || !isValidPolicyRequest({
-      actorId: caller.actorId,
+    if (!caller || typeof caller !== "object") {
+      return this.denied("Protected operation caller request is invalid.");
+    }
+
+    let actorId: unknown;
+    let callerContext: unknown;
+    try {
+      actorId = caller.actorId;
+      callerContext = caller.context;
+    } catch {
+      return this.denied("Protected operation caller request could not be read.");
+    }
+
+    const policyRequestCandidate = {
+      actorId,
       action: registration.action,
       resource: registration.resource,
-      ...(caller.context === undefined ? {} : { context: caller.context })
-    })) {
+      ...(callerContext === undefined ? {} : { context: callerContext })
+    };
+    if (!isValidPolicyRequest(policyRequestCandidate)) {
       return this.denied("Protected operation caller request is invalid.");
     }
 
@@ -133,12 +152,7 @@ export class ProtectedOperationExecutor implements ProtectedOperationPort {
         return this.denied("Protected operation was cancelled before authorization.");
       }
 
-      const policyRequest: PolicyRequest = {
-        actorId: caller.actorId,
-        action: registration.action,
-        resource: registration.resource,
-        ...(caller.context === undefined ? {} : { context: caller.context })
-      };
+      const policyRequest: PolicyRequest = policyRequestCandidate;
 
       let decision: unknown;
       try {
@@ -186,7 +200,3 @@ export class ProtectedOperationExecutor implements ProtectedOperationPort {
   }
 }
 
-/** Runtime type guard for policy decisions, re-exported for consumers if needed. */
-export function isAllowedDecision(value: unknown): value is PolicyDecision {
-  return isValidPolicyDecision(value) && value.effect === "allow";
-}
