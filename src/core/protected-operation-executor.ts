@@ -95,6 +95,14 @@ export class ProtectedOperationExecutor implements ProtectedOperationPort {
       return this.denied("Protected operation caller request is invalid.");
     }
 
+    try {
+      if (!registration.validateInput(input)) {
+        return this.denied("Protected operation input is invalid.");
+      }
+    } catch {
+      return this.denied("Protected operation input validation failed.");
+    }
+
     const callerSignal = options?.signal;
     if (callerSignal?.aborted) {
       return this.denied("Protected operation was cancelled before authorization.");
@@ -151,14 +159,6 @@ export class ProtectedOperationExecutor implements ProtectedOperationPort {
       }
       if ((decision as PolicyDecision).effect !== "allow") {
         return this.denied((decision as PolicyDecision).reason);
-      }
-
-      try {
-        if (!registration.validateInput(input)) {
-          return this.denied("Protected operation input is invalid.");
-        }
-      } catch {
-        return this.denied("Protected operation input validation failed.");
       }
 
       if (operationController.signal.aborted) {
