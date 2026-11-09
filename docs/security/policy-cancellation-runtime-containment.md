@@ -44,6 +44,12 @@ Worker Threads are not selected as the hard containment boundary because they sh
 
 For untrusted evaluators, deployment must add OS-level controls appropriate to the threat model, such as a dedicated low-privilege identity, restricted filesystem view, outbound network policy, process-tree supervision, and platform-specific resource limits. These controls are not implemented or verified by this change.
 
+## CoreEngine shutdown ordering
+
+CoreEngine.stop() asks the policy runtime to stop accepting work before module cleanup begins. With ProcessIsolatedPolicyEngine, shutdown waits for each child process to close; if any process remains UNRESOLVED, shutdown rejects and CoreEngine does not begin module cleanup. A later explicit stop call can retry after the process has actually closed.
+
+For an arbitrary in-process PolicyEngine delegate that does not implement shutdown(), FailClosedPolicyEngine can request cooperative cancellation but cannot prove that a non-cooperative delegate has stopped. Hard termination evidence is available only when the evaluator is executed through the child-process adapter.
+
 ## Runtime outcomes
 
 The detailed process API reports lifecycle, terminal outcome, runtime status, cleanup status, stop reason, and whether the terminal candidate was frozen.
