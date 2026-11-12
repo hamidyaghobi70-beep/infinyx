@@ -145,7 +145,7 @@ export class GuardedMemoryPort implements MemoryPort {
 
     return this.callStore("read", target, async () => {
       const stored = await this.store.read(target.inner);
-      if (stored === null || stored === undefined) return null;
+      if (stored === null) return null;
       if (typeof stored !== "string") {
         throw new TypeError("Backing store returned a value that is not a serialized string.");
       }
