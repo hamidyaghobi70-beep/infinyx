@@ -91,6 +91,11 @@ export class GuardedMemoryPort implements MemoryPort {
   private readonly scope: MemoryScope;
   private readonly maxValueBytes: number;
 
+  /** Module identity bound to this capability by the composition root. */
+  get scopeModuleId(): string {
+    return this.scope.moduleId;
+  }
+
   constructor(options: GuardedMemoryPortOptions) {
     if (!options || typeof options !== "object") {
       throw new TypeError("GuardedMemoryPort options are required.");
@@ -244,6 +249,9 @@ export class GuardedMemoryPort implements MemoryPort {
     });
 
     try {
+      if (this.events.hasSubscribers?.(MEMORY_ACCESS_DECIDED_EVENT) !== true) {
+        throw new Error("No memory audit subscriber is registered.");
+      }
       await this.events.publish(MEMORY_ACCESS_DECIDED_EVENT, audit);
     } catch (cause) {
       // An allowed operation that cannot be audited is refused. A denial is refused
