@@ -10,6 +10,7 @@ on:
       - integration/infinyx-core-runtime-v1
   pull_request:
     branches:
+      - integration/infinyx-core-runtime-v1
       - foundation/repository-foundation
       - main
       - feat/gap-002-protected-operation-executor
