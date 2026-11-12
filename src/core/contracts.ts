@@ -32,6 +32,12 @@ export type EventHandler<TPayload = unknown> = (
 export interface EventBusPort {
   subscribe<TPayload>(type: string, handler: EventHandler<TPayload>): () => void;
   publish<TPayload>(type: string, payload: TPayload): Promise<void>;
+  /**
+   * Atomically snapshots the currently registered handlers and dispatches to that
+   * snapshot. Returns false when no handler was registered at invocation time.
+   * Unsubscribing after this call begins does not cancel the in-flight delivery.
+   */
+  publishIfSubscribed<TPayload>(type: string, payload: TPayload): Promise<boolean>;
   /** Returns whether at least one handler is registered for the event type. */
   hasSubscribers?(type: string): boolean;
 }

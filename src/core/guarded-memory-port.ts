@@ -118,8 +118,8 @@ export class GuardedMemoryPort implements MemoryPort {
     if (!hasMethods(options.policy, ["evaluate"])) {
       throw new TypeError("GuardedMemoryPort requires a PolicyEngine.");
     }
-    if (!hasMethods(options.events, ["publish"])) {
-      throw new TypeError("GuardedMemoryPort requires an EventBusPort.");
+    if (!hasMethods(options.events, ["publish", "publishIfSubscribed"])) {
+      throw new TypeError("GuardedMemoryPort requires an EventBusPort with atomic audit dispatch.");
     }
 
     const maxValueBytes = options.maxValueBytes ?? DEFAULT_MAX_MEMORY_VALUE_BYTES;
@@ -281,14 +281,17 @@ export class GuardedMemoryPort implements MemoryPort {
     });
 
     try {
-      if (this.events.hasSubscribers?.(MEMORY_ACCESS_DECIDED_EVENT) !== true) {
-        throw new Error("No memory audit subscriber is registered.");
-      }
       const published = await withTimeout(
-        () => this.events.publish(MEMORY_ACCESS_DECIDED_EVENT, audit),
+        () => this.events.publishIfSubscribed(MEMORY_ACCESS_DECIDED_EVENT, audit),
         this.auditTimeoutMs
       );
-      if (published === TIMED_OUT) throw new Error("Memory audit publication timed out.");
+      if (published !== true) {
+        throw new Error(
+          published === TIMED_OUT
+            ? "Memory audit publication timed out."
+            : "No memory audit subscriber was registered for atomic dispatch."
+        );
+      }
     } catch (cause) {
       // An allowed operation that cannot be audited is refused. A denial is refused
       // either way, so its outcome does not depend on the audit sink.

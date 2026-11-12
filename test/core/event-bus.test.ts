@@ -15,6 +15,28 @@ describe("InMemoryEventBus", () => {
     expect(received).toEqual([7]);
   });
 
+  it("returns false when atomic publication has no subscribers", async () => {
+    const bus = new InMemoryEventBus();
+
+    await expect(bus.publishIfSubscribed("sample.created", {})).resolves.toBe(false);
+  });
+
+  it("dispatches to the captured subscriber snapshot when unsubscription races with delivery", async () => {
+    const bus = new InMemoryEventBus();
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    const handler = vi.fn(async () => { await gate; });
+    const unsubscribe = bus.subscribe("sample.created", handler);
+
+    const publishing = bus.publishIfSubscribed("sample.created", { id: "one" });
+    unsubscribe();
+    release();
+
+    await expect(publishing).resolves.toBe(true);
+    expect(handler).toHaveBeenCalledOnce();
+    expect(await bus.publishIfSubscribed("sample.created", {})).toBe(false);
+  });
+
   it("supports unsubscription", async () => {
     const bus = new InMemoryEventBus();
     const handler = vi.fn();

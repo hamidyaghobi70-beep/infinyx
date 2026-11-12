@@ -301,6 +301,42 @@ describe("GuardedMemoryPort — audit", () => {
     expect(backing.size).toBe(0);
   });
 
+  it("completes audit delivery when the last subscriber unsubscribes after atomic dispatch begins", async () => {
+    const backing = new InMemoryMemoryStore();
+    const bus = new InMemoryEventBus();
+    let release!: () => void;
+    let signalDispatch!: () => void;
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    const dispatchStarted = new Promise<void>((resolve) => { signalDispatch = resolve; });
+    const received: string[] = [];
+    const unsubscribe = bus.subscribe<MemoryAccessDecidedEvent>(
+      MEMORY_ACCESS_DECIDED_EVENT,
+      async (event) => {
+        await gate;
+        received.push(event.payload.operation);
+      }
+    );
+    const events: EventBusPort = {
+      subscribe: bus.subscribe.bind(bus),
+      publish: bus.publish.bind(bus),
+      publishIfSubscribed: (type, payload) => {
+        const pending = bus.publishIfSubscribed(type, payload);
+        signalDispatch();
+        return pending;
+      }
+    };
+    const { guard } = setup({ store: backing, events });
+
+    const writing = guard.write({ namespace: "n", key: "k" }, "v");
+    await dispatchStarted;
+    unsubscribe();
+    release();
+    await writing;
+
+    expect(received).toEqual(["write"]);
+    expect(backing.size).toBe(1);
+  });
+
   it("refuses allowed operations when the audit sink is unavailable (fail closed)", async () => {
     const backing = new InMemoryMemoryStore();
     const readSpy = vi.spyOn(backing, "read");
@@ -308,6 +344,9 @@ describe("GuardedMemoryPort — audit", () => {
       subscribe: () => () => undefined,
       hasSubscribers: () => true,
       publish: async () => {
+        throw new Error("bus down");
+      },
+      publishIfSubscribed: async () => {
         throw new Error("bus down");
       }
     };
@@ -326,6 +365,9 @@ describe("GuardedMemoryPort — audit", () => {
     const events: EventBusPort = {
       subscribe: () => () => undefined,
       publish: async () => {
+        throw new Error("bus down");
+      },
+      publishIfSubscribed: async () => {
         throw new Error("bus down");
       }
     };
@@ -522,7 +564,8 @@ describe("GuardedMemoryPort — backend failures", () => {
       publish: async (type, payload) => {
         if (type === MEMORY_ACCESS_FAILED_EVENT) throw new Error("audit sink down");
         await bus.publish(type, payload);
-      }
+      },
+      publishIfSubscribed: (type, payload) => bus.publishIfSubscribed(type, payload)
     };
     const { guard } = setup({ store: failingStore({ read: new Error("down") }), events });
 
