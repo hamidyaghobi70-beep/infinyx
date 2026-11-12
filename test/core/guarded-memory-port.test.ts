@@ -474,6 +474,7 @@ describe("GuardedMemoryPort — backend failures", () => {
 
   it("does not let a failing failure-event publish mask the backend failure", async () => {
     const bus = new InMemoryEventBus();
+    bus.subscribe(MEMORY_ACCESS_DECIDED_EVENT, () => undefined);
     const events: EventBusPort = {
       subscribe: bus.subscribe.bind(bus),
       hasSubscribers: bus.hasSubscribers.bind(bus),
@@ -549,7 +550,9 @@ describe("GuardedMemoryPort — construction", () => {
   it("snapshots the scope so later mutation of the caller's object has no effect", async () => {
     const mutable = { ...scopeA };
     const store = new InMemoryMemoryStore();
-    const guard = new GuardedMemoryPort({ ...base(), store, scope: mutable });
+    const events = new InMemoryEventBus();
+    events.subscribe(MEMORY_ACCESS_DECIDED_EVENT, () => undefined);
+    const guard = new GuardedMemoryPort({ ...base(), store, events, scope: mutable });
 
     mutable.tenantId = "tenant-b";
     await guard.write({ namespace: "n", key: "k" }, 1);
