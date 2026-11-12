@@ -17,7 +17,8 @@ import type {
   MemoryAccessDecidedEvent,
   MemoryAccessFailedEvent,
   MemoryScope,
-  MemoryAuditPort
+  MemoryAuditPort,
+  GuardedMemoryPortOptions
 } from "../../src/core/guarded-memory-port.js";
 import { InMemoryMemoryStore } from "../../src/core/in-memory-memory-store.js";
 import { MemoryAccessError } from "../../src/core/memory-error.js";
@@ -780,6 +781,40 @@ describe("GuardedMemoryPort — construction", () => {
       expect(() => new GuardedMemoryPort({ ...base(), maxValueBytes })).toThrow(TypeError);
     }
   );
+
+  it("validates and retains the exact dependency references captured from option accessors", async () => {
+    let storeReads = 0;
+    let policyReads = 0;
+    let auditReads = 0;
+    const store = new InMemoryMemoryStore();
+    const policy = allowAll;
+    const events = new InMemoryEventBus();
+    events.subscribe(MEMORY_ACCESS_DECIDED_EVENT, () => undefined);
+    const audit = createAuditPort(events);
+    const options = {
+      get store() {
+        storeReads += 1;
+        return storeReads === 1 ? store : ({} as MemoryPort);
+      },
+      get policy() {
+        policyReads += 1;
+        return policyReads === 1 ? policy : ({} as PolicyEngine);
+      },
+      get audit() {
+        auditReads += 1;
+        return auditReads === 1 ? audit : ({} as MemoryAuditPort);
+      },
+      scope: scopeA
+    } as GuardedMemoryPortOptions;
+
+    const guard = new GuardedMemoryPort(options);
+    await guard.write({ namespace: "n", key: "k" }, "captured");
+
+    expect(storeReads).toBe(1);
+    expect(policyReads).toBe(1);
+    expect(auditReads).toBe(1);
+    expect(store.size).toBe(1);
+  });
 
   it("snapshots the scope so later mutation of the caller's object has no effect", async () => {
     const mutable = { ...scopeA };
