@@ -137,12 +137,26 @@ export class GuardedMemoryPort implements MemoryPort {
     if (!isValidTimeout(policyTimeoutMs)) throw new TypeError(`policyTimeoutMs must be an integer from 1 to ${MAX_TIMEOUT_MS}.`);
     if (!isValidTimeout(auditTimeoutMs)) throw new TypeError(`auditTimeoutMs must be an integer from 1 to ${MAX_TIMEOUT_MS}.`);
 
-    const scope = options.scope as Partial<MemoryScope> | undefined;
+    const suppliedScope = options.scope as Partial<MemoryScope> | undefined;
+    // Snapshot each property exactly once before validation. Re-reading accessors
+    // after validation would allow a changing getter to bypass the scope checks.
+    let tenantId: unknown;
+    let actorId: unknown;
+    let moduleId: unknown;
+    try {
+      tenantId = suppliedScope?.tenantId;
+      actorId = suppliedScope?.actorId;
+      moduleId = suppliedScope?.moduleId;
+    } catch {
+      throw new MemoryAccessError(
+        "MEMORY_INVALID_SCOPE",
+        "tenantId, actorId and moduleId must be non-empty strings without control characters."
+      );
+    }
     if (
-      !scope ||
-      !isValidSegment(scope.tenantId, MAX_SCOPE_SEGMENT_LENGTH) ||
-      !isValidSegment(scope.actorId, MAX_SCOPE_SEGMENT_LENGTH) ||
-      !isValidSegment(scope.moduleId, MAX_SCOPE_SEGMENT_LENGTH)
+      !isValidSegment(tenantId, MAX_SCOPE_SEGMENT_LENGTH) ||
+      !isValidSegment(actorId, MAX_SCOPE_SEGMENT_LENGTH) ||
+      !isValidSegment(moduleId, MAX_SCOPE_SEGMENT_LENGTH)
     ) {
       throw new MemoryAccessError(
         "MEMORY_INVALID_SCOPE",
@@ -157,10 +171,10 @@ export class GuardedMemoryPort implements MemoryPort {
     this.policyTimeoutMs = policyTimeoutMs;
     this.auditTimeoutMs = auditTimeoutMs;
     this.scope = Object.freeze({
-      tenantId: scope.tenantId,
-      actorId: scope.actorId,
-      moduleId: scope.moduleId
-    });
+      tenantId,
+      actorId,
+      moduleId
+    } as MemoryScope);
   }
 
   async read(address: MemoryAddress): Promise<unknown | null> {
