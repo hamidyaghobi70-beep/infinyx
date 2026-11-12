@@ -562,14 +562,24 @@ describe("GuardedMemoryPort — Core Engine integration", () => {
   it("is usable as the module memory capability under a real policy", async () => {
     const store = new InMemoryMemoryStore();
     const events = new InMemoryEventBus();
+    events.subscribe(MEMORY_ACCESS_DECIDED_EVENT, () => undefined);
     const policy: PolicyEngine = {
       evaluate: async (request) =>
         request.action === "memory.write" || request.action === "memory.read"
           ? { effect: "allow", reason: "module memory permitted" }
           : { effect: "deny", reason: "not permitted" }
     };
-    const guard = new GuardedMemoryPort({ store, policy, events, scope: scopeA });
-    const engine = new CoreEngine({ events, policy, memory: guard });
+    const engine = new CoreEngine({
+      events,
+      policy,
+      memory: (moduleId) =>
+        new GuardedMemoryPort({
+          store,
+          policy,
+          events,
+          scope: { ...scopeA, moduleId }
+        })
+    });
     const observed: unknown[] = [];
 
     engine.register({
