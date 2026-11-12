@@ -19,6 +19,10 @@ export class InMemoryEventBus implements EventBusPort {
     };
   }
 
+  hasSubscribers(type: string): boolean {
+    return (this.handlers.get(type)?.size ?? 0) > 0;
+  }
+
   async publish<TPayload>(type: string, payload: TPayload): Promise<void> {
     if (!type.trim()) {
       throw new TypeError("Event type must be a non-empty string.");
