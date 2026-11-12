@@ -307,7 +307,10 @@ describe("CoreEngine guarded memory composition", () => {
       initialize: () => undefined
     });
 
-    await expect(engine.initialize()).rejects.toThrow(/requires a GuardedMemoryPort/i);
+    await expect(engine.initialize()).rejects.toMatchObject({
+      code: "MODULE_INITIALIZATION_FAILED",
+      cause: expect.objectContaining({ code: "INVALID_MEMORY_CAPABILITY" })
+    });
   });
 
   it("creates and reuses a guarded memory capability bound to each module", async () => {
