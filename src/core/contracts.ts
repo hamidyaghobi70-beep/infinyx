@@ -37,7 +37,7 @@ export interface EventBusPort {
    * snapshot. Returns false when no handler was registered at invocation time.
    * Unsubscribing after this call begins does not cancel the in-flight delivery.
    */
-  publishIfSubscribed<TPayload>(type: string, payload: TPayload): Promise<boolean>;
+  publishIfSubscribed?<TPayload>(type: string, payload: TPayload): Promise<boolean>;
   /** Returns whether at least one handler is registered for the event type. */
   hasSubscribers?(type: string): boolean;
 }
