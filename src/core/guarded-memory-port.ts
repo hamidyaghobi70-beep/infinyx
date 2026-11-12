@@ -1,5 +1,4 @@
 import type {
-  EventBusPort,
   MemoryAddress,
   MemoryPort,
   PolicyEngine,
@@ -38,10 +37,16 @@ export interface MemoryScope {
   readonly moduleId: string;
 }
 
+/** Dedicated audit capability; never expose this sink through the module-visible EventBusPort. */
+export interface MemoryAuditPort {
+  publishDecision(event: MemoryAccessDecidedEvent): Promise<boolean>;
+  publishFailure(event: MemoryAccessFailedEvent): Promise<void>;
+}
+
 export interface GuardedMemoryPortOptions {
   readonly store: MemoryPort;
   readonly policy: PolicyEngine;
-  readonly events: EventBusPort;
+  readonly audit: MemoryAuditPort;
   readonly scope: MemoryScope;
   /** Maximum serialized (UTF-8 JSON) value size. Defaults to 64 KiB. */
   readonly maxValueBytes?: number;
@@ -97,7 +102,7 @@ interface NormalizedDecision {
 export class GuardedMemoryPort implements MemoryPort {
   private readonly store: MemoryPort;
   private readonly policy: PolicyEngine;
-  private readonly events: EventBusPort;
+  private readonly audit: MemoryAuditPort;
   private readonly scope: MemoryScope;
   private readonly maxValueBytes: number;
   private readonly policyTimeoutMs: number;
@@ -118,8 +123,8 @@ export class GuardedMemoryPort implements MemoryPort {
     if (!hasMethods(options.policy, ["evaluate"])) {
       throw new TypeError("GuardedMemoryPort requires a PolicyEngine.");
     }
-    if (!hasMethods(options.events, ["publish", "publishIfSubscribed"])) {
-      throw new TypeError("GuardedMemoryPort requires an EventBusPort with atomic audit dispatch.");
+    if (!hasMethods(options.audit, ["publishDecision", "publishFailure"])) {
+      throw new TypeError("GuardedMemoryPort requires a dedicated MemoryAuditPort.");
     }
 
     const maxValueBytes = options.maxValueBytes ?? DEFAULT_MAX_MEMORY_VALUE_BYTES;
@@ -147,7 +152,7 @@ export class GuardedMemoryPort implements MemoryPort {
 
     this.store = options.store;
     this.policy = options.policy;
-    this.events = options.events;
+    this.audit = options.audit;
     this.maxValueBytes = maxValueBytes;
     this.policyTimeoutMs = policyTimeoutMs;
     this.auditTimeoutMs = auditTimeoutMs;
@@ -282,7 +287,7 @@ export class GuardedMemoryPort implements MemoryPort {
 
     try {
       const published = await withTimeout(
-        () => this.events.publishIfSubscribed(MEMORY_ACCESS_DECIDED_EVENT, audit),
+        () => this.audit.publishDecision(audit),
         this.auditTimeoutMs
       );
       if (published !== true) {
@@ -341,7 +346,7 @@ export class GuardedMemoryPort implements MemoryPort {
       // Failure reporting is best-effort and bounded by the same audit deadline.
       // A stalled subscriber must not delay propagation of the original backend error.
       await withTimeout(
-        () => this.events.publish(MEMORY_ACCESS_FAILED_EVENT, failure),
+        () => this.audit.publishFailure(failure),
         this.auditTimeoutMs
       );
     } catch {
