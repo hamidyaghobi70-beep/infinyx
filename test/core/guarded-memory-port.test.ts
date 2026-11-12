@@ -288,11 +288,21 @@ describe("GuardedMemoryPort — audit", () => {
     expect(JSON.stringify(decided)).not.toContain("s3cr3t-value");
   });
 
+  it("refuses allowed operations when no audit subscriber is registered", async () => {
+    const backing = new InMemoryMemoryStore();
+    const bus = new InMemoryEventBus();
+    const { guard } = setup({ store: backing, events: bus });
+
+    expect(await codeOf(guard.write({ namespace: "n", key: "k" }, "v"))).toBe("MEMORY_AUDIT_UNAVAILABLE");
+    expect(backing.size).toBe(0);
+  });
+
   it("refuses allowed operations when the audit sink is unavailable (fail closed)", async () => {
     const backing = new InMemoryMemoryStore();
     const readSpy = vi.spyOn(backing, "read");
     const events: EventBusPort = {
       subscribe: () => () => undefined,
+      hasSubscribers: () => true,
       publish: async () => {
         throw new Error("bus down");
       }
@@ -466,6 +476,7 @@ describe("GuardedMemoryPort — backend failures", () => {
     const bus = new InMemoryEventBus();
     const events: EventBusPort = {
       subscribe: bus.subscribe.bind(bus),
+      hasSubscribers: bus.hasSubscribers.bind(bus),
       publish: async (type, payload) => {
         if (type === MEMORY_ACCESS_FAILED_EVENT) throw new Error("audit sink down");
         await bus.publish(type, payload);
