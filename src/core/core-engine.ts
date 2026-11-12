@@ -4,7 +4,6 @@ import type {
   CoreLifecycleState,
   CoreModule,
   EventBusPort,
-  MemoryPort,
   ModuleContext,
   ModuleLifecycleState,
   PolicyEngine,
