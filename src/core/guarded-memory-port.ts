@@ -117,13 +117,26 @@ export class GuardedMemoryPort implements MemoryPort {
     if (!options || typeof options !== "object") {
       throw new TypeError("GuardedMemoryPort options are required.");
     }
-    if (!hasMethods(options.store, ["read", "write", "delete"])) {
+    // Capture dependency references once, then validate and retain those exact
+    // references. Re-reading option accessors after validation would create a
+    // time-of-check/time-of-use gap in this security boundary.
+    let store: unknown;
+    let policy: unknown;
+    let audit: unknown;
+    try {
+      store = options.store;
+      policy = options.policy;
+      audit = options.audit;
+    } catch {
+      throw new TypeError("GuardedMemoryPort dependencies must be readable values.");
+    }
+    if (!hasMethods(store, ["read", "write", "delete"])) {
       throw new TypeError("GuardedMemoryPort requires a MemoryPort store.");
     }
-    if (!hasMethods(options.policy, ["evaluate"])) {
+    if (!hasMethods(policy, ["evaluate"])) {
       throw new TypeError("GuardedMemoryPort requires a PolicyEngine.");
     }
-    if (!hasMethods(options.audit, ["publishDecision", "publishFailure"])) {
+    if (!hasMethods(audit, ["publishDecision", "publishFailure"])) {
       throw new TypeError("GuardedMemoryPort requires a dedicated MemoryAuditPort.");
     }
 
@@ -164,9 +177,9 @@ export class GuardedMemoryPort implements MemoryPort {
       );
     }
 
-    this.store = options.store;
-    this.policy = options.policy;
-    this.audit = options.audit;
+    this.store = store as MemoryPort;
+    this.policy = policy as PolicyEngine;
+    this.audit = audit as MemoryAuditPort;
     this.maxValueBytes = maxValueBytes;
     this.policyTimeoutMs = policyTimeoutMs;
     this.auditTimeoutMs = auditTimeoutMs;
