@@ -793,6 +793,32 @@ describe("GuardedMemoryPort — construction", () => {
 
     expect(store.addresses()[0]?.namespace.startsWith("tenant-a/")).toBe(true);
   });
+
+  it("validates the exact scope values captured from accessor properties", async () => {
+    let tenantReads = 0;
+    const scope = {
+      get tenantId() {
+        tenantReads += 1;
+        return tenantReads === 1 ? "tenant-a" : "invalid\\ntenant";
+      },
+      actorId: "actor-1",
+      moduleId: "module-x"
+    } as MemoryScope;
+    const store = new InMemoryMemoryStore();
+    const events = new InMemoryEventBus();
+    events.subscribe(MEMORY_ACCESS_DECIDED_EVENT, () => undefined);
+    const guard = new GuardedMemoryPort({
+      ...base(),
+      store,
+      audit: createAuditPort(events),
+      scope
+    });
+
+    await guard.write({ namespace: "n", key: "k" }, 1);
+
+    expect(tenantReads).toBe(1);
+    expect(store.addresses()[0]?.namespace.startsWith("tenant-a/")).toBe(true);
+  });
 });
 
 describe("GuardedMemoryPort — Core Engine integration", () => {
