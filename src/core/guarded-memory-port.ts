@@ -100,17 +100,17 @@ interface NormalizedDecision {
  * key management, retention, backup and durable audit storage are NOT provided.
  */
 export class GuardedMemoryPort implements MemoryPort {
-  private readonly store: MemoryPort;
-  private readonly policy: PolicyEngine;
-  private readonly audit: MemoryAuditPort;
-  private readonly scope: MemoryScope;
-  private readonly maxValueBytes: number;
-  private readonly policyTimeoutMs: number;
-  private readonly auditTimeoutMs: number;
+  readonly #store: MemoryPort;
+  readonly #policy: PolicyEngine;
+  readonly #audit: MemoryAuditPort;
+  readonly #scope: MemoryScope;
+  readonly #maxValueBytes: number;
+  readonly #policyTimeoutMs: number;
+  readonly #auditTimeoutMs: number;
 
   /** Module identity bound to this capability by the composition root. */
   get scopeModuleId(): string {
-    return this.scope.moduleId;
+    return this.#scope.moduleId;
   }
 
   constructor(options: GuardedMemoryPortOptions) {
@@ -177,17 +177,20 @@ export class GuardedMemoryPort implements MemoryPort {
       );
     }
 
-    this.store = store as MemoryPort;
-    this.policy = policy as PolicyEngine;
-    this.audit = audit as MemoryAuditPort;
-    this.maxValueBytes = maxValueBytes;
-    this.policyTimeoutMs = policyTimeoutMs;
-    this.auditTimeoutMs = auditTimeoutMs;
-    this.scope = Object.freeze({
+    this.#store = store as MemoryPort;
+    this.#policy = policy as PolicyEngine;
+    this.#audit = audit as MemoryAuditPort;
+    this.#maxValueBytes = maxValueBytes;
+    this.#policyTimeoutMs = policyTimeoutMs;
+    this.#auditTimeoutMs = auditTimeoutMs;
+    this.#scope = Object.freeze({
       tenantId,
       actorId,
       moduleId
     } as MemoryScope);
+    // Modules receive this instance as a capability. Freeze its public surface so
+    // they cannot shadow read/write/delete with unguarded replacements.
+    Object.freeze(this);
   }
 
   async read(address: MemoryAddress): Promise<unknown | null> {
@@ -195,7 +198,7 @@ export class GuardedMemoryPort implements MemoryPort {
     await this.authorize("read", target);
 
     return this.callStore("read", target, async () => {
-      const stored = await this.store.read(target.inner);
+      const stored = await this.#store.read(target.inner);
       if (stored === null) return null;
       if (typeof stored !== "string") {
         throw new TypeError("Backing store returned a value that is not a serialized string.");
@@ -208,13 +211,13 @@ export class GuardedMemoryPort implements MemoryPort {
     const target = this.resolve(address);
     const serialized = this.serialize(value);
     await this.authorize("write", target);
-    await this.callStore("write", target, () => this.store.write(target.inner, serialized));
+    await this.callStore("write", target, () => this.#store.write(target.inner, serialized));
   }
 
   async delete(address: MemoryAddress): Promise<void> {
     const target = this.resolve(address);
     await this.authorize("delete", target);
-    await this.callStore("delete", target, () => this.store.delete(target.inner));
+    await this.callStore("delete", target, () => this.#store.delete(target.inner));
   }
 
   private resolve(address: MemoryAddress): ResolvedTarget {
@@ -242,7 +245,7 @@ export class GuardedMemoryPort implements MemoryPort {
         "Memory namespace and key must be non-empty strings without control characters within length limits."
       );
     }
-    const tenant = encodeURIComponent(this.scope.tenantId);
+    const tenant = encodeURIComponent(this.#scope.tenantId);
     const encodedNamespace = encodeURIComponent(namespace);
 
     return {
@@ -270,10 +273,10 @@ export class GuardedMemoryPort implements MemoryPort {
     if (typeof serialized !== "string") {
       throw new MemoryAccessError("MEMORY_INVALID_VALUE", "Memory value must be JSON-serializable.");
     }
-    if (Buffer.byteLength(serialized, "utf8") > this.maxValueBytes) {
+    if (Buffer.byteLength(serialized, "utf8") > this.#maxValueBytes) {
       throw new MemoryAccessError(
         "MEMORY_INVALID_VALUE",
-        `Memory value exceeds the ${this.maxValueBytes} byte limit.`
+        `Memory value exceeds the ${this.#maxValueBytes} byte limit.`
       );
     }
     return serialized;
@@ -281,13 +284,13 @@ export class GuardedMemoryPort implements MemoryPort {
 
   private async authorize(operation: MemoryOperation, target: ResolvedTarget): Promise<void> {
     const request: PolicyRequest = {
-      actorId: this.scope.actorId,
+      actorId: this.#scope.actorId,
       action: `memory.${operation}`,
       resource: target.resource,
       context: {
         attributes: Object.freeze({
-          tenantId: this.scope.tenantId,
-          moduleId: this.scope.moduleId,
+          tenantId: this.#scope.tenantId,
+          moduleId: this.#scope.moduleId,
           namespace: target.namespace
         })
       }
@@ -295,7 +298,7 @@ export class GuardedMemoryPort implements MemoryPort {
 
     let decision: NormalizedDecision;
     try {
-      const result = await withTimeout(() => this.policy.evaluate(request), this.policyTimeoutMs);
+      const result = await withTimeout(() => this.#policy.evaluate(request), this.#policyTimeoutMs);
       decision = result === TIMED_OUT
         ? { effect: "deny", reason: "Policy evaluation timed out." }
         : normalizeDecision(result);
@@ -304,7 +307,7 @@ export class GuardedMemoryPort implements MemoryPort {
     }
 
     const audit: MemoryAccessDecidedEvent = Object.freeze({
-      ...this.scope,
+      ...this.#scope,
       operation,
       namespace: target.namespace,
       key: target.key,
@@ -314,8 +317,8 @@ export class GuardedMemoryPort implements MemoryPort {
 
     try {
       const published = await withTimeout(
-        () => this.audit.publishDecision(audit),
-        this.auditTimeoutMs
+        () => this.#audit.publishDecision(audit),
+        this.#auditTimeoutMs
       );
       if (published !== true) {
         throw new Error(
@@ -362,7 +365,7 @@ export class GuardedMemoryPort implements MemoryPort {
     cause: unknown
   ): Promise<void> {
     const failure: MemoryAccessFailedEvent = Object.freeze({
-      ...this.scope,
+      ...this.#scope,
       operation,
       namespace: target.namespace,
       key: target.key,
@@ -373,8 +376,8 @@ export class GuardedMemoryPort implements MemoryPort {
       // Failure reporting is best-effort and bounded by the same audit deadline.
       // A stalled subscriber must not delay propagation of the original backend error.
       await withTimeout(
-        () => this.audit.publishFailure(failure),
-        this.auditTimeoutMs
+        () => this.#audit.publishFailure(failure),
+        this.#auditTimeoutMs
       );
     } catch {
       // Intentionally ignored: reporting must never mask the original backend failure.
