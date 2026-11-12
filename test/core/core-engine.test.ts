@@ -316,11 +316,9 @@ describe("CoreEngine guarded memory composition", () => {
   it("creates and reuses a guarded memory capability bound to each module", async () => {
     const { GuardedMemoryPort } = await import("../../src/core/guarded-memory-port.js");
     const { InMemoryMemoryStore } = await import("../../src/core/in-memory-memory-store.js");
-    const { InMemoryEventBus } = await import("../../src/core/event-bus.js");
     const { DefaultDenyPolicyEngine } = await import("../../src/core/default-policy-engine.js");
     const store = new InMemoryMemoryStore();
-    const events = new InMemoryEventBus();
-    events.subscribe("memory.access.decided", () => undefined);
+    const audit = { publishDecision: async () => true, publishFailure: async () => undefined };
     const issued: string[] = [];
     const engine = new CoreEngine({
       memory: (moduleId) => {
@@ -328,7 +326,7 @@ describe("CoreEngine guarded memory composition", () => {
         return new GuardedMemoryPort({
           store,
           policy: new DefaultDenyPolicyEngine(),
-          events,
+          audit,
           scope: { tenantId: "tenant", actorId: "actor", moduleId }
         });
       }
