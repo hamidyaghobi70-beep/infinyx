@@ -490,6 +490,7 @@ describe("GuardedMemoryPort — backend failures", () => {
 
   it.each([
     ["a non-string value", { not: "a string" }],
+    ["undefined", undefined],
     ["invalid JSON", "{not json"]
   ])("treats %s from the backing store as backend corruption", async (_label, stored) => {
     const store: MemoryPort = {
