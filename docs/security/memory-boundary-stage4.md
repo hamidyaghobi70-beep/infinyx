@@ -58,15 +58,15 @@ For `read`, `write` and `delete`, in this order:
 |---|---------|-----------------------|-------------------------------------------------------------------------|
 | M1 | Tenant isolation | Implemented (logic) | Same `(namespace, key)` in two tenants sharing one store never observe each other's data, including after delete. Slash-containing tenant or namespace values cannot collide. The tenant prefix of backing addresses cannot be influenced by the module. |
 | M2 | Default-deny authorization | Implemented | With `DefaultDenyPolicyEngine`, read/write/delete are refused and the backing store is never called. Policy errors and malformed decisions (null, string, array, wrong-case effect, missing or blank reason) are refused. The policy receives action, resource and attributes exactly as specified above. |
-| M3 | Audit before effect | Implemented (in-process only) | At least one subscriber must be captured by atomic `publishIfSubscribed` dispatch; publication awaits that handler snapshot before the backing store is called, for allow and deny. It never contains the stored value. If no subscriber exists or a handler fails, allowed operations are refused (`MEMORY_AUDIT_UNAVAILABLE`); a denial stays a denial. This is not durable audit. |
+| M3 | Audit before effect | Implemented (in-process only) | A dedicated `MemoryAuditPort`, separate from the module-visible Event Bus, must acknowledge the decision record before the backing-store effect, for allow and deny. It never contains the stored value. If the sink is unavailable, rejects, returns false or times out, allowed operations are refused (`MEMORY_AUDIT_UNAVAILABLE`); a denial stays a denial. This is not durable audit. |
 | M4 | Input validation | Implemented | Empty, whitespace-only, control-character, over-long (namespace 128, key 256), lone-surrogate and non-string addresses are rejected before policy. Accepted addresses are never rewritten. Non-JSON values (undefined, function, symbol, bigint, circular, throwing `toJSON`) and values over the byte limit (default 64 KiB, measured in UTF-8 bytes) are rejected before policy. |
 | M5 | No aliasing | Implemented | Mutating a value after `write`, or a value returned by `read`, never changes stored data. Backing stores only ever receive serialized strings. |
-| M6 | Failure behavior | Implemented | Backend errors and corrupt backend data (non-string, invalid JSON) become `MEMORY_BACKEND_FAILED` with `cause` preserved and no internal detail in the message. Failure-event publication is best-effort and bounded by `auditTimeoutMs`, so a stalled subscriber cannot mask or indefinitely delay the original error. |
+| M6 | Failure behavior | Implemented | Backend errors and corrupt backend data (non-string, invalid JSON) become `MEMORY_BACKEND_FAILED` with `cause` preserved and no internal detail in the message. Failure-record publication through the dedicated sink is best-effort and bounded by `auditTimeoutMs`, so a stalled sink cannot mask or indefinitely delay the original error. |
 | M7 | Scope integrity | Implemented | Invalid scopes and dependencies fail at construction. The scope is snapshotted; later mutation of the caller's object has no effect. |
 | M8 | Encryption at rest and in transit | **Not implemented** | Requires an approved design (see Decisions). `InMemoryMemoryStore` is plaintext and non-durable. |
 | M9 | Key ownership and rotation | **Not implemented** | Requires an approved design and an owner decision on key custody. |
 | M10 | Retention, deletion, backup | **Not implemented** | `delete` is an immediate hard delete in the reference store. No retention schedule, soft delete, legal hold or backup exists. |
-| M11 | Durable audit | **Not implemented** | Events go to the in-process event bus. Durable, tamper-evident audit storage is a separate component. |
+| M11 | Durable audit | **Not implemented** | The current audit capability is an in-process sink only. Durable, tamper-evident audit storage is a separate component. |
 | M12 | Data classification | **Not implemented** | No classification labels exist. Namespaces and keys appear in audit events and policy resources, so they must not contain sensitive data. |
 | M13 | Migration strategy | **Not implemented** | Stored values are canonical JSON strings with no schema version. A versioned envelope is needed before any durable adapter. |
 
@@ -84,9 +84,9 @@ For `read`, `write` and `delete`, in this order:
   running, and a timed-out audit handler may still complete and record the event after refusal.
 - Backing-store calls have no deadline or cancellation in the guard; a store that never settles
   leaves the operation pending. Give production backends their own deadlines.
-- Audit publication awaits every handler, so a slow subscriber delays each operation up to
-  `auditTimeoutMs`. Keep decision handlers fast and move slow work off the handler. Defaults are
-  not based on load measurements; shorter deadlines can refuse legitimate slow work.
+- Audit publication awaits the dedicated sink up to `auditTimeoutMs`. Keep the sink fast and
+  move slow work off the request path. Defaults are not based on load measurements; shorter
+  deadlines can refuse legitimate slow work.
 - Concurrent writes to the same address are last-write-wins. No compare-and-set exists.
 - Audit events carry namespace and key (not values). Treat those as non-secret identifiers.
 
