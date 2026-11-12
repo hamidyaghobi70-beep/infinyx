@@ -7,7 +7,8 @@ export type CoreErrorCode =
   | "MODULE_INITIALIZATION_FAILED"
   | "MODULE_START_FAILED"
   | "MODULE_STOP_FAILED"
-  | "MODULE_DEPENDENCY_CLEANUP_BLOCKED";
+  | "MODULE_DEPENDENCY_CLEANUP_BLOCKED"
+  | "INVALID_MEMORY_CAPABILITY";
 
 export class CoreError extends Error {
   constructor(

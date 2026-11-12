@@ -14,13 +14,18 @@ on:
       - foundation/repository-foundation
       - main
       - feat/gap-002-protected-operation-executor
+      - integration/infinyx-core-runtime-v1
 
 permissions:
   contents: read
 
 jobs:
   verify:
-    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4

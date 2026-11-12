@@ -1,9 +1,9 @@
 import { AsyncLocalStorage } from "node:async_hooks";
+import { GuardedMemoryPort } from "./guarded-memory-port.js";
 import type {
   CoreLifecycleState,
   CoreModule,
   EventBusPort,
-  MemoryPort,
   ModuleContext,
   ModuleLifecycleState,
   PolicyEngine,
@@ -28,7 +28,8 @@ interface CleanupExecutionContext {
 export interface CoreEngineOptions {
   readonly events?: EventBusPort;
   readonly policy?: PolicyEngine;
-  readonly memory?: MemoryPort;
+  /** Creates a module-specific guarded memory capability; raw MemoryPort values are rejected. */
+  readonly memory?: (moduleId: string) => GuardedMemoryPort;
   /** Maximum time allowed for an injected policy evaluation. Defaults to 5 seconds. */
   readonly policyTimeoutMs?: number;
 }
@@ -46,6 +47,7 @@ export class CoreEngine {
   private readonly cleanupInFlight = new Map<string, Promise<void>>();
   private readonly cleanupContext = new AsyncLocalStorage<CleanupExecutionContext>();
   private stopPromise: Promise<void> | undefined;
+  private readonly moduleMemory = new Map<string, GuardedMemoryPort>();
 
   constructor(private readonly options: CoreEngineOptions = {}) {
     this.events = options.events ?? new InMemoryEventBus();
@@ -270,9 +272,21 @@ export class CoreEngine {
       events: this.events,
       protectedOperations: this.protectedOperations
     };
-    return Object.freeze(
-      this.options.memory ? { ...base, memory: this.options.memory } : base
-    );
+    if (!this.options.memory) return Object.freeze(base);
+
+    let memory = this.moduleMemory.get(moduleId);
+    if (!memory) {
+      const candidate = this.options.memory(moduleId);
+      if (!(candidate instanceof GuardedMemoryPort) || candidate.scopeModuleId !== moduleId) {
+        throw new CoreError(
+          "INVALID_MEMORY_CAPABILITY",
+          "Core Engine requires a GuardedMemoryPort bound to the receiving module."
+        );
+      }
+      memory = candidate;
+      this.moduleMemory.set(moduleId, memory);
+    }
+    return Object.freeze({ ...base, memory });
   }
 
   private async cleanupInitializedModules(
