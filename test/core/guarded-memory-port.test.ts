@@ -816,6 +816,20 @@ describe("GuardedMemoryPort — construction", () => {
     expect(store.size).toBe(1);
   });
 
+  it("keeps capability internals private and prevents instance method replacement", async () => {
+    const { guard } = setup();
+    const exposed = guard as unknown as Record<string, unknown>;
+
+    expect(Object.isFrozen(guard)).toBe(true);
+    expect(Reflect.ownKeys(guard)).toEqual([]);
+    expect("store" in exposed).toBe(false);
+    expect("policy" in exposed).toBe(false);
+    expect("audit" in exposed).toBe(false);
+    expect(Reflect.set(exposed, "store", new InMemoryMemoryStore())).toBe(false);
+    expect(Reflect.set(exposed, "write", async () => undefined)).toBe(false);
+    await expect(guard.write({ namespace: "n", key: "k" }, "still guarded")).resolves.toBeUndefined();
+  });
+
   it("snapshots the scope so later mutation of the caller's object has no effect", async () => {
     const mutable = { ...scopeA };
     const store = new InMemoryMemoryStore();
