@@ -385,6 +385,11 @@ export class GuardedMemoryPort implements MemoryPort {
   }
 }
 
+// The instance is a security capability. Freezing only each instance leaves its
+// shared prototype mutable, allowing a module to replace guarded methods globally.
+// Freeze the prototype as well so the public capability surface cannot be patched.
+Object.freeze(GuardedMemoryPort.prototype);
+
 function isValidTimeout(value: unknown): value is number {
   return typeof value === "number" && Number.isInteger(value) && value >= 1 && value <= MAX_TIMEOUT_MS;
 }
