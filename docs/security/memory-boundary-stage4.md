@@ -28,6 +28,10 @@ This change adds, without modifying the `MemoryPort` contract:
   the receiving module. Raw `MemoryPort` instances are rejected before module initialization.
   The composition root must still ensure that the factory derives tenant and actor identity
   from a trusted principal and never from module-supplied input.
+- Audit is a separate `MemoryAuditPort`, not the module-visible `EventBusPort`. The
+  composition root supplies this sink; modules receive neither the capability nor its
+  registration interface. The sink must use trusted, access-controlled dispatch/storage.
+  An in-process sink is still not durable.
 - Module-to-module separation inside one tenant is not enforced by key prefix. It is a
   policy decision: the policy receives `moduleId` and `namespace` as attributes and the
   full `memory://` resource.
@@ -40,15 +44,13 @@ For `read`, `write` and `delete`, in this order:
 2. Evaluate policy for `memory.<operation>` on `memory://<tenant>/<namespace>/<key>`
    (each segment URL-encoded). Anything other than a well-formed explicit `allow` is a deny.
    Policy evaluation has a deadline (`policyTimeoutMs`, default 5000 ms); timeout is a deny.
-3. Atomically snapshot and dispatch to at least one registered subscriber for
-   `memory.access.decided` using `publishIfSubscribed`, then await all handlers within
-   `auditTimeoutMs` (default 5000 ms). Unsubscribing after the snapshot does not cancel
-   that in-flight delivery. An allowed operation
-   with no subscriber, a failed handler or a timeout is refused before the backing-store effect.
+3. Submit the decision record through the dedicated `MemoryAuditPort`, separate from the
+   public module Event Bus, and await completion within `auditTimeoutMs` (default 5000 ms).
+   A missing sink, false acknowledgement, failed publication or timeout refuses an allowed
+   operation before the backing-store effect.
 4. Call the backing store with a tenant-prefixed address and a canonical JSON string.
-5. On backing-store failure, publish `memory.access.failed` (best effort) within
-   `auditTimeoutMs`, then raise `MEMORY_BACKEND_FAILED` even if a failure-event subscriber
-   never settles.
+5. On backing-store failure, send a best-effort failure record through the dedicated
+   audit sink within `auditTimeoutMs`, then raise `MEMORY_BACKEND_FAILED` even if the sink stalls.
 
 ## Controls
 
