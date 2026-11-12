@@ -16,7 +16,8 @@ import {
 import type {
   MemoryAccessDecidedEvent,
   MemoryAccessFailedEvent,
-  MemoryScope
+  MemoryScope,
+  MemoryAuditPort
 } from "../../src/core/guarded-memory-port.js";
 import { InMemoryMemoryStore } from "../../src/core/in-memory-memory-store.js";
 import { MemoryAccessError } from "../../src/core/memory-error.js";
@@ -27,6 +28,13 @@ const allowAll: PolicyEngine = {
 
 const scopeA: MemoryScope = { tenantId: "tenant-a", actorId: "actor-1", moduleId: "module-x" };
 const scopeB: MemoryScope = { tenantId: "tenant-b", actorId: "actor-2", moduleId: "module-x" };
+
+function createAuditPort(bus: EventBusPort): MemoryAuditPort {
+  return {
+    publishDecision: (event) => bus.publishIfSubscribed(MEMORY_ACCESS_DECIDED_EVENT, event),
+    publishFailure: (event) => bus.publish(MEMORY_ACCESS_FAILED_EVENT, event)
+  };
+}
 
 function setup(
   overrides: {
@@ -53,7 +61,7 @@ function setup(
   const guard = new GuardedMemoryPort({
     store: overrides.store ?? memoryStore,
     policy: overrides.policy ?? allowAll,
-    events: overrides.events ?? bus,
+    audit: createAuditPort(overrides.events ?? bus),
     scope: overrides.scope ?? scopeA,
     ...(overrides.maxValueBytes === undefined ? {} : { maxValueBytes: overrides.maxValueBytes }),
     ...(overrides.policyTimeoutMs === undefined ? {} : { policyTimeoutMs: overrides.policyTimeoutMs }),
@@ -713,7 +721,7 @@ describe("GuardedMemoryPort — deadlines", () => {
 
   it.each(["policyTimeoutMs", "auditTimeoutMs"] as const)("validates %s", (option) => {
     const build = (value: unknown) => new GuardedMemoryPort({
-      store: new InMemoryMemoryStore(), policy: allowAll, events: new InMemoryEventBus(),
+      store: new InMemoryMemoryStore(), policy: allowAll, audit: createAuditPort(new InMemoryEventBus()),
       scope: scopeA, [option]: value
     } as never);
     for (const bad of [0, -1, 1.5, Number.NaN, Number.POSITIVE_INFINITY, 2_147_483_648, "5"]) {
@@ -730,7 +738,7 @@ describe("GuardedMemoryPort — construction", () => {
   const base = () => ({
     store: new InMemoryMemoryStore(),
     policy: allowAll,
-    events: new InMemoryEventBus(),
+    audit: createAuditPort(new InMemoryEventBus()),
     scope: scopeA
   });
 
@@ -758,7 +766,8 @@ describe("GuardedMemoryPort — construction", () => {
   it("rejects missing or malformed dependencies", () => {
     expect(() => new GuardedMemoryPort({ ...base(), store: {} as never })).toThrow(TypeError);
     expect(() => new GuardedMemoryPort({ ...base(), policy: {} as never })).toThrow(TypeError);
-    expect(() => new GuardedMemoryPort({ ...base(), events: {} as never })).toThrow(TypeError);
+    expect(() => new GuardedMemoryPort({ ...base(), audit: {} as never })).toThrow(TypeError);
+    expect(() => new GuardedMemoryPort({ ...base(), audit: new InMemoryEventBus() as never })).toThrow(TypeError);
     expect(() => new GuardedMemoryPort(undefined as never)).toThrow(TypeError);
   });
 
@@ -774,7 +783,7 @@ describe("GuardedMemoryPort — construction", () => {
     const store = new InMemoryMemoryStore();
     const events = new InMemoryEventBus();
     events.subscribe(MEMORY_ACCESS_DECIDED_EVENT, () => undefined);
-    const guard = new GuardedMemoryPort({ ...base(), store, events, scope: mutable });
+    const guard = new GuardedMemoryPort({ ...base(), store, audit: createAuditPort(events), scope: mutable });
 
     mutable.tenantId = "tenant-b";
     await guard.write({ namespace: "n", key: "k" }, 1);
@@ -786,8 +795,11 @@ describe("GuardedMemoryPort — construction", () => {
 describe("GuardedMemoryPort — Core Engine integration", () => {
   it("is usable as the module memory capability under a real policy", async () => {
     const store = new InMemoryMemoryStore();
-    const events = new InMemoryEventBus();
-    events.subscribe(MEMORY_ACCESS_DECIDED_EVENT, () => undefined);
+    const publicEvents = new InMemoryEventBus();
+    const auditBus = new InMemoryEventBus();
+    const publicAuditSpy = vi.fn();
+    publicEvents.subscribe(MEMORY_ACCESS_DECIDED_EVENT, publicAuditSpy);
+    auditBus.subscribe(MEMORY_ACCESS_DECIDED_EVENT, () => undefined);
     const policy: PolicyEngine = {
       evaluate: async (request) =>
         request.action === "memory.write" || request.action === "memory.read"
@@ -795,13 +807,13 @@ describe("GuardedMemoryPort — Core Engine integration", () => {
           : { effect: "deny", reason: "not permitted" }
     };
     const engine = new CoreEngine({
-      events,
+      events: publicEvents,
       policy,
       memory: (moduleId) =>
         new GuardedMemoryPort({
           store,
           policy,
-          events,
+          audit: createAuditPort(auditBus),
           scope: { ...scopeA, moduleId }
         })
     });
@@ -824,5 +836,6 @@ describe("GuardedMemoryPort — Core Engine integration", () => {
     await engine.stop();
 
     expect(observed).toEqual([{ text: "hello" }, "MEMORY_ACCESS_DENIED"]);
+    expect(publicAuditSpy).not.toHaveBeenCalled();
   });
 });
