@@ -13,6 +13,7 @@ export {
 } from "./guarded-memory-port.js";
 export type {
   GuardedMemoryPortOptions,
+  MemoryAuditPort,
   MemoryAccessDecidedEvent,
   MemoryAccessFailedEvent,
   MemoryOperation,
