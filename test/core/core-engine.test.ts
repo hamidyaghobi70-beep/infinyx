@@ -292,3 +292,57 @@ describe("multi-level dependency cleanup retry", () => {
     expect(calls).toEqual(["worker:1", "worker:2", "service", "foundation"]);
   });
 });
+
+
+describe("CoreEngine guarded memory composition", () => {
+  it("rejects a raw MemoryPort supplied as a module memory capability", async () => {
+    const { InMemoryMemoryStore } = await import("../../src/core/in-memory-memory-store.js");
+    const raw = new InMemoryMemoryStore();
+    const engine = new CoreEngine({
+      memory: (() => raw) as unknown as (moduleId: string) => import("../../src/core/guarded-memory-port.js").GuardedMemoryPort
+    });
+    engine.register({ id: "worker", version: "1.0.0" });
+
+    await expect(engine.initialize()).rejects.toThrow(/requires a GuardedMemoryPort/i);
+  });
+
+  it("creates and reuses a guarded memory capability bound to each module", async () => {
+    const { GuardedMemoryPort } = await import("../../src/core/guarded-memory-port.js");
+    const { InMemoryMemoryStore } = await import("../../src/core/in-memory-memory-store.js");
+    const { InMemoryEventBus } = await import("../../src/core/event-bus.js");
+    const { DefaultDenyPolicyEngine } = await import("../../src/core/default-policy-engine.js");
+    const store = new InMemoryMemoryStore();
+    const events = new InMemoryEventBus();
+    events.subscribe("memory.access.decided", () => undefined);
+    const issued: string[] = [];
+    const engine = new CoreEngine({
+      memory: (moduleId) => {
+        issued.push(moduleId);
+        return new GuardedMemoryPort({
+          store,
+          policy: new DefaultDenyPolicyEngine(),
+          events,
+          scope: { tenantId: "tenant", actorId: "actor", moduleId }
+        });
+      }
+    });
+    let first: unknown;
+    let second: unknown;
+    engine.register({
+      id: "alpha",
+      version: "1.0.0",
+      initialize: (context) => { first = context.memory; }
+    });
+    engine.register({
+      id: "beta",
+      version: "1.0.0",
+      initialize: (context) => { second = context.memory; }
+    });
+
+    await engine.initialize();
+    expect(issued).toEqual(["alpha", "beta"]);
+    expect(first).toBeInstanceOf(GuardedMemoryPort);
+    expect(second).toBeInstanceOf(GuardedMemoryPort);
+    expect(first).not.toBe(second);
+  });
+});
