@@ -555,6 +555,24 @@ describe("GuardedMemoryPort — backend failures", () => {
     expect(failed[0]?.errorName).toBe("UnknownError");
   });
 
+  it("does not wait indefinitely when failure-event subscribers never settle", async () => {
+    const bus = new InMemoryEventBus();
+    bus.subscribe(MEMORY_ACCESS_DECIDED_EVENT, () => undefined);
+    bus.subscribe(MEMORY_ACCESS_FAILED_EVENT, () => new Promise<void>(() => undefined));
+    const events: EventBusPort = {
+      subscribe: bus.subscribe.bind(bus),
+      publish: bus.publish.bind(bus),
+      publishIfSubscribed: bus.publishIfSubscribed.bind(bus)
+    };
+    const { guard } = setup({
+      store: failingStore({ read: new Error("backend unavailable") }),
+      events,
+      auditTimeoutMs: 15
+    });
+
+    expect(await codeOf(guard.read({ namespace: "n", key: "k" }))).toBe("MEMORY_BACKEND_FAILED");
+  });
+
   it("does not let a failing failure-event publish mask the backend failure", async () => {
     const bus = new InMemoryEventBus();
     bus.subscribe(MEMORY_ACCESS_DECIDED_EVENT, () => undefined);

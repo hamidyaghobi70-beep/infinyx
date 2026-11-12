@@ -338,7 +338,12 @@ export class GuardedMemoryPort implements MemoryPort {
     });
 
     try {
-      await this.events.publish(MEMORY_ACCESS_FAILED_EVENT, failure);
+      // Failure reporting is best-effort and bounded by the same audit deadline.
+      // A stalled subscriber must not delay propagation of the original backend error.
+      await withTimeout(
+        () => this.events.publish(MEMORY_ACCESS_FAILED_EVENT, failure),
+        this.auditTimeoutMs
+      );
     } catch {
       // Intentionally ignored: reporting must never mask the original backend failure.
     }

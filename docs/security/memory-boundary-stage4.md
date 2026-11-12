@@ -46,8 +46,9 @@ For `read`, `write` and `delete`, in this order:
    that in-flight delivery. An allowed operation
    with no subscriber, a failed handler or a timeout is refused before the backing-store effect.
 4. Call the backing store with a tenant-prefixed address and a canonical JSON string.
-5. On backing-store failure, publish `memory.access.failed` (best effort) and raise
-   `MEMORY_BACKEND_FAILED`.
+5. On backing-store failure, publish `memory.access.failed` (best effort) within
+   `auditTimeoutMs`, then raise `MEMORY_BACKEND_FAILED` even if a failure-event subscriber
+   never settles.
 
 ## Controls
 
@@ -58,7 +59,7 @@ For `read`, `write` and `delete`, in this order:
 | M3 | Audit before effect | Implemented (in-process only) | At least one subscriber must be captured by atomic `publishIfSubscribed` dispatch; publication awaits that handler snapshot before the backing store is called, for allow and deny. It never contains the stored value. If no subscriber exists or a handler fails, allowed operations are refused (`MEMORY_AUDIT_UNAVAILABLE`); a denial stays a denial. This is not durable audit. |
 | M4 | Input validation | Implemented | Empty, whitespace-only, control-character, over-long (namespace 128, key 256), lone-surrogate and non-string addresses are rejected before policy. Accepted addresses are never rewritten. Non-JSON values (undefined, function, symbol, bigint, circular, throwing `toJSON`) and values over the byte limit (default 64 KiB, measured in UTF-8 bytes) are rejected before policy. |
 | M5 | No aliasing | Implemented | Mutating a value after `write`, or a value returned by `read`, never changes stored data. Backing stores only ever receive serialized strings. |
-| M6 | Failure behavior | Implemented | Backend errors and corrupt backend data (non-string, invalid JSON) become `MEMORY_BACKEND_FAILED` with `cause` preserved, no internal detail in the message, and a failure event that cannot mask the original error. |
+| M6 | Failure behavior | Implemented | Backend errors and corrupt backend data (non-string, invalid JSON) become `MEMORY_BACKEND_FAILED` with `cause` preserved and no internal detail in the message. Failure-event publication is best-effort and bounded by `auditTimeoutMs`, so a stalled subscriber cannot mask or indefinitely delay the original error. |
 | M7 | Scope integrity | Implemented | Invalid scopes and dependencies fail at construction. The scope is snapshotted; later mutation of the caller's object has no effect. |
 | M8 | Encryption at rest and in transit | **Not implemented** | Requires an approved design (see Decisions). `InMemoryMemoryStore` is plaintext and non-durable. |
 | M9 | Key ownership and rotation | **Not implemented** | Requires an approved design and an owner decision on key custody. |
