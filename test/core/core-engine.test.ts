@@ -301,7 +301,11 @@ describe("CoreEngine guarded memory composition", () => {
     const engine = new CoreEngine({
       memory: (() => raw) as unknown as (moduleId: string) => import("../../src/core/guarded-memory-port.js").GuardedMemoryPort
     });
-    engine.register({ id: "worker", version: "1.0.0" });
+    engine.register({
+      id: "worker",
+      version: "1.0.0",
+      initialize: () => undefined
+    });
 
     await expect(engine.initialize()).rejects.toThrow(/requires a GuardedMemoryPort/i);
   });
