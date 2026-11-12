@@ -366,7 +366,7 @@ describe("GuardedMemoryPort — input validation", () => {
       namespace: "n",
       get key() {
         keyReads += 1;
-        return keyReads === 1 ? "valid" : "bad\\u0000key";
+        return keyReads === 1 ? "valid" : "bad\u0000key";
       }
     };
     const evaluate = vi.fn(async () => ({ effect: "allow" as const, reason: "ok" }));
