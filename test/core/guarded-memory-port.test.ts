@@ -35,6 +35,8 @@ function setup(
     events?: EventBusPort;
     scope?: MemoryScope;
     maxValueBytes?: number;
+    policyTimeoutMs?: number;
+    auditTimeoutMs?: number;
   } = {}
 ) {
   const memoryStore = new InMemoryMemoryStore();
@@ -53,7 +55,9 @@ function setup(
     policy: overrides.policy ?? allowAll,
     events: overrides.events ?? bus,
     scope: overrides.scope ?? scopeA,
-    ...(overrides.maxValueBytes === undefined ? {} : { maxValueBytes: overrides.maxValueBytes })
+    ...(overrides.maxValueBytes === undefined ? {} : { maxValueBytes: overrides.maxValueBytes }),
+    ...(overrides.policyTimeoutMs === undefined ? {} : { policyTimeoutMs: overrides.policyTimeoutMs }),
+    ...(overrides.auditTimeoutMs === undefined ? {} : { auditTimeoutMs: overrides.auditTimeoutMs })
   });
 
   return { guard, memoryStore, bus, decided, failed };
@@ -539,6 +543,125 @@ describe("GuardedMemoryPort — backend failures", () => {
 
     expect(await codeOf(guard.read({ namespace: "n", key: "k" }))).toBe("MEMORY_BACKEND_FAILED");
     expect(failed).toHaveLength(1);
+  });
+});
+
+
+const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
+const deadlineAddress = { namespace: "n", key: "k" };
+
+describe("GuardedMemoryPort — deadlines", () => {
+  it("denies a policy that never settles without calling the store", async () => {
+    const store = new InMemoryMemoryStore();
+    const write = vi.spyOn(store, "write");
+    const policy: PolicyEngine = { evaluate: () => new Promise(() => undefined) };
+    const { guard, decided } = setup({ store, policy, policyTimeoutMs: 20 });
+    expect(await codeOf(guard.write(deadlineAddress, "v"))).toBe("MEMORY_ACCESS_DENIED");
+    expect(write).not.toHaveBeenCalled();
+    expect(decided[0]).toMatchObject({ decision: "deny", reason: "Policy evaluation timed out." });
+  });
+
+  it("applies the policy deadline to reads and deletes", async () => {
+    const policy: PolicyEngine = { evaluate: () => new Promise(() => undefined) };
+    const { guard } = setup({ policy, policyTimeoutMs: 15 });
+    expect(await codeOf(guard.read(deadlineAddress))).toBe("MEMORY_ACCESS_DENIED");
+    expect(await codeOf(guard.delete(deadlineAddress))).toBe("MEMORY_ACCESS_DENIED");
+  });
+
+  it("allows a policy that resolves before its deadline", async () => {
+    const policy: PolicyEngine = { evaluate: async () => {
+      await sleep(5); return { effect: "allow", reason: "in time" };
+    } };
+    const { guard } = setup({ policy, policyTimeoutMs: 500 });
+    await guard.write(deadlineAddress, "v");
+    expect(await guard.read(deadlineAddress)).toBe("v");
+  });
+
+  it("consumes a policy rejection after its deadline", async () => {
+    const unhandled: unknown[] = [];
+    const listener = (reason: unknown) => unhandled.push(reason);
+    process.on("unhandledRejection", listener);
+    try {
+      const policy: PolicyEngine = { evaluate: async () => {
+        await sleep(40); throw new Error("late policy rejection");
+      } };
+      const { guard } = setup({ policy, policyTimeoutMs: 5 });
+      expect(await codeOf(guard.read(deadlineAddress))).toBe("MEMORY_ACCESS_DENIED");
+      await sleep(80);
+      expect(unhandled).toEqual([]);
+    } finally { process.off("unhandledRejection", listener); }
+  });
+
+  it("refuses an allowed operation when audit never settles", async () => {
+    const store = new InMemoryMemoryStore();
+    const write = vi.spyOn(store, "write");
+    const bus = new InMemoryEventBus();
+    bus.subscribe(MEMORY_ACCESS_DECIDED_EVENT, () => new Promise<void>(() => undefined));
+    const { guard } = setup({ store, events: bus, auditTimeoutMs: 15 });
+    expect(await codeOf(guard.write(deadlineAddress, "v"))).toBe("MEMORY_AUDIT_UNAVAILABLE");
+    expect(write).not.toHaveBeenCalled();
+  });
+
+  it("keeps a denial as denial when audit never settles", async () => {
+    const bus = new InMemoryEventBus();
+    bus.subscribe(MEMORY_ACCESS_DECIDED_EVENT, () => new Promise<void>(() => undefined));
+    const { guard } = setup({ policy: new DefaultDenyPolicyEngine(), events: bus, auditTimeoutMs: 15 });
+    expect(await codeOf(guard.read(deadlineAddress))).toBe("MEMORY_ACCESS_DENIED");
+  });
+
+  it("allows a slow audit handler to finish after refusing the operation", async () => {
+    const recorded: string[] = [];
+    const bus = new InMemoryEventBus();
+    bus.subscribe<MemoryAccessDecidedEvent>(MEMORY_ACCESS_DECIDED_EVENT, async (event) => {
+      await sleep(35); recorded.push(event.payload.operation);
+    });
+    const { guard, memoryStore } = setup({ events: bus, auditTimeoutMs: 5 });
+    expect(await codeOf(guard.write(deadlineAddress, "v"))).toBe("MEMORY_AUDIT_UNAVAILABLE");
+    await sleep(60);
+    expect(recorded).toEqual(["write"]);
+    expect(memoryStore.size).toBe(0);
+  });
+
+  it("consumes an audit handler rejection after its deadline", async () => {
+    const unhandled: unknown[] = [];
+    const listener = (reason: unknown) => unhandled.push(reason);
+    process.on("unhandledRejection", listener);
+    try {
+      const bus = new InMemoryEventBus();
+      bus.subscribe(MEMORY_ACCESS_DECIDED_EVENT, async () => {
+        await sleep(40); throw new Error("late audit rejection");
+      });
+      const { guard, memoryStore } = setup({ events: bus, auditTimeoutMs: 5 });
+      expect(await codeOf(guard.write(deadlineAddress, "v"))).toBe("MEMORY_AUDIT_UNAVAILABLE");
+      await sleep(80);
+      expect(unhandled).toEqual([]);
+      expect(memoryStore.size).toBe(0);
+    } finally { process.off("unhandledRejection", listener); }
+  });
+
+  it("clears deadline timers after successful operations", async () => {
+    vi.useFakeTimers();
+    try {
+      const { guard } = setup();
+      await guard.write(deadlineAddress, 1);
+      await guard.read(deadlineAddress);
+      await guard.delete(deadlineAddress);
+      expect(vi.getTimerCount()).toBe(0);
+    } finally { vi.useRealTimers(); }
+  });
+
+  it.each(["policyTimeoutMs", "auditTimeoutMs"] as const)("validates %s", (option) => {
+    const build = (value: unknown) => new GuardedMemoryPort({
+      store: new InMemoryMemoryStore(), policy: allowAll, events: new InMemoryEventBus(),
+      scope: scopeA, [option]: value
+    } as never);
+    for (const bad of [0, -1, 1.5, Number.NaN, Number.POSITIVE_INFINITY, 2_147_483_648, "5"]) {
+      expect(() => build(bad)).toThrow(TypeError);
+    }
+    expect(() => build(undefined)).not.toThrow();
+    expect(() => build(null)).not.toThrow();
+    expect(() => build(1)).not.toThrow();
+    expect(() => build(2_147_483_647)).not.toThrow();
   });
 });
 

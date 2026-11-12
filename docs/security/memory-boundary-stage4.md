@@ -39,9 +39,10 @@ For `read`, `write` and `delete`, in this order:
 1. Validate address (and value, for `write`). Failures never reach policy or the backend.
 2. Evaluate policy for `memory.<operation>` on `memory://<tenant>/<namespace>/<key>`
    (each segment URL-encoded). Anything other than a well-formed explicit `allow` is a deny.
+   Policy evaluation has a deadline (`policyTimeoutMs`, default 5000 ms); timeout is a deny.
 3. Require at least one registered subscriber for `memory.access.decided`, then publish
-   and await all handlers. An allowed operation with no subscriber or a failed handler is
-   refused before the backing-store effect.
+   and await all handlers within `auditTimeoutMs` (default 5000 ms). An allowed operation
+   with no subscriber, a failed handler or a timeout is refused before the backing-store effect.
 4. Call the backing store with a tenant-prefixed address and a canonical JSON string.
 5. On backing-store failure, publish `memory.access.failed` (best effort) and raise
    `MEMORY_BACKEND_FAILED`.
@@ -73,9 +74,14 @@ For `read`, `write` and `delete`, in this order:
   are rejected.
 - The guard does not rate-limit or apply per-tenant quotas. A tenant can store unbounded
   entries; only per-value size is limited.
-- Policy and backend calls have no per-operation timeout or cancellation here. Wrap the
-  policy with `FailClosedPolicyEngine` (as `CoreEngine` already does for injected policies)
-  and give production backends their own deadlines.
+- Policy evaluation and audit publication have deadlines (`policyTimeoutMs` and `auditTimeoutMs`,
+  default 5000 ms each; integer 1 to 2147483647). Neither is cancelled: a timed-out policy keeps
+  running, and a timed-out audit handler may still complete and record the event after refusal.
+- Backing-store calls have no deadline or cancellation in the guard; a store that never settles
+  leaves the operation pending. Give production backends their own deadlines.
+- Audit publication awaits every handler, so a slow subscriber delays each operation up to
+  `auditTimeoutMs`. Keep decision handlers fast and move slow work off the handler. Defaults are
+  not based on load measurements; shorter deadlines can refuse legitimate slow work.
 - Concurrent writes to the same address are last-write-wins. No compare-and-set exists.
 - Audit events carry namespace and key (not values). Treat those as non-secret identifiers.
 

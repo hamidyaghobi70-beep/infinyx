@@ -12,6 +12,12 @@ export const MEMORY_ACCESS_DECIDED_EVENT = "memory.access.decided";
 /** Published (best effort) when the backing store fails after an allow decision. */
 export const MEMORY_ACCESS_FAILED_EVENT = "memory.access.failed";
 export const DEFAULT_MAX_MEMORY_VALUE_BYTES = 64 * 1024;
+/** Default deadline for one policy evaluation. A timeout is a deny. */
+export const DEFAULT_MEMORY_POLICY_TIMEOUT_MS = 5_000;
+/** Default deadline for publishing one audit event. A timeout refuses an allowed operation. */
+export const DEFAULT_MEMORY_AUDIT_TIMEOUT_MS = 5_000;
+const MAX_TIMEOUT_MS = 2_147_483_647;
+const TIMED_OUT = Symbol("timed out");
 
 const MAX_SCOPE_SEGMENT_LENGTH = 128;
 const MAX_NAMESPACE_LENGTH = 128;
@@ -39,6 +45,10 @@ export interface GuardedMemoryPortOptions {
   readonly scope: MemoryScope;
   /** Maximum serialized (UTF-8 JSON) value size. Defaults to 64 KiB. */
   readonly maxValueBytes?: number;
+  /** Policy evaluation deadline in ms (1..2^31-1); defaults to 5000. Not cancelled. */
+  readonly policyTimeoutMs?: number;
+  /** Audit publication deadline in ms (1..2^31-1); defaults to 5000. Handlers are not cancelled. */
+  readonly auditTimeoutMs?: number;
 }
 
 /** Audit payload. Never contains the stored value. */
@@ -90,6 +100,8 @@ export class GuardedMemoryPort implements MemoryPort {
   private readonly events: EventBusPort;
   private readonly scope: MemoryScope;
   private readonly maxValueBytes: number;
+  private readonly policyTimeoutMs: number;
+  private readonly auditTimeoutMs: number;
 
   /** Module identity bound to this capability by the composition root. */
   get scopeModuleId(): string {
@@ -115,6 +127,11 @@ export class GuardedMemoryPort implements MemoryPort {
       throw new TypeError("maxValueBytes must be a positive safe integer.");
     }
 
+    const policyTimeoutMs = options.policyTimeoutMs ?? DEFAULT_MEMORY_POLICY_TIMEOUT_MS;
+    const auditTimeoutMs = options.auditTimeoutMs ?? DEFAULT_MEMORY_AUDIT_TIMEOUT_MS;
+    if (!isValidTimeout(policyTimeoutMs)) throw new TypeError(`policyTimeoutMs must be an integer from 1 to ${MAX_TIMEOUT_MS}.`);
+    if (!isValidTimeout(auditTimeoutMs)) throw new TypeError(`auditTimeoutMs must be an integer from 1 to ${MAX_TIMEOUT_MS}.`);
+
     const scope = options.scope as Partial<MemoryScope> | undefined;
     if (
       !scope ||
@@ -132,6 +149,8 @@ export class GuardedMemoryPort implements MemoryPort {
     this.policy = options.policy;
     this.events = options.events;
     this.maxValueBytes = maxValueBytes;
+    this.policyTimeoutMs = policyTimeoutMs;
+    this.auditTimeoutMs = auditTimeoutMs;
     this.scope = Object.freeze({
       tenantId: scope.tenantId,
       actorId: scope.actorId,
@@ -244,7 +263,10 @@ export class GuardedMemoryPort implements MemoryPort {
 
     let decision: NormalizedDecision;
     try {
-      decision = normalizeDecision(await this.policy.evaluate(request));
+      const result = await withTimeout(() => this.policy.evaluate(request), this.policyTimeoutMs);
+      decision = result === TIMED_OUT
+        ? { effect: "deny", reason: "Policy evaluation timed out." }
+        : normalizeDecision(result);
     } catch {
       decision = { effect: "deny", reason: "Policy evaluation failed." };
     }
@@ -262,7 +284,11 @@ export class GuardedMemoryPort implements MemoryPort {
       if (this.events.hasSubscribers?.(MEMORY_ACCESS_DECIDED_EVENT) !== true) {
         throw new Error("No memory audit subscriber is registered.");
       }
-      await this.events.publish(MEMORY_ACCESS_DECIDED_EVENT, audit);
+      const published = await withTimeout(
+        () => this.events.publish(MEMORY_ACCESS_DECIDED_EVENT, audit),
+        this.auditTimeoutMs
+      );
+      if (published === TIMED_OUT) throw new Error("Memory audit publication timed out.");
     } catch (cause) {
       // An allowed operation that cannot be audited is refused. A denial is refused
       // either way, so its outcome does not depend on the audit sink.
@@ -314,6 +340,22 @@ export class GuardedMemoryPort implements MemoryPort {
       // Intentionally ignored: reporting must never mask the original backend failure.
     }
   }
+}
+
+function isValidTimeout(value: unknown): value is number {
+  return typeof value === "number" && Number.isInteger(value) && value >= 1 && value <= MAX_TIMEOUT_MS;
+}
+
+/** A deadline does not cancel work; late fulfilment/rejection is consumed. */
+function withTimeout<T>(work: () => Promise<T> | T, ms: number): Promise<T | typeof TIMED_OUT> {
+  return new Promise((resolve, reject) => {
+    let settled = false;
+    const timer = setTimeout(() => { if (!settled) { settled = true; resolve(TIMED_OUT); } }, ms);
+    Promise.resolve().then(work).then(
+      (value) => { if (!settled) { settled = true; clearTimeout(timer); resolve(value); } },
+      (error: unknown) => { if (!settled) { settled = true; clearTimeout(timer); reject(error); } }
+    );
+  });
 }
 
 function hasMethods(value: unknown, names: readonly string[]): boolean {
