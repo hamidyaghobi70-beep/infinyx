@@ -1,12 +1,13 @@
 import { AsyncLocalStorage } from "node:async_hooks";
+import { GuardedMemoryPort } from "./guarded-memory-port.js";
 import type {
   CoreLifecycleState,
   CoreModule,
   EventBusPort,
-  MemoryPort,
   ModuleContext,
   ModuleLifecycleState,
   PolicyEngine,
+  PolicyEvaluationOptions,
   ProtectedOperationCaller,
   ProtectedOperationDefinition,
   ProtectedOperationHandle,
@@ -27,7 +28,8 @@ interface CleanupExecutionContext {
 export interface CoreEngineOptions {
   readonly events?: EventBusPort;
   readonly policy?: PolicyEngine;
-  readonly memory?: MemoryPort;
+  /** Creates a module-specific guarded memory capability; raw MemoryPort values are rejected. */
+  readonly memory?: (moduleId: string) => GuardedMemoryPort;
   /** Maximum time allowed for an injected policy evaluation. Defaults to 5 seconds. */
   readonly policyTimeoutMs?: number;
 }
@@ -45,21 +47,23 @@ export class CoreEngine {
   private readonly cleanupInFlight = new Map<string, Promise<void>>();
   private readonly cleanupContext = new AsyncLocalStorage<CleanupExecutionContext>();
   private stopPromise: Promise<void> | undefined;
+  private readonly moduleMemory = new Map<string, GuardedMemoryPort>();
 
   constructor(private readonly options: CoreEngineOptions = {}) {
     this.events = options.events ?? new InMemoryEventBus();
     this.policy = options.policy
       ? new FailClosedPolicyEngine(options.policy, options.policyTimeoutMs)
       : new DefaultDenyPolicyEngine();
-    this.protectedOperationExecutor = new ProtectedOperationExecutor(this.policy, () => this.lifecycle === "running");
-    // Expose an execute-only facade. Registration remains on the composition-root
-    // CoreEngine API and is never included in a module context.
+    this.protectedOperationExecutor = new ProtectedOperationExecutor(
+      this.policy,
+      () => this.lifecycle === "running"
+    );
     this.protectedOperations = Object.freeze({
       execute: <TInput, TOutput>(
         operation: ProtectedOperationHandle<TInput, TOutput>,
         caller: ProtectedOperationCaller,
         input: TInput,
-        options?: { readonly signal?: AbortSignal }
+        options?: PolicyEvaluationOptions
       ) => this.protectedOperationExecutor.execute(operation, caller, input, options)
     });
   }
@@ -84,6 +88,7 @@ export class CoreEngine {
     }
     return this.protectedOperationExecutor.register(definition);
   }
+
 
   register(module: CoreModule): void {
     if (this.lifecycle !== "created") {
@@ -164,9 +169,6 @@ export class CoreEngine {
   }
 
   stop(): Promise<void> {
-    // Returning the in-flight stop promise from inside a stop hook would make
-    // that hook await the operation that is itself waiting for the hook.
-    // Detect this async call chain explicitly instead of creating a deadlock.
     const cleanupContext = this.cleanupContext.getStore();
     if (cleanupContext?.engine === this && cleanupContext.active) {
       return Promise.reject(new CoreError(
@@ -176,11 +178,7 @@ export class CoreEngine {
     }
     if (this.stopPromise) return this.stopPromise;
     if (this.lifecycle === "stopped") return Promise.resolve();
-    if (this.lifecycle === "created") {
-      this.lifecycle = "stopped";
-      return Promise.resolve();
-    }
-    if (!["initialized", "running", "failed"].includes(this.lifecycle)) {
+    if (!["created", "initialized", "running", "failed"].includes(this.lifecycle)) {
       return Promise.reject(new CoreError(
         "INVALID_LIFECYCLE_TRANSITION",
         'Cannot stop Core Engine while it is "' + this.lifecycle + '".'
@@ -188,10 +186,43 @@ export class CoreEngine {
     }
 
     this.lifecycle = "stopping";
-    // Defer execution one microtask so the shared promise is installed before
-    // any module stop hook can re-enter CoreEngine.stop().
-    const stopPromise = Promise.resolve().then(() => this.performStop());
+    // Install the shared promise before invoking shutdown hooks. The policy
+    // runtime stops accepting new work synchronously before module cleanup.
+    const stopPromise = this.installStopPromise(() => {
+      const policyShutdown = this.beginPolicyShutdown();
+      if (this.initializedModules.length === 0) {
+        return policyShutdown.then(
+          () => { this.lifecycle = "stopped"; },
+          (error: unknown) => {
+            this.lifecycle = "failed";
+            throw new CoreError(
+              "MODULE_STOP_FAILED",
+              "Policy runtime failed to stop.",
+              { cause: error }
+            );
+          }
+        );
+      }
+      return this.performStop(policyShutdown);
+    });
+    return stopPromise;
+  }
+
+  private installStopPromise(start: () => Promise<void>): Promise<void> {
+    let resolveWork!: () => void;
+    let rejectWork!: (reason?: unknown) => void;
+    const stopPromise = new Promise<void>((resolve, reject) => {
+      resolveWork = resolve;
+      rejectWork = reject;
+    });
     this.stopPromise = stopPromise;
+
+    try {
+      void start().then(resolveWork, rejectWork);
+    } catch (error) {
+      rejectWork(error);
+    }
+
     void stopPromise.then(
       () => {
         if (this.stopPromise === stopPromise) this.stopPromise = undefined;
@@ -203,7 +234,26 @@ export class CoreEngine {
     return stopPromise;
   }
 
-  private async performStop(): Promise<void> {
+  private beginPolicyShutdown(): Promise<void> {
+    try {
+      return this.policy.shutdown?.() ?? Promise.resolve();
+    } catch (error) {
+      return Promise.reject(error);
+    }
+  }
+
+  private async performStop(policyShutdown: Promise<void>): Promise<void> {
+    try {
+      await policyShutdown;
+    } catch (error) {
+      this.lifecycle = "failed";
+      throw new CoreError(
+        "MODULE_STOP_FAILED",
+        "Policy runtime failed to stop; module cleanup was not started.",
+        { cause: error }
+      );
+    }
+
     const errors = await this.cleanupInitializedModules();
     this.lifecycle = errors.length ? "failed" : "stopped";
 
@@ -222,9 +272,21 @@ export class CoreEngine {
       events: this.events,
       protectedOperations: this.protectedOperations
     };
-    return Object.freeze(
-      this.options.memory ? { ...base, memory: this.options.memory } : base
-    );
+    if (!this.options.memory) return Object.freeze(base);
+
+    let memory = this.moduleMemory.get(moduleId);
+    if (!memory) {
+      const candidate = this.options.memory(moduleId);
+      if (!(candidate instanceof GuardedMemoryPort) || candidate.scopeModuleId !== moduleId) {
+        throw new CoreError(
+          "INVALID_MEMORY_CAPABILITY",
+          "Core Engine requires a GuardedMemoryPort bound to the receiving module."
+        );
+      }
+      memory = candidate;
+      this.moduleMemory.set(moduleId, memory);
+    }
+    return Object.freeze({ ...base, memory });
   }
 
   private async cleanupInitializedModules(
@@ -232,6 +294,21 @@ export class CoreEngine {
   ): Promise<unknown[]> {
     const errors: unknown[] = [];
     for (const module of [...this.initializedModules].reverse()) {
+      // Never tear down a dependency while a dependent is still pending,
+      // cleaning, or has failed cleanup. Successful dependents leave this queue.
+      const unresolvedDependents = this.initializedModules.filter((dependent) =>
+        dependent.id !== module.id &&
+        (dependent.dependencies ?? []).includes(module.id)
+      );
+      if (unresolvedDependents.length > 0) {
+        const names = unresolvedDependents.map((dependent) => dependent.id).join(", ");
+        errors.push(new CoreError(
+          "MODULE_DEPENDENCY_CLEANUP_BLOCKED",
+          'Cannot clean up dependency "' + module.id +
+            '" while dependent module(s) remain unresolved: ' + names + "."
+        ));
+        continue;
+      }
       try {
         await this.cleanupModule(module, preserveFailureIds.has(module.id));
       } catch (error) {

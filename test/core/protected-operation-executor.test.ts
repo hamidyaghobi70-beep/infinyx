@@ -419,4 +419,24 @@ describe("ProtectedOperationExecutor", () => {
     expect(handler).not.toHaveBeenCalled();
   });
 
+  it("propagates parent cancellation to policy evaluation and blocks the handler", async () => {
+    const controller = new AbortController();
+    let evaluatorSignal: AbortSignal | undefined;
+    const { engine, operation, handler } = makeEngine((_request, options) => {
+      evaluatorSignal = options?.signal;
+      return new Promise<PolicyDecision>(() => undefined);
+    });
+    await ensureStarted(engine);
+    const pending = engine.protectedOperations.execute(
+      operation, caller, { value: "no" }, { parentSignal: controller.signal }
+    );
+    await Promise.resolve();
+    controller.abort();
+    const result = await pending;
+    expect(result).toMatchObject({ status: "denied" });
+    expect(evaluatorSignal?.aborted).toBe(true);
+    expect(handler).not.toHaveBeenCalled();
+  });
+
+
 });
