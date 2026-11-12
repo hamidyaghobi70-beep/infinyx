@@ -30,8 +30,11 @@ const scopeA: MemoryScope = { tenantId: "tenant-a", actorId: "actor-1", moduleId
 const scopeB: MemoryScope = { tenantId: "tenant-b", actorId: "actor-2", moduleId: "module-x" };
 
 function createAuditPort(bus: EventBusPort): MemoryAuditPort {
+  if (typeof bus.publishIfSubscribed !== "function") {
+    throw new TypeError("Test audit bus must support conditional event dispatch.");
+  }
   return {
-    publishDecision: (event) => bus.publishIfSubscribed(MEMORY_ACCESS_DECIDED_EVENT, event),
+    publishDecision: (event) => bus.publishIfSubscribed!(MEMORY_ACCESS_DECIDED_EVENT, event),
     publishFailure: (event) => bus.publish(MEMORY_ACCESS_FAILED_EVENT, event)
   };
 }
