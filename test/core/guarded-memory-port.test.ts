@@ -360,6 +360,43 @@ describe("GuardedMemoryPort — input validation", () => {
     expect(backing.size).toBe(0);
   });
 
+  it("reads address properties once, so accessor-based addresses cannot change after validation", async () => {
+    let keyReads = 0;
+    const shifting = {
+      namespace: "n",
+      get key() {
+        keyReads += 1;
+        return keyReads === 1 ? "valid" : "bad\\u0000key";
+      }
+    };
+    const evaluate = vi.fn(async () => ({ effect: "allow" as const, reason: "ok" }));
+    const { guard, memoryStore } = setup({ policy: { evaluate } });
+
+    await guard.write(shifting, 1);
+
+    expect(keyReads).toBe(1);
+    expect(memoryStore.addresses().map((address) => address.key)).toEqual(["valid"]);
+    expect(evaluate).toHaveBeenCalledWith(
+      expect.objectContaining({ resource: "memory://tenant-a/n/valid" })
+    );
+  });
+
+  it("treats an address whose accessor throws as an invalid address", async () => {
+    const evaluate = vi.fn(async () => ({ effect: "allow" as const, reason: "ok" }));
+    const { guard, memoryStore } = setup({ policy: { evaluate } });
+    const hostile = {
+      namespace: "n",
+      get key(): string {
+        throw new Error("accessor exploded");
+      }
+    };
+
+    expect(await codeOf(guard.write(hostile, 1))).toBe("MEMORY_INVALID_ADDRESS");
+    expect(await codeOf(guard.read(hostile))).toBe("MEMORY_INVALID_ADDRESS");
+    expect(evaluate).not.toHaveBeenCalled();
+    expect(memoryStore.size).toBe(0);
+  });
+
   it("accepts addresses at the exact length limits", async () => {
     const { guard } = setup();
     const address = { namespace: "n".repeat(128), key: "k".repeat(256) };

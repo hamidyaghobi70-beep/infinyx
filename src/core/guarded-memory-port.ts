@@ -168,19 +168,29 @@ export class GuardedMemoryPort implements MemoryPort {
 
   private resolve(address: MemoryAddress): ResolvedTarget {
     const candidate = address as Partial<MemoryAddress> | null | undefined;
+
+    // Read each property exactly once. Validating and then re-reading would let an
+    // address with accessor properties pass validation and return different values later.
+    let namespace: unknown;
+    let key: unknown;
+    if (candidate && typeof candidate === "object") {
+      try {
+        namespace = candidate.namespace;
+        key = candidate.key;
+      } catch {
+        // A throwing accessor is treated as an invalid address, not an internal error.
+      }
+    }
+
     if (
-      !candidate ||
-      typeof candidate !== "object" ||
-      !isValidSegment(candidate.namespace, MAX_NAMESPACE_LENGTH) ||
-      !isValidSegment(candidate.key, MAX_KEY_LENGTH)
+      !isValidSegment(namespace, MAX_NAMESPACE_LENGTH) ||
+      !isValidSegment(key, MAX_KEY_LENGTH)
     ) {
       throw new MemoryAccessError(
         "MEMORY_INVALID_ADDRESS",
         "Memory namespace and key must be non-empty strings without control characters within length limits."
       );
     }
-
-    const { namespace, key } = candidate;
     const tenant = encodeURIComponent(this.scope.tenantId);
     const encodedNamespace = encodeURIComponent(namespace);
 
