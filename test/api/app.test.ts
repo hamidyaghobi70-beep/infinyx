@@ -28,7 +28,8 @@ describe("HTTP foundation", () => {
 
     expect(response.status).toBe(200);
     expect(response.headers["content-type"]).toContain(contentType);
-    expect(response.text).toContain(marker);
+    const body = response.text ?? response.body.toString("utf8");
+    expect(body).toContain(marker);
   });
 
   it("sets baseline browser security headers", async () => {
