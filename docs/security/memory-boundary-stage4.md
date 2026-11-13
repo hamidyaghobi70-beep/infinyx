@@ -82,6 +82,15 @@ For `read`, `write` and `delete`, in this order:
 - Policy evaluation and audit publication have deadlines (`policyTimeoutMs` and `auditTimeoutMs`,
   default 5000 ms each; integer 1 to 2147483647). Neither is cancelled: a timed-out policy keeps
   running, and a timed-out audit handler may still complete and record the event after refusal.
+- An audit publication timeout is an **unknown publication outcome**, not proof that the
+  sink rejected or discarded the event. The guard refuses the allowed memory operation, but
+  it does not cancel the in-flight publication, emit a durable unresolved marker, or reconcile
+  a later acknowledgement. A handler may therefore complete after the caller has received
+  `MEMORY_AUDIT_UNAVAILABLE`. The current `MemoryAuditPort` contract exposes no operation ID,
+  status lookup, idempotency key, or reconciliation method; final audit state cannot be
+  be asserted from the timeout result alone. Do not describe this behavior as reconciled or
+  exactly-once. A follow-up contract and adapter design must define correlation, late-result
+  handling, idempotency, and durable unresolved-state recording before claiming reconciliation.
 - Backing-store calls have no deadline or cancellation in the guard; a store that never settles
   leaves the operation pending. Give production backends their own deadlines.
 - Audit publication awaits the dedicated sink up to `auditTimeoutMs`. Keep the sink fast and
