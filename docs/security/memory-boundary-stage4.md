@@ -88,7 +88,7 @@ For `read`, `write` and `delete`, in this order:
   a later acknowledgement. A handler may therefore complete after the caller has received
   `MEMORY_AUDIT_UNAVAILABLE`. The current `MemoryAuditPort` contract exposes no operation ID,
   status lookup, idempotency key, or reconciliation method; final audit state cannot be
-  be asserted from the timeout result alone. Do not describe this behavior as reconciled or
+  asserted from the timeout result alone. Do not describe this behavior as reconciled or
   exactly-once. A follow-up contract and adapter design must define correlation, late-result
   handling, idempotency, and durable unresolved-state recording before claiming reconciliation.
 - Backing-store calls have no deadline or cancellation in the guard; a store that never settles
@@ -98,6 +98,39 @@ For `read`, `write` and `delete`, in this order:
   deadlines can refuse legitimate slow work.
 - Concurrent writes to the same address are last-write-wins. No compare-and-set exists.
 - Audit events carry namespace and key (not values). Treat those as non-secret identifiers.
+
+## Audit reconciliation implementation gate
+
+Repository inspection at the Stage 4 integration base found only the in-process
+`InMemoryEventBus` and the test adapter built by `createAuditPort()`. No durable audit
+adapter, operation-status store, or reconciliation worker is present. The current event bus
+takes an in-memory handler snapshot and waits for those handlers; it is not a durable
+publication boundary.
+
+Therefore reconciliation is **not implementable or verifiable as a runtime guarantee in
+this repository state**. Adding an operation ID to the current interface alone would only
+correlate an in-memory call; it would not prove durable acceptance, recover state after a
+process crash, or prevent duplicate records.
+
+Before runtime implementation, an approved durable adapter must specify and test all of the
+following:
+
+1. A stable operation ID generated before publication and carried through every attempt.
+2. A durable append/acceptance acknowledgement whose meaning is explicit (accepted by the
+   durable store, not merely queued in process memory).
+3. Idempotent handling keyed by operation ID, including duplicate delivery after retries.
+4. A durable `PENDING`/unresolved record written before or atomically with publication, plus
+   terminal states for accepted, rejected, and unresolved outcomes.
+5. A status/reconciliation API that can recover after process restart and safely process late
+   acknowledgements without changing an already committed terminal result.
+6. Tests for timeout followed by late success, timeout followed by late failure, duplicate
+   acknowledgement, crash/restart recovery, unavailable status store, and concurrent
+   reconciliation.
+
+Until those prerequisites exist, the safe Stage 4 behavior remains fail-closed for allowed
+memory operations when audit publication times out, with the audit outcome explicitly
+reported as unknown. No exactly-once, durable-audit, or reconciled-state guarantee may be
+claimed.
 
 ## Decisions required from the project owner before a persistent adapter
 
