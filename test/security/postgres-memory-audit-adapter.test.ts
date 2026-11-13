@@ -35,7 +35,7 @@ class ScriptedClient implements PgClient {
 }
 
 describe("PostgreSQL adapter transaction boundaries", () => {
-  it("releases a client after a lookup, including when the query fails", async () => {
+  it("releases a client after a successful lookup", async () => {
     const client = new ScriptedClient();
     const pool: PgPool = { connect: async () => client };
     const adapter = new PostgresMemoryAuditAdapter({ pool });
