@@ -3,6 +3,23 @@ import request from "supertest";
 import { app } from "../../src/api/app.js";
 
 describe("HTTP foundation", () => {
+  it("serves the INFINYX landing page", async () => {
+    const response = await request(app).get("/");
+
+    expect(response.status).toBe(200);
+    expect(response.headers["content-type"]).toContain("text/html");
+    expect(response.text).toContain("A universe of");
+    expect(response.text).toContain("Project status");
+  });
+
+  it("serves the responsive site stylesheet", async () => {
+    const response = await request(app).get("/styles.css");
+
+    expect(response.status).toBe(200);
+    expect(response.headers["content-type"]).toContain("text/css");
+    expect(response.text).toContain("@media(max-width:620px)");
+  });
+
   it("returns a minimal liveness response", async () => {
     const response = await request(app).get("/health");
 
