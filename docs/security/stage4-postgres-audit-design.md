@@ -45,6 +45,7 @@ No stored memory value, credential, token, or secret may be placed in the audit 
 ### `memory_audit_outcomes`
 
 - `operation_id UUID NOT NULL REFERENCES memory_audit_operations(operation_id)`
+- `event_id UUID NOT NULL UNIQUE` (stable identity for an outcome append)
 - `sequence BIGINT NOT NULL`
 - `outcome TEXT NOT NULL` constrained to the explicitly supported lifecycle values
 - `recorded_at TIMESTAMPTZ NOT NULL` assigned by the database
@@ -59,7 +60,7 @@ Outcome events are append-only. The first implementation must define and validat
 - A repeated submission with the same operation ID and identical canonical payload returns the existing recorded result; it must not create a second logical decision.
 - Reuse of an operation ID with a different payload is a hard conflict and must fail closed, with a security diagnostic that does not expose payload contents.
 - Database uniqueness constraints, not process-local maps, enforce deduplication across concurrent requests and restarts.
-- Outcome insertion must likewise be idempotent under a stable event identity or unique sequence allocation protected by a transaction. The implementation must specify how concurrent writers obtain the next sequence without lost updates.
+- Outcome insertion uses a stable `event_id` UUID with a unique constraint. A transaction locks the parent operation row before checking the event identity and allocating the next sequence, serializing concurrent writers for that operation.
 
 ## Adapter API requirements
 
@@ -109,6 +110,6 @@ Before production use, the owner must approve:
 
 ## Implementation gate
 
-Runtime implementation may begin only after the project owner separately approves the operational/security decisions above and the exact adapter API/schema. The implementation must add a pinned PostgreSQL driver, migration tooling, configuration validation, and automated tests without committing credentials. It must remain on a non-main feature branch and a Draft PR until independent review and the project's merge authority requirements are satisfied.
+An isolated, non-production adapter prototype and initial SQL migration are now present on `feat/stage4-postgres-audit-adapter`, following explicit owner approval for experimental implementation. The prototype is intentionally not wired into `GuardedMemoryPort`; the current `MemoryAuditPort` contract has no operation ID and cannot satisfy this design. A follow-up contract change, real PostgreSQL integration tests, driver/configuration selection, least-privilege role verification, and the operational/security decisions above remain required before runtime integration or production use. The branch must remain non-main and its PR Draft until independent review and the project's merge authority requirements are satisfied.
 
 No merge, release, deployment, production use, exactly-once claim, or crash-safe memory-side-effect guarantee is authorized by this design document.
