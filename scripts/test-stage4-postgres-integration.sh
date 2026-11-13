@@ -5,3 +5,5 @@ set -euo pipefail
 
 psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f migrations/0001_stage4_memory_audit.sql
 psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f test/integration/stage4-postgres-schema.integration.sql
+
+node test/integration/stage4-postgres-adapter.integration.mjs
