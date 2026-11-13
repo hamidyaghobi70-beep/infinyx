@@ -125,9 +125,9 @@ jobs:
           try {
             audit = JSON.parse(raw);
           } catch (error) {
-            const report = ['# npm audit report', '', `- npm audit exit code: ${auditExit}`, `- JSON parsing error: ${error.message}`, '', 'The raw npm-audit.json artifact contains the command output.'].join('\\n');
-            fs.writeFileSync(outputPath, report + '\\n');
-            fs.appendFileSync(process.env.GITHUB_STEP_SUMMARY, report + '\\n');
+            const report = ['# npm audit report', '', `- npm audit exit code: ${auditExit}`, `- JSON parsing error: ${error.message}`, '', 'The raw npm-audit.json artifact contains the command output.'].join('\n');
+            fs.writeFileSync(outputPath, report + '\n');
+            fs.appendFileSync(process.env.GITHUB_STEP_SUMMARY, report + '\n');
             process.exit(auditExit || 1);
           }
 
@@ -165,14 +165,14 @@ jobs:
               const explanation = execFileSync('npm', ['explain', name], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).trim();
               lines.push('', 'Dependency path(s) from npm explain:', '```text', explanation || 'No explanation returned.', '```');
             } catch (error) {
-              const detail = [error.stdout, error.stderr].filter(Boolean).join('\\n').trim();
+              const detail = [error.stdout, error.stderr].filter(Boolean).join('\n').trim();
               lines.push('', 'Dependency path(s) from npm explain:', '```text', detail || 'npm explain could not resolve this package.', '```');
             }
             lines.push('');
           }
-          const report = lines.join('\\n');
-          fs.writeFileSync(outputPath, report + '\\n');
-          fs.appendFileSync(process.env.GITHUB_STEP_SUMMARY, report + '\\n');
+          const report = lines.join('\n');
+          fs.writeFileSync(outputPath, report + '\n');
+          fs.appendFileSync(process.env.GITHUB_STEP_SUMMARY, report + '\n');
           console.log(report);
           process.exit(auditExit);
           NODE
