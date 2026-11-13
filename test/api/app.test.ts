@@ -20,6 +20,17 @@ describe("HTTP foundation", () => {
     expect(response.text).toContain("@media(max-width:620px)");
   });
 
+  it.each([
+    { path: "/site.js", contentType: "javascript", marker: "aria-expanded" },
+    { path: "/favicon.svg", contentType: "image/svg+xml", marker: "<svg" }
+  ])("serves the static asset $path", async ({ path, contentType, marker }) => {
+    const response = await request(app).get(path);
+
+    expect(response.status).toBe(200);
+    expect(response.headers["content-type"]).toContain(contentType);
+    expect(response.text).toContain(marker);
+  });
+
   it("returns a minimal liveness response", async () => {
     const response = await request(app).get("/health");
 
