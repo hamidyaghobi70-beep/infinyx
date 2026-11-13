@@ -212,7 +212,7 @@ jobs:
       - name: Build adapter
         run: npm run build
       - name: Install pinned CI-only PostgreSQL driver
-        run: npm install --no-save --package-lock=false --ignore-scripts pg@8.16.3
+        run: npm install --no-save --ignore-scripts pg@8.16.3
       - name: Install PostgreSQL client
         run: |
           sudo apt-get update
