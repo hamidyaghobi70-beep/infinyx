@@ -1,4 +1,4 @@
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import type { MemoryAccessDecidedEvent } from "../core/guarded-memory-port.js";
 
 export type AuditOutcome =
@@ -101,7 +101,7 @@ export class PostgresMemoryAuditAdapter {
            decision, reason, payload_hash)
          VALUES ($1::uuid, $2, $3, $4, $5, $6, $7, $8, $9, decode($10, 'hex'))
          ON CONFLICT (operation_id) DO NOTHING
-         RETURNING operation_id, recorded_at`,
+         RETURNING operation_id, recorded_at, payload_hash`,
         [operationId, event.tenantId, event.actorId, event.moduleId, event.operation,
           event.namespace, event.key, event.decision, event.reason, payloadHash]
       );
@@ -119,8 +119,14 @@ export class PostgresMemoryAuditAdapter {
 
       if (!existing) throw new Error("Audit decision insert could not be confirmed.");
       const duplicate = inserted.rows.length === 0;
-      if (duplicate && Buffer.from(existing.payload_hash).toString("hex") !== payloadHash) {
+      if (Buffer.from(existing.payload_hash).toString("hex") !== payloadHash) {
         throw new Error("Audit operation ID conflicts with a different immutable payload.");
+      }
+      if (!duplicate) {
+        await client.query(
+          "INSERT INTO memory_audit_outcomes (operation_id, event_id, sequence, outcome) VALUES ($1::uuid, $2::uuid, 1, 'DECISION_RECORDED')",
+          [operationId, randomUUID()]
+        );
       }
 
       await client.query("COMMIT");
@@ -263,7 +269,7 @@ export class PostgresMemoryAuditAdapter {
               ORDER BY sequence DESC LIMIT 1
            ) latest ON TRUE
           WHERE ($1::uuid IS NULL OR op.operation_id > $1::uuid)
-            AND (latest.outcome IS NULL OR latest.outcome = 'UNRESOLVED')
+            AND (latest.outcome IS NULL OR latest.outcome IN ('DECISION_RECORDED', 'UNRESOLVED'))
           ORDER BY op.operation_id
           LIMIT $2`,
         [cursor, limit]
