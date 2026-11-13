@@ -62,8 +62,14 @@ jobs:
           }
           trap cleanup EXIT
           for attempt in $(seq 1 30); do
-            if curl --fail --silent http://127.0.0.1:43123/health; then
+            if curl --fail --silent --show-error http://127.0.0.1:43123/health; then
               echo
+              page=$(curl --fail --silent --show-error http://127.0.0.1:43123/)
+              printf '%s' "$page" | grep -q "A universe of"
+              for asset in /styles.css /site.js /favicon.svg; do
+                curl --fail --silent --show-error --output /dev/null "http://127.0.0.1:43123$asset"
+              done
+              echo "Built runtime served the landing page and all static assets."
               exit 0
             fi
             if ! kill -0 "$server_pid" 2>/dev/null; then
@@ -119,9 +125,9 @@ jobs:
           try {
             audit = JSON.parse(raw);
           } catch (error) {
-            const report = ['# npm audit report', '', `- npm audit exit code: ${auditExit}`, `- JSON parsing error: ${error.message}`, '', 'The raw npm-audit.json artifact contains the command output.'].join('\n');
-            fs.writeFileSync(outputPath, report + '\n');
-            fs.appendFileSync(process.env.GITHUB_STEP_SUMMARY, report + '\n');
+            const report = ['# npm audit report', '', `- npm audit exit code: ${auditExit}`, `- JSON parsing error: ${error.message}`, '', 'The raw npm-audit.json artifact contains the command output.'].join('\\n');
+            fs.writeFileSync(outputPath, report + '\\n');
+            fs.appendFileSync(process.env.GITHUB_STEP_SUMMARY, report + '\\n');
             process.exit(auditExit || 1);
           }
 
@@ -159,14 +165,14 @@ jobs:
               const explanation = execFileSync('npm', ['explain', name], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).trim();
               lines.push('', 'Dependency path(s) from npm explain:', '```text', explanation || 'No explanation returned.', '```');
             } catch (error) {
-              const detail = [error.stdout, error.stderr].filter(Boolean).join('\n').trim();
+              const detail = [error.stdout, error.stderr].filter(Boolean).join('\\n').trim();
               lines.push('', 'Dependency path(s) from npm explain:', '```text', detail || 'npm explain could not resolve this package.', '```');
             }
             lines.push('');
           }
-          const report = lines.join('\n');
-          fs.writeFileSync(outputPath, report + '\n');
-          fs.appendFileSync(process.env.GITHUB_STEP_SUMMARY, report + '\n');
+          const report = lines.join('\\n');
+          fs.writeFileSync(outputPath, report + '\\n');
+          fs.appendFileSync(process.env.GITHUB_STEP_SUMMARY, report + '\\n');
           console.log(report);
           process.exit(auditExit);
           NODE
