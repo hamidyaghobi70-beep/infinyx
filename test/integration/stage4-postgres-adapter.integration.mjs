@@ -13,7 +13,11 @@ const ids = {
   duplicate: randomUUID(),
   ambiguous: randomUUID(),
   concurrent: randomUUID(),
-  denied: randomUUID()
+  denied: randomUUID(),
+  pageFirst: "30000000-0000-4000-8000-000000000001",
+  pageSecond: "30000000-0000-4000-8000-000000000002",
+  resolvedList: "30000000-0000-4000-8000-000000000003",
+  deniedList: "30000000-0000-4000-8000-000000000004"
 };
 const decision = {
   tenantId: "tenant-integration",
@@ -86,6 +90,30 @@ try {
     adapter.appendOutcome(ids.denied, randomUUID(), "EFFECT_SUCCEEDED"),
     /denied memory operation/
   );
+
+  // Unresolved listing is bounded, ordered, cursor-resumable, and excludes terminal/denied records.
+  // Remove earlier fixtures so the expected page boundary is deterministic.
+  await cleanup();
+  await adapter.recordDecision(ids.pageFirst, decision);
+  await adapter.recordDecision(ids.pageSecond, decision);
+  await adapter.recordDecision(ids.resolvedList, decision);
+  await adapter.appendOutcome(ids.resolvedList, randomUUID(), "EFFECT_SUCCEEDED");
+  await adapter.recordDecision(ids.deniedList, { ...decision, decision: "deny" });
+
+  const firstPage = await adapter.listUnresolved(null, 1);
+  assert.equal(firstPage.length, 1);
+  assert.equal(firstPage[0].operationId, ids.pageFirst);
+  assert.equal(firstPage[0].latestOutcome, "DECISION_RECORDED");
+
+  const secondPage = await adapter.listUnresolved(firstPage[0].operationId, 1);
+  assert.equal(secondPage.length, 1);
+  assert.equal(secondPage[0].operationId, ids.pageSecond);
+
+  const afterSecondPage = await adapter.listUnresolved(secondPage[0].operationId, 1);
+  assert.equal(afterSecondPage.length, 0);
+  await assert.rejects(adapter.listUnresolved("not-a-uuid", 1), /valid UUID/);
+  await assert.rejects(adapter.listUnresolved(null, 0), /limit must be an integer/);
+  await assert.rejects(adapter.listUnresolved(null, 501), /limit must be an integer/);
 
   // Simulate the client losing the acknowledgement after PostgreSQL committed.
   let commitAcknowledgementLost = false;
