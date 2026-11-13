@@ -31,6 +31,17 @@ describe("HTTP foundation", () => {
     expect(response.text).toContain(marker);
   });
 
+  it("sets baseline browser security headers", async () => {
+    const response = await request(app).get("/");
+
+    expect(response.headers["content-security-policy"]).toContain("default-src 'self'");
+    expect(response.headers["content-security-policy"]).toContain("frame-ancestors 'none'");
+    expect(response.headers["x-content-type-options"]).toBe("nosniff");
+    expect(response.headers["x-frame-options"]).toBe("DENY");
+    expect(response.headers["referrer-policy"]).toBe("strict-origin-when-cross-origin");
+    expect(response.headers["permissions-policy"]).toContain("camera=()");
+  });
+
   it("returns a minimal liveness response", async () => {
     const response = await request(app).get("/health");
 
