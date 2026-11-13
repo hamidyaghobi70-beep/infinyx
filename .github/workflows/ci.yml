@@ -62,8 +62,14 @@ jobs:
           }
           trap cleanup EXIT
           for attempt in $(seq 1 30); do
-            if curl --fail --silent http://127.0.0.1:43123/health; then
+            if curl --fail --silent --show-error http://127.0.0.1:43123/health; then
               echo
+              page=$(curl --fail --silent --show-error http://127.0.0.1:43123/)
+              printf '%s' "$page" | grep -q "A universe of"
+              for asset in /styles.css /site.js /favicon.svg; do
+                curl --fail --silent --show-error --output /dev/null "http://127.0.0.1:43123$asset"
+              done
+              echo "Built runtime served the landing page and all static assets."
               exit 0
             fi
             if ! kill -0 "$server_pid" 2>/dev/null; then
