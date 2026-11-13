@@ -193,11 +193,17 @@ export class PostgresMemoryAuditAdapter {
     let committed = false;
     try {
       await client.query("BEGIN");
-      const parent = await client.query<{ operation_id: string }>(
-        "SELECT operation_id FROM memory_audit_operations WHERE operation_id = $1::uuid FOR UPDATE",
+      const parent = await client.query<{ operation_id: string; decision: "allow" | "deny" }>(
+        "SELECT operation_id, decision FROM memory_audit_operations WHERE operation_id = $1::uuid FOR UPDATE",
         [operationId]
       );
       if (!parent.rows[0]) throw new Error("Cannot append an outcome for an unknown operation.");
+      if (parent.rows[0].decision !== "allow") {
+        throw new Error("A denied memory operation cannot have a memory-effect outcome.");
+      }
+      if (outcome === "DECISION_RECORDED") {
+        throw new Error("DECISION_RECORDED is created atomically with the decision row.");
+      }
 
       const prior = await client.query<{
         operation_id: string;
@@ -269,6 +275,7 @@ export class PostgresMemoryAuditAdapter {
               ORDER BY sequence DESC LIMIT 1
            ) latest ON TRUE
           WHERE ($1::uuid IS NULL OR op.operation_id > $1::uuid)
+            AND op.decision = 'allow'
             AND (latest.outcome IS NULL OR latest.outcome IN ('DECISION_RECORDED', 'UNRESOLVED'))
           ORDER BY op.operation_id
           LIMIT $2`,
