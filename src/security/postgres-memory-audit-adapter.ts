@@ -306,7 +306,7 @@ function validateDecisionEvent(event: MemoryAccessDecidedEvent): void {
   }
   for (const field of ["tenantId", "actorId", "moduleId", "namespace", "key", "reason"] as const) {
     const value = event[field];
-    if (typeof value !== "string" || value.length === 0 || value.length > 512 || /[\\u0000-\\u001f\\u007f]/.test(value)) {
+    if (typeof value !== "string" || value.length === 0 || value.length > 512 || /[\u0000-\u001f\u007f-\u009f]/.test(value)) {
       throw new TypeError(`Invalid audit field: ${field}.`);
     }
   }
