@@ -95,7 +95,7 @@ export class PostgresMemoryAuditAdapter {
     let committed = false;
     try {
       await client.query("BEGIN");
-      const inserted = await client.query<{ operation_id: string; recorded_at: Date | string }>(
+      const inserted = await client.query<{ operation_id: string; recorded_at: Date | string; payload_hash: Buffer | Uint8Array }>(
         `INSERT INTO memory_audit_operations
           (operation_id, tenant_id, actor_id, module_id, operation, namespace, key,
            decision, reason, payload_hash)
