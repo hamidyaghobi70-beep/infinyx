@@ -15,7 +15,7 @@ export interface PgQueryResult<Row> {
 export interface PgQueryable {
   query<Row = Record<string, unknown>>(
     text: string,
-    values?: readonly unknown[]
+    values?: unknown[]
   ): Promise<PgQueryResult<Row>>;
 }
 
