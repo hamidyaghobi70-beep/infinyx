@@ -12,7 +12,8 @@ const adapter = new PostgresMemoryAuditAdapter({ pool });
 const ids = {
   duplicate: randomUUID(),
   ambiguous: randomUUID(),
-  concurrent: randomUUID()
+  concurrent: randomUUID(),
+  denied: randomUUID()
 };
 const decision = {
   tenantId: "tenant-integration",
@@ -65,6 +66,26 @@ try {
     [ids.concurrent]
   );
   assert.equal(operationCount.rows[0].count, 1);
+
+  // Outcome appends are idempotent by event ID and follow the allowed state graph.
+  const unresolvedEventId = randomUUID();
+  const unresolved = await adapter.appendOutcome(ids.concurrent, unresolvedEventId, "UNRESOLVED");
+  const unresolvedRetry = await adapter.appendOutcome(ids.concurrent, unresolvedEventId, "UNRESOLVED");
+  assert.equal(unresolved.sequence, "2");
+  assert.equal(unresolved.duplicate, false);
+  assert.equal(unresolvedRetry.duplicate, true);
+  assert.equal((await adapter.getOperation(ids.concurrent)).latestOutcome, "UNRESOLVED");
+
+  const succeeded = await adapter.appendOutcome(ids.concurrent, randomUUID(), "EFFECT_SUCCEEDED");
+  assert.equal(succeeded.sequence, "3");
+  assert.equal((await adapter.getOperation(ids.concurrent)).latestOutcome, "EFFECT_SUCCEEDED");
+
+  // Denied decisions cannot receive memory-effect outcomes.
+  await adapter.recordDecision(ids.denied, { ...decision, decision: "deny" });
+  await assert.rejects(
+    adapter.appendOutcome(ids.denied, randomUUID(), "EFFECT_SUCCEEDED"),
+    /denied memory operation/
+  );
 
   // Simulate the client losing the acknowledgement after PostgreSQL committed.
   let commitAcknowledgementLost = false;
