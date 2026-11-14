@@ -243,6 +243,64 @@ describe("ProcessIsolatedPolicyEngine", () => {
     expect(engine.activeExecutionCount).toBe(0);
   });
 
+  it("retains runtime shutdown as secondary provenance after policy timeout", async () => {
+    let shutdownPromise: Promise<void> | undefined;
+    const engine = new ProcessIsolatedPolicyEngine({
+      moduleUrl: fixtureUrl,
+      timeoutMs: 80,
+      terminationGraceMs: 10,
+      killWaitMs: 500,
+      onStateChange: (event) => {
+        if (event.state === "STOP_REQUESTED" && shutdownPromise === undefined) {
+          // The timeout's STOP_REQUESTED notification is the deterministic
+          // barrier; shutdown is initiated in the same coordinator turn.
+          shutdownPromise = engine.shutdown();
+        }
+      }
+    });
+
+    const result = await engine.evaluateDetailed(request("hang"));
+    await shutdownPromise;
+
+    expect(result.outcome).toBe("TIMED_OUT");
+    expect(result.stopReason).toBe("POLICY_TIMEOUT");
+    expect(result.stopProvenance).toEqual([
+      { code: "POLICY_TIMEOUT", message: "Policy execution timed out." },
+      { code: "RUNTIME_SHUTDOWN", message: "Runtime shutdown cancelled policy execution." }
+    ]);
+    expect(Object.isFrozen(result.stopProvenance)).toBe(true);
+    expect(result.stopProvenance?.every((cause) => Object.isFrozen(cause))).toBe(true);
+    expect(engine.activeExecutionCount).toBe(0);
+  });
+
+  it("retains runtime shutdown provenance when the caller signal is already aborted", async () => {
+    const controller = new AbortController();
+    let shutdownPromise: Promise<void> | undefined;
+    const engine = new ProcessIsolatedPolicyEngine({
+      moduleUrl: fixtureUrl,
+      terminationGraceMs: 10,
+      killWaitMs: 500,
+      onStateChange: (event) => {
+        if (event.state === "STOP_REQUESTED" && shutdownPromise === undefined) {
+          shutdownPromise = engine.shutdown();
+        }
+      }
+    });
+    const evaluation = engine.evaluateDetailed(request("hang"), { signal: controller.signal });
+    controller.abort();
+
+    const result = await evaluation;
+    await shutdownPromise;
+
+    expect(result.outcome).toBe("CANCELLED");
+    expect(result.stopReason).toBe("CALLER_CANCELLED");
+    expect(result.stopProvenance).toEqual([
+      { code: "CALLER_CANCELLED", message: "Policy execution cancelled by caller." },
+      { code: "RUNTIME_SHUTDOWN", message: "Runtime shutdown cancelled policy execution." }
+    ]);
+    expect(engine.activeExecutionCount).toBe(0);
+  });
+
   it("validates aggregate output budget against per-stream budgets", () => {
     expect(() => new ProcessIsolatedPolicyEngine({
       moduleUrl: fixtureUrl,
