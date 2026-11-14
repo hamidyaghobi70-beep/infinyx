@@ -5,6 +5,7 @@ import type {
   PolicyRequest,
   ProtectedOperationCaller,
   ProtectedOperationContext,
+  ProtectedOperationChildContext,
   ProtectedOperationDefinition,
   ProtectedOperationHandle,
   ProtectedOperationPort,
@@ -22,6 +23,68 @@ interface ActiveHandler {
   readonly controller: AbortController;
   readonly settled: Promise<void>;
   readonly settle: () => void;
+  pendingChildren: number;
+  handlerSettled: boolean;
+  childFailed: boolean;
+}
+
+interface ChildActivityScope {
+  open: boolean;
+}
+
+function settleHandlerIfComplete(active: ActiveHandler): void {
+  if (active.handlerSettled && active.pendingChildren === 0) active.settle();
+}
+
+/**
+ * Each child is registered before its callback is invoked. A child scope remains
+ * open until its own task settles, allowing tracked descendants but not late work.
+ */
+function createChildActivityContext(
+  active: ActiveHandler,
+  scope: ChildActivityScope
+): ProtectedOperationChildContext {
+  const runChild = <T>(
+    start: (context: ProtectedOperationChildContext) => T | Promise<T>
+  ): Promise<T> => {
+    if (!scope.open) {
+      return Promise.reject(new Error("Child activity scope is already closed."));
+    }
+
+    active.pendingChildren += 1;
+    const childScope: ChildActivityScope = { open: true };
+    let started: T | Promise<T>;
+    try {
+      started = start(createChildActivityContext(active, childScope));
+    } catch (error) {
+      childScope.open = false;
+      active.childFailed = true;
+      active.pendingChildren -= 1;
+      settleHandlerIfComplete(active);
+      return Promise.reject(error);
+    }
+
+    const tracked = Promise.resolve(started).then(
+      (value) => {
+        childScope.open = false;
+        active.pendingChildren -= 1;
+        settleHandlerIfComplete(active);
+        return value;
+      },
+      (error: unknown) => {
+        childScope.open = false;
+        active.childFailed = true;
+        active.pendingChildren -= 1;
+        settleHandlerIfComplete(active);
+        throw error;
+      }
+    );
+    // Observe detached rejections internally while preserving the caller's promise.
+    void tracked.catch(() => undefined);
+    return tracked;
+  };
+
+  return Object.freeze({ runChild });
 }
 
 interface RegisteredOperation<TInput = unknown, TOutput = unknown> {
@@ -241,21 +304,44 @@ export class ProtectedOperationExecutor implements ProtectedOperationPort {
       const operationId = randomUUID();
       let settle!: () => void;
       const settled = new Promise<void>((resolve) => { settle = resolve; });
-      this.activeHandlers.set(operationId, {
+      const active: ActiveHandler = {
         controller: operationController,
         settled,
-        settle
-      });
+        settle,
+        pendingChildren: 0,
+        handlerSettled: false,
+        childFailed: false
+      };
+      this.activeHandlers.set(operationId, active);
+      const rootScope: ChildActivityScope = { open: true };
+      let value: TOutput | undefined;
+      let handlerFailed = false;
       try {
         // Register before invoking user code; no await separates the final gate,
         // registry insertion, and handler invocation.
-        const value = await registration.handler(input, Object.freeze({
-          operationId, signal: operationController.signal
-        }));
-        return { status: "executed", value };
+        try {
+          value = await registration.handler(input, Object.freeze({
+            operationId,
+            signal: operationController.signal,
+            ...createChildActivityContext(active, rootScope)
+          }));
+        } catch {
+          handlerFailed = true;
+        } finally {
+          // The root scope closes when the handler settles. Already registered
+          // children may finish and register descendants within their own scopes.
+          rootScope.open = false;
+          active.handlerSettled = true;
+          settleHandlerIfComplete(active);
+        }
+
+        await active.settled;
+        if (handlerFailed || active.childFailed) {
+          return { status: "failed", reason: "Protected operation handler or child activity failed." };
+        }
+        return { status: "executed", value: value as TOutput };
       } finally {
         this.activeHandlers.delete(operationId);
-        settle();
       }
     } catch {
       return { status: "failed", reason: "Protected operation handler failed." };
