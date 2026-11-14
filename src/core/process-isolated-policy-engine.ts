@@ -321,7 +321,7 @@ export class ProcessIsolatedPolicyEngine implements PolicyEngine {
     };
 
     const scheduleHardTermination = (): void => {
-      if (!spawned || graceTimer !== undefined || closed || resolved) return;
+      if (!spawned || graceTimer !== undefined || killWaitTimer !== undefined || closed || resolved) return;
       graceTimer = setTimeout(() => {
         graceTimer = undefined;
         if (closed || resolved) return;
