@@ -16,6 +16,16 @@ export default {
       });
     }
 
+    if (request.action === "stdout-boundary") {
+      process.stdout.write(Buffer.alloc(512, 0x41));
+      process.stdout.write(Buffer.alloc(512, 0x42));
+      return { effect: "allow", reason: "Exact output boundary." };
+    }
+    if (request.action === "simultaneous-flood") {
+      process.stdout.write(Buffer.alloc(1100, 0x41));
+      process.stderr.write(Buffer.alloc(1100, 0x42));
+      return { effect: "allow", reason: "Simultaneous output flood." };
+    }
     if (request.action === "aggregate-flood") {
       process.stdout.write(Buffer.alloc(700, 0x41));
       process.stderr.write(Buffer.alloc(700, 0x42));
