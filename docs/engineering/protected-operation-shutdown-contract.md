@@ -103,6 +103,29 @@ The implementation must provide one lifecycle coordination boundary shared by `C
 
 This coordination requirement is necessary because the current `FailClosedPolicyEngine.shutdown()` stops policy intake, requests cancellation, and awaits the delegate's optional `shutdown()` method. However, `evaluate()` races its delegate promise against cancellation and removes its active stop callback when that race settles; this alone does not prove a non-cooperative delegate evaluation has settled. The current executor also has no registry or shutdown method for handlers that have already been admitted.
 
+### 6.3 Public stop() result and stable error semantics
+
+Preserve the existing public method shape, `stop(): Promise<void>`, for source compatibility in this stage. A shutdown that is blocked or unresolved must reject; it must never resolve successfully merely because a deadline elapsed.
+
+Use stable, machine-readable `CoreError.code` values rather than requiring callers to parse error messages:
+
+| Code | Meaning | Cleanup permitted? |
+|---|---|---|
+| `PROTECTED_OPERATION_DRAIN_TIMEOUT` | One or more admitted handlers remain unsettled at the handler-drain deadline | No |
+| `POLICY_EVALUATION_DRAIN_TIMEOUT` | One or more underlying policy evaluations remain unsettled at the policy-drain deadline | No |
+| `POLICY_SHUTDOWN_FAILED` | Policy shutdown rejects before the drain deadline | No |
+| `MODULE_STOP_FAILED` | Existing module cleanup failure after safe cleanup was attempted | Cleanup has been attempted according to dependency rules |
+
+Requirements:
+
+1. Add the new codes to the existing `CoreErrorCode` union; preserve `MODULE_STOP_FAILED` for actual module cleanup failures rather than using it for every shutdown failure.
+2. Keep the original underlying error as `cause` where one exists. Deadline errors must identify the failure category without exposing caller context, secrets, or mutable registry internals.
+3. A handler's own rejected promise is an operation outcome, not by itself a shutdown failure. Once it has settled and terminal bookkeeping is complete, it may be removed from the active registry and safe cleanup may proceed.
+4. A deadline rejection does not settle, discard, or replay the underlying handler/evaluator. It only ends that caller's bounded wait. The underlying work remains tracked.
+5. Concurrent callers during one shutdown attempt share the same in-progress `stop()` promise. After a bounded attempt rejects, a later explicit `stop()` call may wait again on the same unresolved invocations; it must not re-invoke handlers or create duplicate invocation IDs.
+6. The executor and policy wrapper shutdown boundaries must be idempotent. Repeated calls may request/observe the same cancellation and tracked work, but may not duplicate terminal bookkeeping or restart work.
+7. Do not introduce a new successful return union in this compatibility stage. If a future API returns a structured shutdown report, that is a separately versioned compatibility decision.
+
 ## 7. Timeout and retry semantics
 
 - The handler-drain deadline bounds how long one shutdown attempt waits for admitted handlers; it does not terminate JavaScript execution.
@@ -166,7 +189,7 @@ Before implementation, architecture review must explicitly decide:
 
 - Whether the handler context field is renamed from `operationId` to include both `operationId` and `operationDefinitionId`, and how compatibility is handled.
 - The default and configurable drain deadline, and whether zero/unbounded values are prohibited.
-- The public shape of a blocked/unresolved shutdown result (typed result versus rejected `stop()` promise and stable error code).
+- Whether a future major API should expose a structured shutdown report instead of the current `Promise<void>`; this stage preserves `Promise<void>` and uses stable `CoreError.code` rejections.
 - The policy-shutdown deadline and its relationship to the protected-handler drain deadline; neither wait may silently remain unbounded.
 - How cancellation reasons are represented without relying on unsupported runtime-specific behavior, including precedence/provenance when caller, parent, and runtime shutdown cancellation race.
 - Whether a policy delegate's `shutdown()` contract guarantees evaluator termination, or whether the wrapper must independently drain tracked delegate evaluations.
