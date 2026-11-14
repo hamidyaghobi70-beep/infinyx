@@ -5,7 +5,8 @@ const MAX_TOTAL_BYTES = 262_144;
 const MAX_CONTAINER_ENTRIES = 1_000;
 
 function byteLength(value: string): number {
-  return new TextEncoder().encode(value).byteLength;
+  // Buffer.byteLength computes UTF-8 length without allocating an encoded copy.
+  return Buffer.byteLength(value, "utf8");
 }
 
 /** Bounded, getter-free snapshot for untrusted policy input. */
