@@ -86,3 +86,16 @@ INFINYX-ENG-002 §11.1.8 retains the epoch-based meaning of the existing public 
 - No change to `main`.
 - No merge, release, deployment, or activation of Agent/Tool execution.
 - CI success is workflow evidence only; it is not proof of security acceptance.
+
+
+## P32-02 — Immutable stop provenance
+
+The terminal record now carries optional `stopProvenance`: an immutable, deduplicated array of `{ code, message }` entries in first-observed order. The first entry is the primary stop cause and must match `stopReason`; later distinct causes are retained without changing the primary outcome, decision, or terminal bookkeeping. Messages are generated only from the engine's fixed `stopMessage` mapping; arbitrary signal reasons and caller-controlled text are never copied into the record.
+
+Provenance is captured only before Terminal Commitment. Once the execution is committed or returned as unresolved, its record is immutable and later observations cannot rewrite it. Repeated observations of the same stop code do not create duplicate entries.
+
+The acceptance tests cover both:
+- `POLICY_TIMEOUT` followed by `RUNTIME_SHUTDOWN`, with shutdown initiated synchronously from the timeout stop notification;
+- `CALLER_CANCELLED` followed by `RUNTIME_SHUTDOWN`, where shutdown is initiated while the caller signal is already aborted.
+
+Both assert that the primary cause remains unchanged, the later cause is retained, and the execution record's provenance array and entries are frozen. This implements the relevant first-cause/additional-provenance rule in INFINYX-ENG-002 §11.2.4 for causes observed before terminal commitment; it does not claim durable audit storage.
