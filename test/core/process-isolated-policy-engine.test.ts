@@ -415,6 +415,69 @@ describe("ProcessIsolatedPolicyEngine", () => {
     expect(Date.now() - startedAt).toBeLessThan(1_500);
   });
 
+  it("ignores a child error after unresolved commitment and releases its active reference on close", async () => {
+    let child: ChildProcess | undefined;
+    let resolveUnresolved!: () => void;
+    const unresolvedReached = new Promise<void>((resolve) => {
+      resolveUnresolved = resolve;
+    });
+    const observer = stateObserver("RUNNING");
+    const killSpy = vi.spyOn(ChildProcess.prototype, "kill").mockImplementation(
+      function (this: ChildProcess): boolean {
+        child = this;
+        return false;
+      }
+    );
+
+    try {
+      const controller = new AbortController();
+      const engine = new ProcessIsolatedPolicyEngine({
+        moduleUrl: fixtureUrl,
+        timeoutMs: 5_000,
+        terminationGraceMs: 5,
+        killWaitMs: 20,
+        onStateChange: (event) => {
+          observer.onStateChange(event);
+          if (event.state === "UNRESOLVED") resolveUnresolved();
+        }
+      });
+      const evaluation = engine.evaluateDetailed(request("ignore-sigterm"), {
+        signal: controller.signal
+      });
+
+      await observer.reached;
+      controller.abort();
+      await unresolvedReached;
+
+      const result = await evaluation;
+      expect(result.outcome).toBe("UNRESOLVED");
+      expect(result.runtimeStatus).toBe("UNRESOLVED");
+      expect(engine.activeExecutionCount).toBe(1);
+      expect(child).toBeDefined();
+
+      // Simulate a late ChildProcess error after finishUnresolved committed
+      // the immutable record. freezeCandidate must not create a new candidate.
+      child!.emit("error", new Error("synthetic late child error"));
+      expect(result.outcome).toBe("UNRESOLVED");
+      expect(result.decision.reason).toBe(
+        "Policy process termination could not be confirmed; access denied."
+      );
+
+      const closed = new Promise<void>((resolve) => {
+        child!.once("close", () => resolve());
+      });
+      killSpy.mockRestore();
+      child!.kill("SIGKILL");
+      await closed;
+      expect(engine.activeExecutionCount).toBe(0);
+    } finally {
+      killSpy.mockRestore();
+      if (child && child.exitCode === null && child.signalCode === null) {
+        child.kill("SIGKILL");
+      }
+    }
+  });
+
   it("retains capacity when forceful termination cannot be confirmed", async () => {
     const killSpy = vi.spyOn(ChildProcess.prototype, "kill").mockReturnValue(false);
     try {
