@@ -382,61 +382,6 @@ This section defines the required control boundary without overstating what same
 7. The 30,000 ms default remains provisional until load-test evidence and the shutdown-latency objective are recorded in the implementation proposal. Changing the default later requires updating this contract and its deterministic configuration tests.
 
 
-### 11.2.11 ENG002-R11 — Unambiguous sticky recovery and observation-only stop calls
-
-1. Sections 6.3, 6.4, and 7 are active requirements and must be read consistently with the sticky recovery policy in section 11.2.2.
-2. A drain-only timeout with no initiation failure is `DRAIN_PENDING`. A later explicit `stop()` may start a new bounded observation wait over the same retained records. This is observation only: it must not repeat executor shutdown initiation, policy shutdown initiation, delegate shutdown, handler invocation, or evaluator start.
-3. Any executor shutdown initiation throw, policy shutdown initiation throw/rejection, delegate shutdown throw/rejection, or known partial initiation side effect sets sticky `RECOVERY_REQUIRED`. Later `stop()` calls may inspect and report retained state only; they must not retry the failed initiation.
-4. A sticky `RECOVERY_REQUIRED` blocker cannot be cleared by promise settlement alone. No cleanup is eligible while it remains. A recovery action or retry requires a separate explicit Recovery Contract approved through the project's architecture and security review gates.
-5. The terms “retry,” “later attempt,” and “subsequent stop” in active sections refer only to bounded observation of already-initiated work unless an approved Recovery Contract explicitly authorizes a distinct recovery action. They never imply implicit re-invocation.
-6. Acceptance cases 27–31 test sticky recovery and non-reinvocation; they remain specification criteria until separately authorized implementation and execution.
-
-### 11.2.12 ENG002-R12 — Deterministic deadline-configuration acceptance matrix
-
-1. The proposed acceptance suite independently covers: omitted setting/default selection; valid explicit overrides; minimum and maximum accepted integers; zero; negative; fractional; `NaN`; positive and negative `Infinity`; `null`; below-range and above-range numbers; non-number types; and distinction between omission and explicit invalid input.
-2. Every invalid value must be rejected before CoreEngine enters `running`, leave admission closed, return the stable configuration error, and never fall back to an unbounded wait or silently substitute the default.
-3. The effective validated duration and whether it came from the default or an explicit override must be visible in sanitized diagnostics.
-4. The expanded configuration cases are acceptance cases 32–47 in section 10. They are required design criteria, not evidence that tests have been implemented or executed.
-5. Tests must use deterministic typed inputs and must not rely on JSON serialization for values such as `NaN`, infinities, or `undefined`.
-
-### 11.2.13 ENG002-R13 — Evidence plan for the provisional drain-deadline default
-
-1. The 30,000 ms value remains a provisional candidate only. It is not an evidence-backed production default and must not be described as validated until the evidence below is collected and reviewed.
-2. Before implementation acceptance, the implementation proposal must define representative workload profiles, including at minimum: no active operations; typical concurrent handler load; high but supported concurrency; handlers with registered child activities; policy evaluations with realistic delegate latency; cooperative cancellation; and controlled slow/unresolved work.
-3. For each profile, record sample size, runtime and host configuration, concurrency, handler/evaluator/child settlement distributions, shutdown drain latency, timeout frequency, event-loop delay, and observed blocker/error codes. Record warm/cold conditions where they materially affect results.
-4. Before running the benchmark, the product/operations owner must document the shutdown-latency objective and acceptable timeout/error budget for each relevant profile. Do not invent target percentiles or claim that a percentile is acceptable without that prior decision.
-5. Evaluate the 30,000 ms candidate against the predeclared objectives and representative measurements. Retain it only if the evidence meets those objectives without unsafe cleanup, hidden untracked work, or excessive unresolved shutdowns; otherwise propose a revised value and rerun the same reproducible profiles.
-6. Preserve benchmark scripts/configuration, raw measurements, environment details, summary analysis, and reviewer disposition as evidence linked to the implementation proposal. Synthetic unit-test timings are not a substitute for representative load evidence.
-7. The deadline candidate may become a final default only after Haniyeh's architecture acceptance and independent security/quality review of the evidence. Until then, the numeric default remains provisional.
-
-### 11.2.11 ENG002-R11 — Unambiguous sticky recovery and observation-only stop calls
-
-1. Sections 6.3, 6.4, and 7 are active requirements and must be read consistently with the sticky recovery policy in section 11.2.2.
-2. A drain-only timeout with no initiation failure is `DRAIN_PENDING`. A later explicit `stop()` may start a new bounded observation wait over the same retained records. This is observation only: it must not repeat executor shutdown initiation, policy shutdown initiation, delegate shutdown, handler invocation, or evaluator start.
-3. Any executor shutdown initiation throw, policy shutdown initiation throw/rejection, delegate shutdown throw/rejection, or known partial initiation side effect sets sticky `RECOVERY_REQUIRED`. Later `stop()` calls may inspect and report retained state only; they must not retry the failed initiation.
-4. A sticky `RECOVERY_REQUIRED` blocker cannot be cleared by promise settlement alone. No cleanup is eligible while it remains. A recovery action or retry requires a separate explicit Recovery Contract approved through the project's architecture and security review gates.
-5. The terms “retry,” “later attempt,” and “subsequent stop” in active sections refer only to bounded observation of already-initiated work unless an approved Recovery Contract explicitly authorizes a distinct recovery action. They never imply implicit re-invocation.
-6. Acceptance cases 27–31 test sticky recovery and non-reinvocation; they remain specification criteria until separately authorized implementation and execution.
-
-### 11.2.12 ENG002-R12 — Deterministic deadline-configuration acceptance matrix
-
-1. The proposed acceptance suite independently covers: omitted setting/default selection; valid explicit overrides; minimum and maximum accepted integers; zero; negative; fractional; `NaN`; positive and negative `Infinity`; `null`; below-range and above-range numbers; non-number types; and distinction between omission and explicit invalid input.
-2. Every invalid value must be rejected before CoreEngine enters `running`, leave admission closed, return the stable configuration error, and never fall back to an unbounded wait or silently substitute the default.
-3. The effective validated duration and whether it came from the default or an explicit override must be visible in sanitized diagnostics.
-4. The expanded configuration cases are acceptance cases 32–47 in section 10. They are required design criteria, not evidence that tests have been implemented or executed.
-5. Tests must use deterministic typed inputs and must not rely on JSON serialization for values such as `NaN`, infinities, or `undefined`.
-
-### 11.2.13 ENG002-R13 — Evidence plan for the provisional drain-deadline default
-
-1. The 30,000 ms value remains a provisional candidate only. It is not an evidence-backed production default and must not be described as validated until the evidence below is collected and reviewed.
-2. Before implementation acceptance, the implementation proposal must define representative workload profiles, including at minimum: no active operations; typical concurrent handler load; high but supported concurrency; handlers with registered child activities; policy evaluations with realistic delegate latency; cooperative cancellation; and controlled slow/unresolved work.
-3. For each profile, record sample size, runtime and host configuration, concurrency, handler/evaluator/child settlement distributions, shutdown drain latency, timeout frequency, event-loop delay, and observed blocker/error codes. Record warm/cold conditions where they materially affect results.
-4. Before running the benchmark, the product/operations owner must document the shutdown-latency objective and acceptable timeout/error budget for each relevant profile. Do not invent target percentiles or claim that a percentile is acceptable without that prior decision.
-5. Evaluate the 30,000 ms candidate against the predeclared objectives and representative measurements. Retain it only if the evidence meets those objectives without unsafe cleanup, hidden untracked work, or excessive unresolved shutdowns; otherwise propose a revised value and rerun the same reproducible profiles.
-6. Preserve benchmark scripts/configuration, raw measurements, environment details, summary analysis, and reviewer disposition as evidence linked to the implementation proposal. Synthetic unit-test timings are not a substitute for representative load evidence.
-7. The deadline candidate may become a final default only after Haniyeh's architecture acceptance and independent security/quality review of the evidence. Until then, the numeric default remains provisional.
-
-
 ### 11.2.10 ENG002-R10 — Normative precedence and document authority
 
 1. Section 11 and section 11.1 are historical decision records only. They preserve earlier proposals and review questions; they are not active decision gates.
@@ -445,4 +390,32 @@ This section defines the required control boundary without overstating what same
 4. The Recovery policy is sticky `RECOVERY_REQUIRED`; no implicit re-invocation is permitted. A retry can be authorized only by a separately reviewed and approved Recovery Contract.
 5. The 51 acceptance cases are proposed specification criteria, not evidence of implementation or executed tests. Cases 27–31 cover sticky recovery; cases 32–47 cover deadline configuration; cases 48–51 cover capability, deadline scheduling, cancellation competition, and partial initiation failure.
 6. References elsewhere in this document to pending decisions, recommended resolutions, or the former architecture-acceptance request are historical only and must not override the current decisions recorded in section 11.2.
+
+
+### 11.2.11 ENG002-R11 — Unambiguous sticky recovery and observation-only stop calls
+
+1. Sections 6.3, 6.4, and 7 are active requirements and must be read consistently with the sticky recovery policy in section 11.2.2.
+2. A drain-only timeout with no initiation failure is `DRAIN_PENDING`. A later explicit `stop()` may start a new bounded observation wait over the same retained records. This is observation only: it must not repeat executor shutdown initiation, policy shutdown initiation, delegate shutdown, handler invocation, or evaluator start.
+3. Any executor shutdown initiation throw, policy shutdown initiation throw/rejection, delegate shutdown throw/rejection, or known partial initiation side effect sets sticky `RECOVERY_REQUIRED`. Later `stop()` calls may inspect and report retained state only; they must not retry the failed initiation.
+4. A sticky `RECOVERY_REQUIRED` blocker cannot be cleared by promise settlement alone. No cleanup is eligible while it remains. A recovery action or retry requires a separate explicit Recovery Contract approved through the project's architecture and security review gates.
+5. The terms “retry,” “later attempt,” and “subsequent stop” in active sections refer only to bounded observation of already-initiated work unless an approved Recovery Contract explicitly authorizes a distinct recovery action. They never imply implicit re-invocation.
+6. Acceptance cases 27–31 test sticky recovery and non-reinvocation; they remain specification criteria until separately authorized implementation and execution.
+
+### 11.2.12 ENG002-R12 — Deterministic deadline-configuration acceptance matrix
+
+1. The proposed acceptance suite independently covers: omitted setting/default selection; valid explicit overrides; minimum and maximum accepted integers; zero; negative; fractional; `NaN`; positive and negative `Infinity`; `null`; below-range and above-range numbers; non-number types; and distinction between omission and explicit invalid input.
+2. Every invalid value must be rejected before CoreEngine enters `running`, leave admission closed, return the stable configuration error, and never fall back to an unbounded wait or silently substitute the default.
+3. The effective validated duration and whether it came from the default or an explicit override must be visible in sanitized diagnostics.
+4. The expanded configuration cases are acceptance cases 32–47 in section 10. They are required design criteria, not evidence that tests have been implemented or executed.
+5. Tests must use deterministic typed inputs and must not rely on JSON serialization for values such as `NaN`, infinities, or `undefined`.
+
+### 11.2.13 ENG002-R13 — Evidence plan for the provisional drain-deadline default
+
+1. The 30,000 ms value remains a provisional candidate only. It is not an evidence-backed production default and must not be described as validated until the evidence below is collected and reviewed.
+2. Before implementation acceptance, the implementation proposal must define representative workload profiles, including at minimum: no active operations; typical concurrent handler load; high but supported concurrency; handlers with registered child activities; policy evaluations with realistic delegate latency; cooperative cancellation; and controlled slow/unresolved work.
+3. For each profile, record sample size, runtime and host configuration, concurrency, handler/evaluator/child settlement distributions, shutdown drain latency, timeout frequency, event-loop delay, and observed blocker/error codes. Record warm/cold conditions where they materially affect results.
+4. Before running the benchmark, the product/operations owner must document the shutdown-latency objective and acceptable timeout/error budget for each relevant profile. Do not invent target percentiles or claim that a percentile is acceptable without that prior decision.
+5. Evaluate the 30,000 ms candidate against the predeclared objectives and representative measurements. Retain it only if the evidence meets those objectives without unsafe cleanup, hidden untracked work, or excessive unresolved shutdowns; otherwise propose a revised value and rerun the same reproducible profiles.
+6. Preserve benchmark scripts/configuration, raw measurements, environment details, summary analysis, and reviewer disposition as evidence linked to the implementation proposal. Synthetic unit-test timings are not a substitute for representative load evidence.
+7. The deadline candidate may become a final default only after Haniyeh's architecture acceptance and independent security/quality review of the evidence. Until then, the numeric default remains provisional.
 
