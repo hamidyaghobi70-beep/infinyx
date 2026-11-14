@@ -118,6 +118,20 @@ describe("ProcessIsolatedPolicyEngine", () => {
     expect(engine.activeExecutionCount).toBe(0);
   });
 
+  it("force-terminates an evaluator that ignores SIGTERM", async () => {
+    const engine = new ProcessIsolatedPolicyEngine({
+      moduleUrl: fixtureUrl,
+      timeoutMs: 100,
+      terminationGraceMs: 30,
+      killWaitMs: 1_000
+    });
+    const result = await engine.evaluateDetailed(request("ignore-sigterm"));
+    expect(result.outcome).toBe("TIMED_OUT");
+    expect(result.runtimeStatus).toBe("STOPPED");
+    expect(result.cleanupStatus).toBe("COMPLETED");
+    expect(engine.activeExecutionCount).toBe(0);
+  });
+
   it("propagates parent cancellation as a distinct stop reason", async () => {
     const observer = stateObserver("RUNNING");
     const engine = new ProcessIsolatedPolicyEngine({
