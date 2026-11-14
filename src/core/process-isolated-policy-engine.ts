@@ -1,6 +1,7 @@
 import { existsSync } from "node:fs";
 import { fork } from "node:child_process";
 import { randomUUID } from "node:crypto";
+import { observePolicyOutputStream } from "./policy-output-stream.js";
 import { dirname, isAbsolute, join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import type {
@@ -397,10 +398,16 @@ export class ProcessIsolatedPolicyEngine implements PolicyEngine {
       totalOutputBytes += bytes;
     };
 
-    child.stdout?.on("data", (chunk: Buffer | string) => observeOutput("stdout", chunk));
-    child.stderr?.on("data", (chunk: Buffer | string) => observeOutput("stderr", chunk));
-    child.stdout?.on("error", () => requestOutputStop("OUTPUT_STREAM_FAILED"));
-    child.stderr?.on("error", () => requestOutputStop("OUTPUT_STREAM_FAILED"));
+    observePolicyOutputStream(
+      child.stdout,
+      (chunk) => observeOutput("stdout", chunk),
+      requestOutputStop
+    );
+    observePolicyOutputStream(
+      child.stderr,
+      (chunk) => observeOutput("stderr", chunk),
+      requestOutputStop
+    );
 
     const freezeCandidate = (next: Candidate): void => {
       if (candidateFrozen || resolved || closed) return;
