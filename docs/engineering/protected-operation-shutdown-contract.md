@@ -209,6 +209,7 @@ The implementation is not acceptable without deterministic tests covering at lea
 25. When multiple blockers coexist at the shared deadline, the primary stable error code follows section 11.1 precedence and immutable sanitized details include every blocker observed at that deadline.
 26. If delegate policy shutdown rejects while handlers remain active, the attempt rejects with the policy-shutdown failure, module cleanup remains blocked, and a later explicit attempt observes the same tracked work without replay or duplicate terminal bookkeeping.
 
+27. A delegate shutdown rejection follows the architecture-approved recovery rule: a later explicit stop observation must neither silently re-invoke delegate shutdown nor claim completion without evidence that policy shutdown is complete.
 Tests must use controlled promises/signals rather than relying on arbitrary sleeps.
 
 ## 11. API and compatibility decisions still required
@@ -221,6 +222,7 @@ Before implementation, architecture review must explicitly decide:
 - The recommended relationship is one shared monotonic drain deadline, as detailed in section 11.1; Haniyeh must explicitly accept or amend this model before implementation. Neither handler nor policy drain may silently remain unbounded.
 - How cancellation reasons are represented without relying on unsupported runtime-specific behavior, including precedence/provenance when caller, parent, and runtime shutdown cancellation race.
 - Whether a policy delegate's `shutdown()` contract guarantees evaluator termination, or whether the wrapper must independently drain tracked delegate evaluations.
+- What recovery semantics apply if the delegate's own `shutdown()` promise rejects: sticky terminal failure, a separately authorized idempotent retry, or another explicit recovery contract. A later `CoreEngine.stop()` observation must not silently re-invoke a potentially side-effecting delegate shutdown.
 - How active-operation tracking is exposed to diagnostics without exposing mutable internal state.
 - How a permanently non-cooperative handler is handled operationally without silently cleaning up its dependencies.
 
