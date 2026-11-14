@@ -150,7 +150,17 @@ export interface ProtectedOperationHandle<TInput = unknown, TOutput = unknown> {
   readonly id: string;
 }
 
-export interface ProtectedOperationContext {
+/**
+ * A scoped capability for registering asynchronous child work before it starts.
+ * Child scopes may register descendants only while their own task is still active.
+ */
+export interface ProtectedOperationChildContext {
+  runChild<T>(
+    start: (context: ProtectedOperationChildContext) => T | Promise<T>
+  ): Promise<T>;
+}
+
+export interface ProtectedOperationContext extends ProtectedOperationChildContext {
   readonly operationId: string;
   readonly signal: AbortSignal;
 }

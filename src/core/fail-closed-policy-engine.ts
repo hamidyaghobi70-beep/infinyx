@@ -119,6 +119,8 @@ function reasonFromSignal(signal: AbortSignal, fallback: PolicyStopReason): Poli
 export class FailClosedPolicyEngine implements PolicyEngine {
   private shuttingDown = false;
   private readonly activeStops = new Set<(reason: PolicyStopReason) => void>();
+  private readonly activeEvaluations = new Set<Promise<unknown>>();
+  private shutdownPromise: Promise<void> | undefined;
 
   constructor(
     private readonly delegate: PolicyEngine,
@@ -208,6 +210,11 @@ export class FailClosedPolicyEngine implements PolicyEngine {
           candidateFrozen = true;
           return decision;
         });
+      this.activeEvaluations.add(evaluation);
+      void evaluation.then(
+        () => { this.activeEvaluations.delete(evaluation); },
+        () => { this.activeEvaluations.delete(evaluation); }
+      );
       const result = await Promise.race([evaluation, aborted]);
       if (stopReason !== undefined) return deny(cancellationMessage(stopReason));
       return result ?? deny("Policy evaluator returned an invalid decision; access denied.");
@@ -227,9 +234,28 @@ export class FailClosedPolicyEngine implements PolicyEngine {
     }
   }
 
-  async shutdown(): Promise<void> {
+  shutdown(): Promise<void> {
+    if (this.shutdownPromise) return this.shutdownPromise;
     this.shuttingDown = true;
     for (const stop of [...this.activeStops]) stop("RUNTIME_SHUTDOWN");
-    await this.delegate.shutdown?.();
+
+    let delegateShutdown: Promise<void>;
+    try {
+      delegateShutdown = Promise.resolve(this.delegate.shutdown?.());
+    } catch (error) {
+      this.shutdownPromise = Promise.reject(error);
+      return this.shutdownPromise;
+    }
+
+    // The wrapper's cancellation race is not proof that delegate work settled.
+    // Retain the underlying evaluation promises until they actually settle.
+    const evaluations = [...this.activeEvaluations].map((evaluation) =>
+      evaluation.then(() => undefined, () => undefined)
+    );
+    this.shutdownPromise = Promise.all([
+      delegateShutdown,
+      Promise.all(evaluations).then(() => undefined)
+    ]).then(() => undefined);
+    return this.shutdownPromise;
   }
 }

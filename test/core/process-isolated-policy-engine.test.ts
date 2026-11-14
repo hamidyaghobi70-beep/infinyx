@@ -118,6 +118,20 @@ describe("ProcessIsolatedPolicyEngine", () => {
     expect(engine.activeExecutionCount).toBe(0);
   });
 
+  it("force-terminates an evaluator that ignores SIGTERM", async () => {
+    const engine = new ProcessIsolatedPolicyEngine({
+      moduleUrl: fixtureUrl,
+      timeoutMs: 100,
+      terminationGraceMs: 30,
+      killWaitMs: 1_000
+    });
+    const result = await engine.evaluateDetailed(request("ignore-sigterm"));
+    expect(result.outcome).toBe("TIMED_OUT");
+    expect(result.runtimeStatus).toBe("STOPPED");
+    expect(result.cleanupStatus).toBe("COMPLETED");
+    expect(engine.activeExecutionCount).toBe(0);
+  });
+
   it("propagates parent cancellation as a distinct stop reason", async () => {
     const observer = stateObserver("RUNNING");
     const engine = new ProcessIsolatedPolicyEngine({
@@ -179,6 +193,27 @@ describe("ProcessIsolatedPolicyEngine", () => {
     expect(result.decision.effect).toBe("deny");
     expect(result.runtimeStatus).toBe("STOPPED");
     expect(engine.activeExecutionCount).toBe(0);
+  });
+
+  it("does not expose evaluator exception messages in public decisions", async () => {
+    const engine = new ProcessIsolatedPolicyEngine({ moduleUrl: fixtureUrl });
+    const result = await engine.evaluateDetailed(request("sensitive-error"));
+    expect(result.outcome).toBe("FAILED");
+    expect(result.decision).toEqual({
+      effect: "deny",
+      reason: "Policy evaluator process failed; access denied."
+    });
+    expect(result.decision.reason).not.toContain("PRIVATE_EVALUATOR_DETAIL");
+  });
+
+  it("does not expose child stderr when the evaluator exits unexpectedly", async () => {
+    const engine = new ProcessIsolatedPolicyEngine({ moduleUrl: fixtureUrl });
+    const result = await engine.evaluateDetailed(request("crash"));
+    expect(result.outcome).toBe("FAILED");
+    expect(result.decision.reason).toBe(
+      "Policy evaluator process exited without a valid result; access denied."
+    );
+    expect(result.decision.reason).not.toContain("PRIVATE_STDERR_DETAIL");
   });
 
   it("enforces the configured concurrent process capacity", async () => {

@@ -75,7 +75,7 @@ async function execute(message: EvaluateMessage): Promise<void> {
   } catch (error) {
     sendFinal({
       type: "error",
-      message: error instanceof Error ? error.message : "Policy evaluator failed."
+      message: "Policy evaluator failed."
     });
   }
 }

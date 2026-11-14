@@ -364,12 +364,34 @@ describe("ProtectedOperationExecutor", () => {
   });
 
 
-  it("keeps an already-admitted handler in flight during shutdown without claiming cancellation", async () => {
+  it("assigns distinct invocation IDs to repeated executions of one registration", async () => {
+    const { engine, operation, handler } = makeEngine();
+    await ensureStarted(engine);
+    await engine.protectedOperations.execute(operation, { actorId: "first" }, { value: "one" });
+    await engine.protectedOperations.execute(operation, { actorId: "second" }, { value: "two" });
+    const firstContext = handler.mock.calls[0]?.[1];
+    const secondContext = handler.mock.calls[1]?.[1];
+    expect(firstContext?.operationId).toMatch(
+      /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
+    );
+    expect(secondContext?.operationId).toMatch(
+      /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
+    );
+    expect(firstContext?.operationId).not.toBe(secondContext?.operationId);
+  });
+
+  it("drains an admitted handler before allowing module cleanup", async () => {
     let release!: (value: string) => void;
     let signalHandlerStarted!: () => void;
     const handlerStarted = new Promise<void>((resolve) => { signalHandlerStarted = resolve; });
     let handlerSignal: AbortSignal | undefined;
+    let moduleStopped = false;
     const engine = new CoreEngine({ policy: { evaluate: async () => allow } });
+    engine.register({
+      id: "resource-owner",
+      version: "1.0.0",
+      stop: () => { moduleStopped = true; }
+    });
     const handler = vi.fn((_input: string, context: { operationId: string; signal: AbortSignal }) => {
       handlerSignal = context.signal;
       signalHandlerStarted();
@@ -387,10 +409,135 @@ describe("ProtectedOperationExecutor", () => {
     await handlerStarted;
     expect(handler).toHaveBeenCalledTimes(1);
     const stopping = engine.stop();
-    await stopping;
-    expect(handlerSignal?.aborted).toBe(false);
+    expect(handlerSignal?.aborted).toBe(true);
+    expect(moduleStopped).toBe(false);
     release("completed");
+    await stopping;
+    expect(moduleStopped).toBe(true);
     expect(await pending).toEqual({ status: "executed", value: "completed" });
+  });
+
+
+  it("waits for every concurrently admitted handler before module cleanup", async () => {
+    const releases = new Map<string, (value: string) => void>();
+    const started = new Set<string>();
+    let signalStarted!: () => void;
+    const allStarted = new Promise<void>((resolve) => { signalStarted = resolve; });
+    let moduleStops = 0;
+    const engine = new CoreEngine({ policy: { evaluate: async () => allow } });
+    engine.register({
+      id: "concurrent-resource-owner",
+      version: "1.0.0",
+      stop: () => { moduleStops += 1; }
+    });
+    const operation = engine.registerProtectedOperation({
+      id: "records.concurrent",
+      action: "record.write",
+      resource: "record:concurrent",
+      validateInput: (value: unknown): value is string => typeof value === "string",
+      handler: (value) => new Promise<string>((resolve) => {
+        releases.set(value, resolve);
+        started.add(value);
+        if (started.size === 2) signalStarted();
+      })
+    });
+    await ensureStarted(engine);
+    const first = engine.protectedOperations.execute(
+      operation, { actorId: "concurrent-first" }, "first"
+    );
+    const second = engine.protectedOperations.execute(
+      operation, { actorId: "concurrent-second" }, "second"
+    );
+    await allStarted;
+
+    const stopping = engine.stop();
+    expect(moduleStops).toBe(0);
+    releases.get("first")?.("first-done");
+    await Promise.resolve();
+    expect(moduleStops).toBe(0);
+
+    releases.get("second")?.("second-done");
+    await stopping;
+    expect(await first).toEqual({ status: "executed", value: "first-done" });
+    expect(await second).toEqual({ status: "executed", value: "second-done" });
+    expect(moduleStops).toBe(1);
+  });
+
+  it("blocks cleanup after a handler drain deadline and observes late settlement without replay", async () => {
+    let release!: (value: string) => void;
+    let signalHandlerStarted!: () => void;
+    const handlerStarted = new Promise<void>((resolve) => { signalHandlerStarted = resolve; });
+    let handlerCalls = 0;
+    let moduleStops = 0;
+    const engine = new CoreEngine({
+      policy: { evaluate: async () => allow },
+      protectedOperationShutdown: { drainDeadlineMs: 5 }
+    });
+    engine.register({
+      id: "resource-owner",
+      version: "1.0.0",
+      stop: () => { moduleStops += 1; }
+    });
+    const operation = engine.registerProtectedOperation({
+      id: "records.pending",
+      action: "record.write",
+      resource: "record:pending",
+      validateInput: (value: unknown): value is string => typeof value === "string",
+      handler: () => {
+        handlerCalls += 1;
+        signalHandlerStarted();
+        return new Promise<string>((resolve) => { release = resolve; });
+      }
+    });
+    await ensureStarted(engine);
+    const pending = engine.protectedOperations.execute(operation, { actorId: "pending" }, "work");
+    await handlerStarted;
+    await expect(engine.stop()).rejects.toMatchObject({
+      code: "PROTECTED_OPERATION_DRAIN_TIMEOUT"
+    });
+    expect(moduleStops).toBe(0);
+    release("late-completion");
+    await pending;
+    await engine.stop();
+    expect(handlerCalls).toBe(1);
+    expect(moduleStops).toBe(1);
+  });
+
+  it("keeps an unresolved delegate evaluation tracked after wrapper cancellation", async () => {
+    let release!: (decision: typeof allow) => void;
+    let moduleStops = 0;
+    const engine = new CoreEngine({
+      policy: {
+        evaluate: () => new Promise((resolve) => { release = resolve; })
+      },
+      policyTimeoutMs: 5_000,
+      protectedOperationShutdown: { drainDeadlineMs: 5 }
+    });
+    engine.register({
+      id: "policy-resource",
+      version: "1.0.0",
+      stop: () => { moduleStops += 1; }
+    });
+    const operation = engine.registerProtectedOperation({
+      id: "records.policy-pending",
+      action: "record.read",
+      resource: "record:policy-pending",
+      validateInput: (value: unknown): value is string => typeof value === "string",
+      handler: (value) => value
+    });
+    await ensureStarted(engine);
+    const pending = engine.protectedOperations.execute(
+      operation, { actorId: "policy-pending" }, "value"
+    );
+    await Promise.resolve();
+    await expect(engine.stop()).rejects.toMatchObject({
+      code: "POLICY_EVALUATION_DRAIN_TIMEOUT"
+    });
+    expect(moduleStops).toBe(0);
+    release(allow);
+    expect(await pending).toMatchObject({ status: "denied" });
+    await engine.stop();
+    expect(moduleStops).toBe(1);
   });
 
   it("fails closed for non-cloneable context values before PolicyEngine", async () => {
@@ -436,6 +583,119 @@ describe("ProtectedOperationExecutor", () => {
     expect(result).toMatchObject({ status: "denied" });
     expect(evaluatorSignal?.aborted).toBe(true);
     expect(handler).not.toHaveBeenCalled();
+  });
+
+
+  it("drains detached and nested child activities before module cleanup", async () => {
+    let releaseNested!: () => void;
+    let signalNestedStarted!: () => void;
+    const nestedStarted = new Promise<void>((resolve) => { signalNestedStarted = resolve; });
+    let moduleStops = 0;
+    const engine = new CoreEngine({ policy: { evaluate: async () => allow } });
+    engine.register({
+      id: "child-resource-owner",
+      version: "1.0.0",
+      stop: () => { moduleStops += 1; }
+    });
+    const operation = engine.registerProtectedOperation({
+      id: "records.child-activity",
+      action: "record.write",
+      resource: "record:child-activity",
+      validateInput: (value: unknown): value is string => typeof value === "string",
+      handler: (_value, context) => {
+        // Deliberately detached: the operation scope, not the handler's await
+        // chain, owns this work and its nested descendant.
+        void context.runChild(async (childContext) => {
+          await childContext.runChild(() => new Promise<void>((resolve) => {
+            releaseNested = resolve;
+            signalNestedStarted();
+          }));
+        });
+        return "handler-returned";
+      }
+    });
+    await ensureStarted(engine);
+    const pending = engine.protectedOperations.execute(
+      operation, { actorId: "child-activity" }, "work"
+    );
+    await nestedStarted;
+
+    const stopping = engine.stop();
+    expect(moduleStops).toBe(0);
+    releaseNested();
+    await stopping;
+
+    expect(await pending).toEqual({ status: "executed", value: "handler-returned" });
+    expect(moduleStops).toBe(1);
+  });
+
+  it("reports detached child failure only after the child settles", async () => {
+    let rejectChild!: (error: Error) => void;
+    let signalChildStarted!: () => void;
+    const childStarted = new Promise<void>((resolve) => { signalChildStarted = resolve; });
+    let moduleStops = 0;
+    const engine = new CoreEngine({ policy: { evaluate: async () => allow } });
+    engine.register({
+      id: "child-failure-resource",
+      version: "1.0.0",
+      stop: () => { moduleStops += 1; }
+    });
+    const operation = engine.registerProtectedOperation({
+      id: "records.child-failure",
+      action: "record.write",
+      resource: "record:child-failure",
+      validateInput: (value: unknown): value is string => typeof value === "string",
+      handler: (_value, context) => {
+        void context.runChild(() => new Promise<void>((_resolve, reject) => {
+          rejectChild = reject;
+          signalChildStarted();
+        }));
+        return "handler-returned";
+      }
+    });
+    await ensureStarted(engine);
+    const pending = engine.protectedOperations.execute(
+      operation, { actorId: "child-failure" }, "work"
+    );
+    await childStarted;
+
+    const stopping = engine.stop();
+    expect(moduleStops).toBe(0);
+    rejectChild(new Error("private child failure detail"));
+    await stopping;
+
+    expect(await pending).toEqual({
+      status: "failed",
+      reason: "Protected operation handler or child activity failed."
+    });
+    expect(moduleStops).toBe(1);
+  });
+
+
+  it("closes child registration scopes when their owning task settles", async () => {
+    let capturedContext: import("../../src/core/contracts.js").ProtectedOperationChildContext | undefined;
+    let lateChildStarted = false;
+    const { engine, operation } = makeEngine(async () => allow);
+    const scopedOperation = engine.registerProtectedOperation({
+      id: "records.closed-child-scope",
+      action: "record.write",
+      resource: "record:closed-child-scope",
+      validateInput: (value: unknown): value is string => typeof value === "string",
+      handler: (_value, context) => {
+        capturedContext = context;
+        return "finished";
+      }
+    });
+    await ensureStarted(engine);
+    const result = await engine.protectedOperations.execute(
+      scopedOperation, { actorId: "closed-child-scope" }, "work"
+    );
+    expect(result).toEqual({ status: "executed", value: "finished" });
+    await expect(capturedContext?.runChild(() => {
+      lateChildStarted = true;
+    })).rejects.toThrow("Child activity scope is already closed.");
+    expect(lateChildStarted).toBe(false);
+    await engine.stop();
   });
 
 
