@@ -55,10 +55,18 @@ export class CoreEngine {
   private executorDrainPromise: Promise<void> | undefined;
   private policyShutdownPromise: Promise<void> | undefined;
   private shutdownInitiationFailure: CoreError | undefined;
+  private policyShutdownSettled = false;
   private readonly moduleMemory = new Map<string, GuardedMemoryPort>();
 
   constructor(private readonly options: CoreEngineOptions = {}) {
     const shutdownConfig = options.protectedOperationShutdown;
+    if (shutdownConfig !== undefined &&
+        (typeof shutdownConfig !== "object" || shutdownConfig === null)) {
+      throw new CoreError(
+        "PROTECTED_OPERATION_SHUTDOWN_CONFIG_INVALID",
+        "Protected-operation shutdown configuration is invalid."
+      );
+    }
     const hasExplicitDrainDeadline = shutdownConfig !== undefined &&
       Object.prototype.hasOwnProperty.call(shutdownConfig, "drainDeadlineMs");
     const configuredDrainDeadline = shutdownConfig?.drainDeadlineMs;
@@ -274,8 +282,10 @@ export class CoreEngine {
           "Policy runtime shutdown failed.",
           { cause: error }
         );
-        this.shutdownInitiationFailure ??= failure;
+        this.shutdownInitiationFailure = failure;
         throw failure;
+      }).then(() => {
+        this.policyShutdownSettled = true;
       });
     } catch (error) {
       const failure = new CoreError(
@@ -283,7 +293,7 @@ export class CoreEngine {
         "Policy runtime shutdown initiation failed.",
         { cause: error }
       );
-      this.shutdownInitiationFailure ??= failure;
+      this.shutdownInitiationFailure = failure;
       this.policyShutdownPromise = Promise.reject(failure);
       void this.policyShutdownPromise.catch(() => undefined);
     }
@@ -309,9 +319,9 @@ export class CoreEngine {
       // The absolute monotonic deadline is authoritative even if timer delivery
       // was delayed by a busy event loop.
       if (!completed || performance.now() >= deadline) {
-        const code = this.protectedOperationExecutor.activeHandlerCount > 0
-          ? "PROTECTED_OPERATION_DRAIN_TIMEOUT"
-          : "POLICY_EVALUATION_DRAIN_TIMEOUT";
+        const code = !this.policyShutdownSettled
+          ? "POLICY_EVALUATION_DRAIN_TIMEOUT"
+          : "PROTECTED_OPERATION_DRAIN_TIMEOUT";
         throw new CoreError(
           code,
           code === "PROTECTED_OPERATION_DRAIN_TIMEOUT"
