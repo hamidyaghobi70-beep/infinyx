@@ -48,7 +48,9 @@ function createChildActivityContext(
     start: (context: ProtectedOperationChildContext) => T | Promise<T>
   ): Promise<T> => {
     if (!scope.open) {
-      return Promise.reject(new Error("Child activity scope is already closed."));
+      const rejected = Promise.reject<T>(new Error("Child activity scope is already closed."));
+      void rejected.catch(() => undefined);
+      return rejected;
     }
 
     active.pendingChildren += 1;
