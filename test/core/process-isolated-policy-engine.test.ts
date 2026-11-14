@@ -414,12 +414,14 @@ describe("ProcessIsolatedPolicyEngine", () => {
     const observer = stateObserver("FINALIZING");
     const engine = new ProcessIsolatedPolicyEngine({
       moduleUrl: fixtureUrl,
-      timeoutMs: 100,
+      timeoutMs: 1_500,
       terminationGraceMs: 10,
       killWaitMs: 500,
       onStateChange: observer.onStateChange
     });
-    const result = await engine.evaluateDetailed(request("allow-with-active-handle"));
+    const evaluation = engine.evaluateDetailed(request("allow-with-active-handle"));
+    await observer.reached;
+    const result = await evaluation;
     expect(result.outcome).toBe("TIMED_OUT");
     expect(result.stopReason).toBe("POLICY_TIMEOUT");
     expect(result.decision.effect).toBe("deny");
