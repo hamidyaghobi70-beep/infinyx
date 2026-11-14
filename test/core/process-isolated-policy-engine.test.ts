@@ -817,4 +817,71 @@ describe("ProcessIsolatedPolicyEngine", () => {
     expect(result.decision.reason).not.toContain("PRIVATE_TOKEN");
   });
 
+
+  it("lets timeout veto a frozen allow when the deadline barrier precedes child close", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    try {
+      const observer = stateObserver("FINALIZING");
+      const engine = new ProcessIsolatedPolicyEngine({
+        moduleUrl: fixtureUrl,
+        timeoutMs: 100,
+        terminationGraceMs: 10,
+        killWaitMs: 500,
+        onStateChange: observer.onStateChange
+      });
+      const evaluation = engine.evaluateDetailed(request("allow-with-active-handle"));
+
+      // Candidate Freeze is the barrier. Advance the parent deadline only
+      // after the allow candidate exists and the child is still held open.
+      await observer.reached;
+      expect(engine.activeExecutionCount).toBe(1);
+      await vi.advanceTimersByTimeAsync(100);
+      await vi.advanceTimersByTimeAsync(10);
+
+      const result = await evaluation;
+      expect(result.outcome).toBe("TIMED_OUT");
+      expect(result.stopReason).toBe("POLICY_TIMEOUT");
+      expect(result.decision.effect).toBe("deny");
+      expect(observer.states).not.toContain("AUTHORIZED");
+      expect(engine.activeExecutionCount).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("commits a frozen allow when the child-close barrier precedes the deadline", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    try {
+      const finalizing = stateObserver("FINALIZING");
+      const terminal = stateObserver("TERMINAL");
+      const states: string[] = [];
+      const engine = new ProcessIsolatedPolicyEngine({
+        moduleUrl: fixtureUrl,
+        timeoutMs: 100,
+        onStateChange: (event) => {
+          states.push(event.state);
+          finalizing.onStateChange(event);
+          terminal.onStateChange(event);
+        }
+      });
+      const evaluation = engine.evaluateDetailed(request());
+
+      // Wait for Candidate Freeze and then the actual close-time commitment
+      // before releasing the still-pending deadline timer.
+      await finalizing.reached;
+      await terminal.reached;
+      const result = await evaluation;
+      await vi.advanceTimersByTimeAsync(1_000);
+
+      expect(result.outcome).toBe("COMPLETED");
+      expect(result.decision.effect).toBe("allow");
+      expect(result.stopReason).toBeUndefined();
+      expect(states).toContain("AUTHORIZED");
+      expect(states.indexOf("AUTHORIZED")).toBeLessThan(states.indexOf("TERMINAL"));
+      expect(engine.activeExecutionCount).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
 });
