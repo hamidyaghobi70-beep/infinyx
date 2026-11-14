@@ -26,14 +26,6 @@ function isNonEmptyString(value: unknown): value is string {
 }
 
 
-function freezeDeep<T>(value: T): T {
-  if (value !== null && typeof value === "object" && !Object.isFrozen(value)) {
-    for (const child of Object.values(value as Record<string, unknown>)) freezeDeep(child);
-    Object.freeze(value);
-  }
-  return value;
-}
-
 export function snapshotPolicyRequest(request: PolicyRequest): PolicyRequest | undefined {
   try {
     return snapshotBoundedPolicyData(request) as PolicyRequest | undefined;
