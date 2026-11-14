@@ -72,9 +72,9 @@ describe("CoreEngine policy runtime shutdown", () => {
     });
     await engine.initialize();
 
-    await expect(engine.stop()).rejects.toThrow(/module cleanup was not started/i);
+    await expect(engine.stop()).rejects.toMatchObject({ code: "POLICY_SHUTDOWN_FAILED" });
     expect(cleanupCalls).toBe(0);
-    expect(engine.state).toBe("failed");
+    expect(engine.state).toBe("stopping");
 
     await engine.stop();
     expect(shutdownAttempts).toBe(2);
