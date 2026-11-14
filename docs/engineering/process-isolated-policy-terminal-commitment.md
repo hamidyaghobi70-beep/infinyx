@@ -106,3 +106,16 @@ Both assert that the primary cause remains unchanged, the later cause is retaine
 The `finishUnresolved` path commits an immutable `UNRESOLVED` record while retaining the active execution entry until the operating-system child actually emits `close`. A subsequent child `error` event must not replace that record or create a second terminal candidate. The close handler must still remove the retained active entry.
 
 The acceptance test forces termination attempts to report failure, waits for the `UNRESOLVED` barrier, emits a controlled late `error` event, then restores real process termination and waits for `close`. It asserts the original unresolved outcome remains unchanged, the active reference is retained before close, and the registry count returns to zero only after close. No production-code change is required for this finding unless the test exposes a defect.
+
+
+## P32-05 — Unified stop-cause arbitration
+
+Cancellation/timeout and output-stop handlers now delegate cause acceptance to one coordinator-local `acceptStopCause` function. It owns the single rule for:
+- rejecting observations after terminal commitment;
+- recording each distinct cause once in first-observed order;
+- assigning `stopReason` only once to the primary cause;
+- distinguishing primary, secondary, and post-commit observations.
+
+Only a `PRIMARY` disposition may freeze/veto a candidate or initiate cancellation/termination. A `SECONDARY` disposition updates provenance only; it cannot change the candidate, primary reason, outcome, decision, or trigger duplicate termination bookkeeping. Both stop paths therefore use the same acceptance rule, while retaining their specific outcome mapping (cancel/timeout versus output failure).
+
+The P32-01 race tests and P32-02 provenance tests are the behavioral regression coverage for both orderings and secondary-cause retention. This is a focused refactor; no retry or additional process lifecycle is introduced.
