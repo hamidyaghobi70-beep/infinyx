@@ -1,5 +1,6 @@
+import { ChildProcess } from "node:child_process";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { ProcessIsolatedPolicyEngine } from "../../src/core/process-isolated-policy-engine.js";
 import type { PolicyRequest } from "../../src/core/contracts.js";
 
@@ -294,6 +295,42 @@ describe("ProcessIsolatedPolicyEngine", () => {
     // The fixture has a 2-second fallback exit. Completion before that
     // deadline proves the escalation path terminated the SIGTERM-resistant child.
     expect(Date.now() - startedAt).toBeLessThan(1_500);
+  });
+
+  it("retains capacity when forceful termination cannot be confirmed", async () => {
+    const killSpy = vi.spyOn(ChildProcess.prototype, "kill").mockReturnValue(false);
+    try {
+      const observer = stateObserver("RUNNING");
+      const controller = new AbortController();
+      const engine = new ProcessIsolatedPolicyEngine({
+        moduleUrl: fixtureUrl,
+        timeoutMs: 5_000,
+        terminationGraceMs: 10,
+        killWaitMs: 80,
+        maxConcurrent: 1,
+        onStateChange: observer.onStateChange
+      });
+      const evaluation = engine.evaluateDetailed(request("ignore-sigterm"), {
+        signal: controller.signal
+      });
+      await observer.reached;
+      controller.abort();
+
+      const result = await evaluation;
+      expect(result.outcome).toBe("UNRESOLVED");
+      expect(result.runtimeStatus).toBe("UNRESOLVED");
+      expect(result.cleanupStatus).toBe("UNRESOLVED");
+      expect(engine.activeExecutionCount).toBe(1);
+      expect(killSpy).toHaveBeenNthCalledWith(1, "SIGTERM");
+      expect(killSpy).toHaveBeenNthCalledWith(2, "SIGKILL");
+
+      // The fixture exits independently after 2 seconds; until then its
+      // unresolved execution must continue to occupy the only capacity slot.
+      await new Promise((resolve) => setTimeout(resolve, 2_100));
+      expect(engine.activeExecutionCount).toBe(0);
+    } finally {
+      killSpy.mockRestore();
+    }
   });
 
   it("propagates parent cancellation as a distinct stop reason", async () => {
