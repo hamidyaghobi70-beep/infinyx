@@ -586,4 +586,90 @@ describe("ProtectedOperationExecutor", () => {
   });
 
 
+  it("drains detached and nested child activities before module cleanup", async () => {
+    let releaseNested!: () => void;
+    let signalNestedStarted!: () => void;
+    const nestedStarted = new Promise<void>((resolve) => { signalNestedStarted = resolve; });
+    let moduleStops = 0;
+    const engine = new CoreEngine({ policy: { evaluate: async () => allow } });
+    engine.register({
+      id: "child-resource-owner",
+      version: "1.0.0",
+      stop: () => { moduleStops += 1; }
+    });
+    const operation = engine.registerProtectedOperation({
+      id: "records.child-activity",
+      action: "record.write",
+      resource: "record:child-activity",
+      validateInput: (value: unknown): value is string => typeof value === "string",
+      handler: (_value, context) => {
+        // Deliberately detached: the operation scope, not the handler's await
+        // chain, owns this work and its nested descendant.
+        void context.runChild(async (childContext) => {
+          await childContext.runChild(() => new Promise<void>((resolve) => {
+            releaseNested = resolve;
+            signalNestedStarted();
+          }));
+        });
+        return "handler-returned";
+      }
+    });
+    await ensureStarted(engine);
+    const pending = engine.protectedOperations.execute(
+      operation, { actorId: "child-activity" }, "work"
+    );
+    await nestedStarted;
+
+    const stopping = engine.stop();
+    expect(moduleStops).toBe(0);
+    releaseNested();
+    await stopping;
+
+    expect(await pending).toEqual({ status: "executed", value: "handler-returned" });
+    expect(moduleStops).toBe(1);
+  });
+
+  it("reports detached child failure only after the child settles", async () => {
+    let rejectChild!: (error: Error) => void;
+    let signalChildStarted!: () => void;
+    const childStarted = new Promise<void>((resolve) => { signalChildStarted = resolve; });
+    let moduleStops = 0;
+    const engine = new CoreEngine({ policy: { evaluate: async () => allow } });
+    engine.register({
+      id: "child-failure-resource",
+      version: "1.0.0",
+      stop: () => { moduleStops += 1; }
+    });
+    const operation = engine.registerProtectedOperation({
+      id: "records.child-failure",
+      action: "record.write",
+      resource: "record:child-failure",
+      validateInput: (value: unknown): value is string => typeof value === "string",
+      handler: (_value, context) => {
+        void context.runChild(() => new Promise<void>((_resolve, reject) => {
+          rejectChild = reject;
+          signalChildStarted();
+        }));
+        return "handler-returned";
+      }
+    });
+    await ensureStarted(engine);
+    const pending = engine.protectedOperations.execute(
+      operation, { actorId: "child-failure" }, "work"
+    );
+    await childStarted;
+
+    const stopping = engine.stop();
+    expect(moduleStops).toBe(0);
+    rejectChild(new Error("private child failure detail"));
+    await stopping;
+
+    expect(await pending).toEqual({
+      status: "failed",
+      reason: "Protected operation handler or child activity failed."
+    });
+    expect(moduleStops).toBe(1);
+  });
+
+
 });
