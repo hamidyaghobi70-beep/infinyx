@@ -420,11 +420,17 @@ describe("ProcessIsolatedPolicyEngine", () => {
       expect(result.cleanupStatus).toBe("COMPLETED");
       expect(engine.activeExecutionCount).toBe(0);
 
-      // Assert the actual escalation sequence instead of elapsed wall-clock time.
+      // Assert platform-specific termination behavior instead of elapsed wall-clock time.
       const sigtermIndex = killSignals.indexOf("SIGTERM");
       const sigkillIndex = killSignals.indexOf("SIGKILL");
       expect(sigtermIndex).toBeGreaterThanOrEqual(0);
-      expect(sigkillIndex).toBeGreaterThan(sigtermIndex);
+      if (process.platform === "win32") {
+        // Node maps supported signals to Windows process termination semantics;
+        // the close barrier, not a second signal, confirms the child has ended.
+        expect(sigkillIndex).toBe(-1);
+      } else {
+        expect(sigkillIndex).toBeGreaterThan(sigtermIndex);
+      }
     } finally {
       killSpy.mockRestore();
     }
