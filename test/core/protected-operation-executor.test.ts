@@ -672,4 +672,31 @@ describe("ProtectedOperationExecutor", () => {
   });
 
 
+  it("closes child registration scopes when their owning task settles", async () => {
+    let capturedContext: import("../../src/core/contracts.js").ProtectedOperationChildContext | undefined;
+    let lateChildStarted = false;
+    const { engine, operation } = makeEngine(async () => allow);
+    const scopedOperation = engine.registerProtectedOperation({
+      id: "records.closed-child-scope",
+      action: "record.write",
+      resource: "record:closed-child-scope",
+      validateInput: (value: unknown): value is string => typeof value === "string",
+      handler: (_value, context) => {
+        capturedContext = context;
+        return "finished";
+      }
+    });
+    await ensureStarted(engine);
+    const result = await engine.protectedOperations.execute(
+      scopedOperation, { actorId: "closed-child-scope" }, "work"
+    );
+    expect(result).toEqual({ status: "executed", value: "finished" });
+    await expect(capturedContext?.runChild(() => {
+      lateChildStarted = true;
+    })).rejects.toThrow("Child activity scope is already closed.");
+    expect(lateChildStarted).toBe(false);
+    await engine.stop();
+  });
+
+
 });
