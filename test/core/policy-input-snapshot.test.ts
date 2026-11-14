@@ -76,6 +76,19 @@ describe("snapshotBoundedPolicyData", () => {
     expect(observed).toEqual(["getPrototypeOf", "ownKeys"]);
   });
 
+  it("documents that array length access also executes a Proxy get trap", () => {
+    const observed: string[] = [];
+    const input = new Proxy([1], {
+      get(target, key, receiver) {
+        if (key === "length") observed.push("get:length");
+        return Reflect.get(target, key, receiver);
+      }
+    });
+
+    expect(snapshotBoundedPolicyData(input)).toEqual([1]);
+    expect(observed).toEqual(["get:length"]);
+  });
+
   it("documents that property-descriptor reflection also executes Proxy traps", () => {
     const observed: string[] = [];
     const target = { value: 1 };
