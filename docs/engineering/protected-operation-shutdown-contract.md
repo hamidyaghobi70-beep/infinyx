@@ -112,13 +112,14 @@ Use stable, machine-readable `CoreError.code` values rather than requiring calle
 | Code | Meaning | Cleanup permitted? |
 |---|---|---|
 | `PROTECTED_OPERATION_DRAIN_TIMEOUT` | One or more admitted handlers remain unsettled at the handler-drain deadline | No |
+| `PROTECTED_OPERATION_SHUTDOWN_FAILED` | Executor shutdown initiation throws or otherwise fails before handler cancellation/drain can be established | No |
 | `POLICY_EVALUATION_DRAIN_TIMEOUT` | One or more underlying policy evaluations remain unsettled at the policy-drain deadline | No |
-| `POLICY_SHUTDOWN_FAILED` | Policy shutdown rejects before the drain deadline | No |
+| `POLICY_SHUTDOWN_FAILED` | Policy shutdown initiation or delegate shutdown rejects before the drain deadline | No |
 | `MODULE_STOP_FAILED` | Existing module cleanup failure after safe cleanup was attempted | Cleanup has been attempted according to dependency rules |
 
 Requirements:
 
-1. Add the new codes to the existing `CoreErrorCode` union; preserve `MODULE_STOP_FAILED` for actual module cleanup failures rather than using it for every shutdown failure.
+1. Add the new codes to the existing `CoreErrorCode` union, including `PROTECTED_OPERATION_SHUTDOWN_FAILED` for executor shutdown initiation failure; preserve `MODULE_STOP_FAILED` for actual module cleanup failures rather than using it for every shutdown failure.
 2. Keep the original underlying error as `cause` where one exists. Deadline errors must identify the failure category without exposing caller context, secrets, or mutable registry internals.
 3. A handler's own rejected promise is an operation outcome, not by itself a shutdown failure. Once it has settled and terminal bookkeeping is complete, it may be removed from the active registry and safe cleanup may proceed.
 4. A deadline rejection does not settle, discard, or replay the underlying handler/evaluator. It only ends that caller's bounded wait. The underlying work remains tracked.
@@ -211,6 +212,7 @@ The implementation is not acceptable without deterministic tests covering at lea
 
 27. A delegate shutdown rejection follows the architecture-approved recovery rule: a later explicit stop observation must neither silently re-invoke delegate shutdown nor claim completion without evidence that policy shutdown is complete.
 28. If executor shutdown initiation throws synchronously, policy shutdown is still attempted in the same start-of-stop turn; if policy shutdown initiation throws synchronously, executor admission is still closed and every admitted handler receives its shutdown cancellation request. Both synchronous failures are captured as shutdown blockers; neither permits module cleanup.
+29. If executor shutdown initiation throws synchronously, policy shutdown is still attempted, the executor-initiation failure is surfaced as `PROTECTED_OPERATION_SHUTDOWN_FAILED`, and module cleanup remains blocked even if the policy path settles successfully; if both paths fail, primary error selection follows the deterministic precedence in section 11.1.
 Tests must use controlled promises/signals rather than relying on arbitrary sleeps.
 
 ## 11. API and compatibility decisions still required
@@ -237,7 +239,7 @@ The following is the recommended resolution of the open decisions above. It is a
 2. **Per-invocation identity:** use Node.js `crypto.randomUUID()` once at invocation admission. Keep `operationDefinitionId` separate and immutable. Treat retries as new invocations with new IDs; never reuse an ID to imply idempotency.
 3. **Cancellation provenance:** record an immutable primary cancellation cause as the first accepted cause for an invocation. Preserve later causes (including runtime shutdown) as additional provenance events; do not overwrite the original cause or issue duplicate handler invocation. The shutdown coordinator independently records that runtime shutdown was requested even when the handler's signal had already been aborted by its caller or parent.
 4. **Evaluator settlement proof:** retain the underlying delegate evaluation promise in a policy-owned active-evaluation registry until it actually settles. A delegate `shutdown()` may replace individual waiting only if its documented contract explicitly guarantees termination of all in-flight evaluations and a deterministic test proves that guarantee.
-5. **Simultaneous blockers:** collect all drain blockers observed at the attempt deadline and expose a sanitized immutable blocker list in error details. Preserve the existing stable error codes; choose the primary code deterministically using this precedence when multiple blockers coexist: `POLICY_SHUTDOWN_FAILED`, then `POLICY_EVALUATION_DRAIN_TIMEOUT`, then `PROTECTED_OPERATION_DRAIN_TIMEOUT`. Keep the other blockers in details so callers do not mistake the primary code for the only unresolved path. Preserve the original cause for a policy shutdown failure.
+5. **Simultaneous blockers:** collect all drain blockers observed at the attempt deadline and expose a sanitized immutable blocker list in error details. Preserve the existing stable error codes; choose the primary code deterministically using this precedence when multiple blockers coexist: `POLICY_SHUTDOWN_FAILED`, then `PROTECTED_OPERATION_SHUTDOWN_FAILED`, then `POLICY_EVALUATION_DRAIN_TIMEOUT`, then `PROTECTED_OPERATION_DRAIN_TIMEOUT`. Keep the other blockers in details so callers do not mistake the primary code for the only unresolved path. Preserve the original cause for a policy shutdown failure.
 6. **Retry and idempotency:** retries are explicit calls only. A retry observes the same unresolved work and same cancellation provenance; it never replays handlers, restarts evaluations, regenerates IDs, or resets the shutdown state.
 7. **Diagnostics:** expose counts and immutable, privacy-minimized snapshots only. Do not expose mutable registries, AbortControllers, raw caller context, or secrets.
 
