@@ -99,3 +99,10 @@ The acceptance tests cover both:
 - `CALLER_CANCELLED` followed by `RUNTIME_SHUTDOWN`, where shutdown is initiated while the caller signal is already aborted.
 
 Both assert that the primary cause remains unchanged, the later cause is retained, and the execution record's provenance array and entries are frozen. This implements the relevant first-cause/additional-provenance rule in INFINYX-ENG-002 §11.2.4 for causes observed before terminal commitment; it does not claim durable audit storage.
+
+
+## P32-04 — Child error after unresolved commitment
+
+The `finishUnresolved` path commits an immutable `UNRESOLVED` record while retaining the active execution entry until the operating-system child actually emits `close`. A subsequent child `error` event must not replace that record or create a second terminal candidate. The close handler must still remove the retained active entry.
+
+The acceptance test forces termination attempts to report failure, waits for the `UNRESOLVED` barrier, emits a controlled late `error` event, then restores real process termination and waits for `close`. It asserts the original unresolved outcome remains unchanged, the active reference is retained before close, and the registry count returns to zero only after close. No production-code change is required for this finding unless the test exposes a defect.
