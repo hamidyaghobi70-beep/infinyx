@@ -88,7 +88,8 @@ export type PolicyStopReason =
   | "CALLER_CANCELLED"
   | "POLICY_TIMEOUT"
   | "RUNTIME_SHUTDOWN"
-  | "PARENT_CANCELLED";
+  | "PARENT_CANCELLED"
+  | "OUTPUT_LIMIT_EXCEEDED";
 
 export type PolicyTerminalOutcome =
   | "COMPLETED"
