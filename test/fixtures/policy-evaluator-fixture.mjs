@@ -16,6 +16,14 @@ export default {
       });
     }
 
+    if (request.action === "stdout-flood") {
+      process.stdout.write(Buffer.alloc(16 * 1024, 0x41));
+      return { effect: "allow", reason: "Flood attempted." };
+    }
+    if (request.action === "stderr-flood") {
+      process.stderr.write(Buffer.alloc(16 * 1024, 0x42));
+      return { effect: "allow", reason: "Flood attempted." };
+    }
     if (request.action === "crash") process.exit(23);
     if (request.action === "invalid") return { effect: "allow" };
     if (request.action === "secret-reason") {
