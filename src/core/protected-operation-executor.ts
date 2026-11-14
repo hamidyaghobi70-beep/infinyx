@@ -200,14 +200,20 @@ export class ProtectedOperationExecutor implements ProtectedOperationPort {
     let callerAbortListener: (() => void) | undefined;
     let parentAbortListener: (() => void) | undefined;
     if (callerSignal) {
-      callerAbortListener = () => operationController.abort();
+      callerAbortListener = () => operationController.abort({
+        code: "CALLER_CANCELLED",
+        message: "Protected operation cancellation requested by caller."
+      });
       callerSignal.addEventListener("abort", callerAbortListener, { once: true });
-      if (callerSignal.aborted) operationController.abort();
+      if (callerSignal.aborted) callerAbortListener();
     }
     if (parentSignal) {
-      parentAbortListener = () => operationController.abort();
+      parentAbortListener = () => operationController.abort({
+        code: "PARENT_CANCELLED",
+        message: "Protected operation cancellation requested by parent."
+      });
       parentSignal.addEventListener("abort", parentAbortListener, { once: true });
-      if (parentSignal.aborted) operationController.abort();
+      if (parentSignal.aborted) parentAbortListener();
     }
 
     try {
