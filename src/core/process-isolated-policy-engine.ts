@@ -354,7 +354,9 @@ export class ProcessIsolatedPolicyEngine implements PolicyEngine {
 
     const requestStop = (reason: PolicyStopReason): void => {
       if (terminalCommitted || resolved || closed) return;
-      if (terminalVeto !== undefined) return;
+      // Preserve the first stop observed before terminal commitment. Once a
+      // stop candidate is frozen, later cancellation sources cannot replace it.
+      if (terminalVeto !== undefined || (candidateFrozen && candidate?.stopReason !== undefined)) return;
       const veto: Candidate = {
         outcome: reason === "POLICY_TIMEOUT" ? "TIMED_OUT" : "CANCELLED",
         decision: deny(stopMessage(reason)),
@@ -381,7 +383,7 @@ export class ProcessIsolatedPolicyEngine implements PolicyEngine {
     };
 
     const requestOutputStop = (reason: PolicyOutputFailureReason): void => {
-      if (outputFailureReason !== undefined || resolved || closed) return;
+      if (outputFailureReason !== undefined || resolved || closed || terminalVeto !== undefined) return;
       outputFailureReason = reason;
       stopReason = reason;
       if (!candidateFrozen) {
