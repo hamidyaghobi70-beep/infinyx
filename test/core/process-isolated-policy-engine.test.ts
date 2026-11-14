@@ -391,7 +391,7 @@ describe("ProcessIsolatedPolicyEngine", () => {
     expect(result.decision.effect).toBe("allow");
   });
 
-  it("does not let late cancellation overwrite a frozen terminal candidate", async () => {
+  it("lets cancellation veto authorization after candidate freeze but before terminal commitment", async () => {
     const controller = new AbortController();
     const observer = stateObserver("FINALIZING");
     const engine = new ProcessIsolatedPolicyEngine({
@@ -402,9 +402,29 @@ describe("ProcessIsolatedPolicyEngine", () => {
       }
     });
     const result = await engine.evaluateDetailed(request(), { signal: controller.signal });
-    expect(result.outcome).toBe("COMPLETED");
-    expect(result.decision.effect).toBe("allow");
+    expect(result.outcome).toBe("CANCELLED");
+    expect(result.stopReason).toBe("CALLER_CANCELLED");
+    expect(result.decision.effect).toBe("deny");
+    expect(observer.states).not.toContain("AUTHORIZED");
     expect(result.candidateFrozen).toBe(true);
+  });
+
+
+  it("keeps the deadline active after allow candidate freeze until terminal commitment", async () => {
+    const observer = stateObserver("FINALIZING");
+    const engine = new ProcessIsolatedPolicyEngine({
+      moduleUrl: fixtureUrl,
+      timeoutMs: 100,
+      terminationGraceMs: 10,
+      killWaitMs: 500,
+      onStateChange: observer.onStateChange
+    });
+    const result = await engine.evaluateDetailed(request("allow-with-active-handle"));
+    expect(result.outcome).toBe("TIMED_OUT");
+    expect(result.stopReason).toBe("POLICY_TIMEOUT");
+    expect(result.decision.effect).toBe("deny");
+    expect(observer.states).not.toContain("AUTHORIZED");
+    expect(engine.activeExecutionCount).toBe(0);
   });
 
   it("reports child crashes as failures and never grants access", async () => {
