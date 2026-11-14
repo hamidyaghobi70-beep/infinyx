@@ -576,9 +576,11 @@ export class ProcessIsolatedPolicyEngine implements PolicyEngine {
       }
 
       // Arbitration is first-accepted-stop, not a fixed output-vs-cancellation
-      // priority: outputFailureReason can only be set before terminalVeto because
-      // requestOutputStop rejects events after a veto; when both exist, output
-      // failure was accepted first and remains the primary terminal cause.
+      // priority. outputFailureReason is assigned only when requestOutputStop
+      // receives PRIMARY from acceptStopCause; therefore, when present, it is
+      // necessarily the primary stop cause. A later output failure is rejected
+      // after a cancellation/timeout veto, while a later veto cannot replace an
+      // output failure that was accepted first.
       terminalCommitted = true;
       let outcome = (terminalVeto ?? candidate).outcome;
       let decision = (terminalVeto ?? candidate).decision;
