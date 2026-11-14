@@ -302,15 +302,17 @@ export class CoreEngine {
   }
 
   private async performStop(): Promise<void> {
+    // Start the shared monotonic budget before initiating either shutdown path.
+    const deadline = performance.now() + this.drainDeadlineMs;
     this.beginShutdownInitiation();
     if (this.shutdownInitiationFailure) throw this.shutdownInitiationFailure;
 
     const executorDrain = this.executorDrainPromise ?? Promise.resolve();
     const policyShutdown = this.policyShutdownPromise ?? Promise.resolve();
-    const deadline = performance.now() + this.drainDeadlineMs;
+    const remainingMs = Math.max(0, deadline - performance.now());
     let timer: ReturnType<typeof setTimeout> | undefined;
     const timedOut = new Promise<false>((resolve) => {
-      timer = setTimeout(() => resolve(false), this.drainDeadlineMs);
+      timer = setTimeout(() => resolve(false), remainingMs);
     });
 
     try {
