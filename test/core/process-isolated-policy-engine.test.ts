@@ -81,6 +81,37 @@ describe("ProcessIsolatedPolicyEngine", () => {
     expect(engine.activeExecutionCount).toBe(0);
   });
 
+  it("fails closed when combined stdout and stderr exceed the aggregate budget", async () => {
+    const engine = new ProcessIsolatedPolicyEngine({
+      moduleUrl: fixtureUrl,
+      maxStdoutBytes: 1024,
+      maxStderrBytes: 1024,
+      maxTotalOutputBytes: 1200
+    });
+    const result = await engine.evaluateDetailed(request("aggregate-flood"));
+    expect(result.outcome).toBe("FAILED");
+    expect(result.stopReason).toBe("OUTPUT_LIMIT_EXCEEDED");
+    expect(result.decision.effect).toBe("deny");
+    expect(engine.activeExecutionCount).toBe(0);
+  });
+
+  it("does not commit an allow result when output exceeds budget before close", async () => {
+    const engine = new ProcessIsolatedPolicyEngine({
+      moduleUrl: fixtureUrl,
+      maxStdoutBytes: 1024,
+      maxStderrBytes: 1024,
+      maxTotalOutputBytes: 2048
+    });
+    const result = await engine.evaluateDetailed(request("late-stdout-flood"));
+    expect(result.outcome).toBe("FAILED");
+    expect(result.stopReason).toBe("OUTPUT_LIMIT_EXCEEDED");
+    expect(result.decision).toEqual({
+      effect: "deny",
+      reason: "Policy evaluator exceeded its output budget; access denied."
+    });
+    expect(engine.activeExecutionCount).toBe(0);
+  });
+
   it("validates aggregate output budget against per-stream budgets", () => {
     expect(() => new ProcessIsolatedPolicyEngine({
       moduleUrl: fixtureUrl,
