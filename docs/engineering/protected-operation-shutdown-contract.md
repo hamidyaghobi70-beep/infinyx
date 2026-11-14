@@ -144,13 +144,15 @@ This is a continuation of the same shutdown, not a second shutdown or operation 
 
 ## 7. Timeout and retry semantics
 
-- The handler-drain deadline bounds how long one shutdown attempt waits for admitted handlers; it does not terminate JavaScript execution.
-- The policy-shutdown deadline independently bounds the wait for policy shutdown completion. Architecture must define whether both deadlines share one absolute shutdown budget or have separate bounded budgets.
-- When either deadline expires, the runtime reports that shutdown is unresolved/blocked. It must not claim successful shutdown.
-- The unresolved invocation remains tracked until its promise settles or the process terminates.
-- A subsequent explicit shutdown attempt may wait for the same invocation; it must not invoke the handler again.
+- The recommended model is one finite absolute deadline per drain attempt, measured with a monotonic clock. It bounds the concurrent barrier covering admitted-handler settlement, underlying policy-evaluation settlement, and delegate-shutdown observation; it does not terminate JavaScript execution.
+- Handler and policy drain waits begin in the same synchronous start-of-stop turn and consume the same remaining budget. Do not add separate sequential timeout windows or restart the budget when one path settles.
+- A policy shutdown rejection may fail the attempt immediately before the shared deadline. If the shared deadline expires while one or more paths remain unresolved, report all observed blockers using the deterministic primary-code precedence in section 11.1.
+- When the drain deadline expires, the runtime reports shutdown as unresolved/blocked. It must not claim successful shutdown or begin module cleanup.
+- The unresolved invocation/evaluation remains tracked until its underlying promise settles or the process terminates.
+- A subsequent explicit shutdown attempt may wait for the same tracked work with a fresh wait deadline; it must not invoke a handler again, restart an evaluation, or regenerate an invocation ID.
 - No automatic retry of the protected operation is permitted as part of shutdown recovery.
-- If the handler never settles, graceful shutdown cannot be declared complete. Any forceful process termination is an external operational decision and must be separately authorized and documented.
+- The drain deadline does not bound the later module-cleanup phase. Until a separate cleanup timeout/recovery contract is accepted and implemented, do not describe the entire stop() operation as globally time-bounded.
+- If a handler never settles, graceful shutdown cannot be declared complete. Any forceful process termination is an external operational decision and must be separately authorized and documented.
 
 ## 8. Concurrency and race requirements
 
@@ -211,7 +213,7 @@ Before implementation, architecture review must explicitly decide:
 - Whether the handler context field is renamed from `operationId` to include both `operationId` and `operationDefinitionId`, and how compatibility is handled.
 - The default and configurable drain deadline, and whether zero/unbounded values are prohibited.
 - Whether a future major API should expose a structured shutdown report instead of the current `Promise<void>`; this stage preserves `Promise<void>` and uses stable `CoreError.code` rejections.
-- The policy-shutdown deadline and its relationship to the protected-handler drain deadline; neither wait may silently remain unbounded.
+- The recommended relationship is one shared monotonic drain deadline, as detailed in section 11.1; Haniyeh must explicitly accept or amend this model before implementation. Neither handler nor policy drain may silently remain unbounded.
 - How cancellation reasons are represented without relying on unsupported runtime-specific behavior, including precedence/provenance when caller, parent, and runtime shutdown cancellation race.
 - Whether a policy delegate's `shutdown()` contract guarantees evaluator termination, or whether the wrapper must independently drain tracked delegate evaluations.
 - How active-operation tracking is exposed to diagnostics without exposing mutable internal state.
