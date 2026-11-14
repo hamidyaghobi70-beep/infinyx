@@ -1,5 +1,10 @@
 export default {
   async evaluate(request, options) {
+    if (request.action === "ignore-sigterm") {
+      process.on("SIGTERM", () => undefined);
+      return new Promise(() => undefined);
+    }
+
     if (request.action === "hang") {
       return new Promise(() => undefined);
     }
