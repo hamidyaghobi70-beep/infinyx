@@ -16,7 +16,11 @@ export default {
       });
     }
 
-    if (request.action === "crash") process.exit(23);
+    if (request.action === "sensitive-error") throw new Error("PRIVATE_EVALUATOR_DETAIL");
+    if (request.action === "crash") {
+      process.stderr.write("PRIVATE_STDERR_DETAIL");
+      process.exit(23);
+    }
     if (request.action === "invalid") return { effect: "allow" };
     if (request.action === "deny") {
       return { effect: "deny", reason: "Explicit fixture denial." };
