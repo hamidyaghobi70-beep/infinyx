@@ -267,7 +267,7 @@ describe("ProcessIsolatedPolicyEngine", () => {
     expect(engine.activeExecutionCount).toBe(0);
   });
 
-  it("retains process capacity until an unresolved child actually closes", async () => {
+  it("escalates ignored SIGTERM and releases capacity only after child close", async () => {
     const observer = stateObserver("RUNNING");
     const controller = new AbortController();
     const engine = new ProcessIsolatedPolicyEngine({
@@ -278,6 +278,7 @@ describe("ProcessIsolatedPolicyEngine", () => {
       maxConcurrent: 1,
       onStateChange: observer.onStateChange
     });
+    const startedAt = Date.now();
     const evaluation = engine.evaluateDetailed(request("ignore-sigterm"), {
       signal: controller.signal
     });
@@ -285,23 +286,13 @@ describe("ProcessIsolatedPolicyEngine", () => {
     controller.abort();
 
     const result = await evaluation;
-    if (process.platform === "win32") {
-      // Windows child termination is forceful for this signal path; close is
-      // observed before the unresolved deadline, so capacity can be released.
-      expect(result.outcome).toBe("CANCELLED");
-      expect(result.runtimeStatus).toBe("STOPPED");
-      expect(result.cleanupStatus).toBe("COMPLETED");
-      expect(engine.activeExecutionCount).toBe(0);
-      return;
-    }
-
-    expect(result.outcome).toBe("UNRESOLVED");
-    expect(result.runtimeStatus).toBe("UNRESOLVED");
-    expect(result.cleanupStatus).toBe("UNRESOLVED");
-    expect(engine.activeExecutionCount).toBe(1);
-
-    await new Promise((resolve) => setTimeout(resolve, 950));
+    expect(result.outcome).toBe("CANCELLED");
+    expect(result.runtimeStatus).toBe("STOPPED");
+    expect(result.cleanupStatus).toBe("COMPLETED");
     expect(engine.activeExecutionCount).toBe(0);
+    // The fixture has a 2-second fallback exit. Completion before that
+    // deadline proves the escalation path terminated the SIGTERM-resistant child.
+    expect(Date.now() - startedAt).toBeLessThan(1_500);
   });
 
   it("propagates parent cancellation as a distinct stop reason", async () => {
