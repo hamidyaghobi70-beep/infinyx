@@ -63,6 +63,17 @@ describe("ProcessIsolatedPolicyEngine", () => {
     );
   });
 
+  it("never emits AUTHORIZED for an explicit deny candidate", async () => {
+    const observer = stateObserver("TERMINAL");
+    const engine = new ProcessIsolatedPolicyEngine({
+      moduleUrl: fixtureUrl,
+      onStateChange: observer.onStateChange
+    });
+    const result = await engine.evaluateDetailed(request("deny"));
+    expect(result.outcome).toBe("DENIED");
+    expect(observer.states).not.toContain("AUTHORIZED");
+  });
+
   it("accepts output exactly at the per-stream byte boundary across chunks", async () => {
     const engine = new ProcessIsolatedPolicyEngine({
       moduleUrl: fixtureUrl,
