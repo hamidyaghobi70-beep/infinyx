@@ -323,7 +323,7 @@ Before implementation, architecture review must explicitly decide:
 - Whether the handler context field is renamed from `operationId` to include both `operationId` and `operationDefinitionId`, and how compatibility is handled.
 - The default and configurable drain deadline, and whether zero/unbounded values are prohibited.
 - Whether a future major API should expose a structured shutdown report instead of the current `Promise<void>`; this stage preserves `Promise<void>` and uses stable `CoreError.code` rejections.
-- The recommended relationship is one shared monotonic drain deadline, as detailed in section 11.1; Haniyeh must explicitly accept or amend this model before implementation. Neither handler nor policy drain may silently remain unbounded.
+- Historical recommendation: use one shared monotonic drain deadline, as detailed in section 11.1. This recommendation is resolved normatively in section 11.2; no further Haniyeh approval is a current gate. Neither handler nor policy drain may silently remain unbounded.
 - How cancellation reasons are represented without relying on unsupported runtime-specific behavior, including precedence/provenance when caller, parent, and runtime shutdown cancellation race.
 - Whether a policy delegate's `shutdown()` contract guarantees evaluator termination, or whether the wrapper must independently drain tracked delegate evaluations.
 - What recovery semantics apply if the delegate's own `shutdown()` promise rejects: sticky terminal failure, a separately authorized idempotent retry, or another explicit recovery contract. A later `CoreEngine.stop()` observation must not silently re-invoke a potentially side-effecting delegate shutdown.
@@ -423,11 +423,11 @@ All 57 cases must use controllable promises, signals, an injected monotonic cloc
 
 ### 11.2.7 Updated disposition
 
-**ARCHITECTURE ACCEPTED — IMPLEMENTATION NOT AUTHORIZED.** Haniyeh issued an unconditional architecture decision of **ACCEPT** for this exact document revision at commit `9cc51b14777faf35936d67ec1b773e57c4cde965` on 2026-11-14. This acceptance is limited to the architecture proposal and does not establish runtime implementation or execution evidence.
+**HISTORICAL ARCHITECTURE ACCEPT — NOT CURRENT-HEAD APPROVAL.** Haniyeh issued an unconditional architecture decision of **ACCEPT** for the earlier document revision at commit `9cc51b14777faf35936d67ec1b773e57c4cde965` on 2026-11-14. This historical decision does not approve the current head and does not establish runtime implementation or execution evidence.
 
-Shima's historical independent security/quality review of commit `2ef7ce82e940b25422256e8905bb60b9aafb0e87` returned **ACCEPT WITH CONDITIONS** on 2026-11-14. Its original conditions concerned the Audit/Diagnostics separation and privacy contract in sections 9.1–9.2 plus acceptance case 53. The current revision additionally contains the deep-immutability and authorization hardening in sections 9.3–9.4 and acceptance cases 54–57; these additions require explicit review in the current disposition. The historical review is not approval of this revision. The provisional 30,000 ms default must still be validated against representative load-test evidence before implementation acceptance. Passing documentation-branch CI is repository workflow evidence only; it is not proof that runtime behavior implements this contract.
+Shima's historical security/quality review of commit `2ef7ce82e940b25422256e8905bb60b9aafb0e87` returned **ACCEPT WITH CONDITIONS** on 2026-11-14. Its original conditions concerned the Audit/Diagnostics separation and privacy contract in sections 9.1–9.2 plus acceptance case 53. The current revision additionally contains deep-immutability and authorization hardening in sections 9.3–9.4 and acceptance cases 54–57; these historical findings are not approval of the current head. For the current head `555facf859d044368af145cc621af810e72e03db`, ChatGPT completed separate internal architecture and security/quality passes, both **ACCEPT WITH CONDITIONS**. These same-reviewer passes are not independent third-party assurance. The provisional 30,000 ms default must still be validated against representative load-test evidence before it can become final. Passing documentation-branch CI is repository workflow evidence only; it is not proof that runtime behavior implements this contract.
 
-Implementation, source-code changes, executable-test changes, merge, release, deployment, and changes to `main` remain unauthorized pending independent security/quality review and separate explicit implementation authorization.
+Implementation, source-code changes, executable-test changes, merge, release, deployment, and changes to `main` remain unauthorized until separate explicit implementation authorization and all applicable evidence gates are satisfied. The current internal security/quality pass is not independent third-party assurance; obtain external independent assurance only if a future risk assessment or release gate requires it.
 
 ### 11.2.8 ENG002-R08 — Enforceable child-activity ownership and detached-work boundary
 
@@ -518,4 +518,4 @@ This section defines the required control boundary without overstating what same
 
 The baseline implementation currently passes the existing test that demonstrates an admitted handler may remain active after `CoreEngine.stop()` resolves. The executor currently sets handler context `operationId` to the registration ID. These are observed baseline behaviors, not accepted production guarantees.
 
-**Disposition:** Proposed contract for architecture and independent review. Implementation remains not authorized by this document.
+**Disposition:** Proposed contract; current-head internal architecture and security/quality reviews are recorded as ACCEPT WITH CONDITIONS, and exact-head CI has passed. No independent third-party assurance is claimed. Implementation remains not authorized by this document.
