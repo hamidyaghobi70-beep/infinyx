@@ -73,20 +73,34 @@ A timeout does not mean the handler was cancelled or that its external effects d
 Shutdown must follow this order:
 
 1. **Close admission:** synchronously transition CoreEngine out of `running`. From this point, no new protected-operation handler may be admitted.
-2. **Stop authorization intake:** begin policy-engine shutdown according to its own contract. A policy result arriving after the lifecycle transition must not admit a handler.
-3. **Request cancellation:** signal every currently admitted handler using a runtime-shutdown cancellation reason. Preserve caller and parent cancellation propagation; combine causes without replacing the invocation identity.
-4. **Drain:** await settlement of all admitted handlers up to a configured, bounded drain deadline.
+2. **Close both execution paths synchronously:** invoke the executor's shutdown boundary to reject further admission and request cancellation of every already-admitted handler; also invoke policy-engine shutdown so pending authorization evaluations are stopped. Do not await one shutdown path before initiating the other. A policy result arriving after the lifecycle transition must not admit a handler.
+3. **Preserve cancellation causes:** signal admitted handlers with a runtime-shutdown cancellation cause while retaining caller/parent cancellation provenance. The active handler must receive the same invocation signal and `operationId` established at admission.
+4. **Drain concurrently:** await both policy shutdown completion and settlement of all admitted handlers. Handler draining begins at shutdown initiation, not after policy shutdown completes. Each wait must have an explicit bounded deadline; if either path remains unresolved, report an explicit unresolved/blocked shutdown outcome and do **not** begin module cleanup.
 5. **Decide shutdown outcome:**
-   - If all admitted handlers settle before the deadline, continue to module cleanup.
-   - If any remain unsettled at the deadline, report an explicit unresolved/blocked shutdown outcome and do **not** begin module cleanup.
+   - Continue to module cleanup only after policy shutdown has settled successfully and the admitted-handler registry is empty.
+   - If policy shutdown fails or remains unresolved, or any handler remains unsettled at its deadline, preserve the unresolved state and do **not** begin module cleanup.
 6. **Late settlement:** retain tracking for unresolved handlers. When they eventually settle, record the terminal handler outcome against the same `operationId`. A later explicit shutdown attempt may re-evaluate whether draining is complete; it must not re-run settled handlers.
-7. **Cleanup:** only after the active-handler registry is empty may module cleanup begin, in the existing dependent-first/reverse lifecycle order.
+7. **Cleanup:** only after policy shutdown has settled successfully and the active-handler registry is empty may module cleanup begin, in the existing dependent-first/reverse lifecycle order. This rule also applies when the engine has zero initialized modules; the no-module fast path must not bypass operation draining.
 
 ### 6.1 Why cleanup is blocked on unresolved handlers
 
 A protected handler may still be using module-owned resources, memory, database clients, or other dependencies. Tearing those resources down while the handler is active can create races and uncertain side effects. Therefore a drain timeout is not permission to proceed with cleanup.
 
 This is a fail-closed safety rule. Operational recovery for a permanently non-cooperative handler must be documented separately; it must not be disguised as successful graceful shutdown.
+
+### 6.2 Required CoreEngine–executor coordination
+
+The implementation must provide one lifecycle coordination boundary shared by `CoreEngine` and `ProtectedOperationExecutor`:
+
+1. `CoreEngine.stop()` first changes lifecycle to `stopping`, which closes the existing admission predicate synchronously.
+2. In the same synchronous start-of-stop turn, it invokes an executor shutdown method that synchronously marks the executor as closing and aborts the controllers of all registered admitted invocations. It must not wait for policy shutdown before doing this.
+3. It also invokes `policy.shutdown()` synchronously in that start-of-stop turn. The returned promises are then observed concurrently; a rejection or deadline expiry is a shutdown failure/block, not permission to clean up.
+4. The executor's active registry is populated before calling handler code and retains each invocation until its handler promise settles and terminal bookkeeping completes. Registering an invocation and calling the handler must not be separated by an `await`.
+5. Pending policy evaluations are not active handlers. They are stopped by the policy shutdown path; their late Allow results must fail the final lifecycle/admission check.
+6. The engine must use the same drain-and-block rules even if `initializedModules` is empty.
+7. The active registry must not expose mutable internal maps or controllers to modules. Diagnostics may expose immutable snapshots only.
+
+This coordination requirement is necessary because the current `FailClosedPolicyEngine.shutdown()` stops policy intake and requests cancellation of policy evaluations, while the current executor has no registry or shutdown method for handlers that have already been admitted.
 
 ## 7. Timeout and retry semantics
 
@@ -146,6 +160,7 @@ Before implementation, architecture review must explicitly decide:
 - Whether the handler context field is renamed from `operationId` to include both `operationId` and `operationDefinitionId`, and how compatibility is handled.
 - The default and configurable drain deadline, and whether zero/unbounded values are prohibited.
 - The public shape of a blocked/unresolved shutdown result (typed result versus rejected `stop()` promise and stable error code).
+- The policy-shutdown deadline and its relationship to the protected-handler drain deadline; neither wait may silently remain unbounded.
 - How cancellation reasons are represented without relying on unsupported runtime-specific behavior.
 - How active-operation tracking is exposed to diagnostics without exposing mutable internal state.
 - How a permanently non-cooperative handler is handled operationally without silently cleaning up its dependencies.
