@@ -9,7 +9,14 @@ function byteLength(value: string): number {
   return Buffer.byteLength(value, "utf8");
 }
 
-/** Bounded, getter-free snapshot for untrusted policy input. */
+/**
+ * Bounded, getter-free snapshot for ordinary data objects.
+ *
+ * This is not a sandbox for hostile Proxy instances: JavaScript reflection
+ * invokes Proxy traps (including getPrototypeOf, ownKeys, and descriptor
+ * traps) in this process. Callers must pass trusted plain data structures;
+ * this routine cannot make arbitrary same-process objects side-effect-free.
+ */
 export function snapshotBoundedPolicyData<T>(input: T): T | undefined {
   let nodes = 0;
   let totalBytes = 0;

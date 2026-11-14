@@ -57,4 +57,58 @@ describe("snapshotBoundedPolicyData", () => {
     expect(Object.isFrozen(snapshot?.nested)).toBe(true);
     expect(Object.isFrozen(snapshot?.nested.values)).toBe(true);
   });
+
+  it("documents that Proxy traps execute during same-process inspection", () => {
+    const observed: string[] = [];
+    const keys = Array.from({ length: 1_001 }, (_, index) => `k${index}`);
+    const input = new Proxy({}, {
+      getPrototypeOf(target) {
+        observed.push("getPrototypeOf");
+        return Reflect.getPrototypeOf(target);
+      },
+      ownKeys() {
+        observed.push("ownKeys");
+        return keys;
+      }
+    });
+
+    expect(snapshotBoundedPolicyData(input)).toBeUndefined();
+    expect(observed).toEqual(["getPrototypeOf", "ownKeys"]);
+  });
+
+  it("documents that array length access also executes a Proxy get trap", () => {
+    const observed: string[] = [];
+    const input = new Proxy([1], {
+      get(target, key, receiver) {
+        if (key === "length") observed.push("get:length");
+        return Reflect.get(target, key, receiver);
+      }
+    });
+
+    expect(snapshotBoundedPolicyData(input)).toEqual([1]);
+    expect(observed).toContain("get:length");
+    expect(observed.every((trap) => trap === "get:length")).toBe(true);
+  });
+
+  it("documents that property-descriptor reflection also executes Proxy traps", () => {
+    const observed: string[] = [];
+    const target = { value: 1 };
+    const input = new Proxy(target, {
+      getPrototypeOf(object) {
+        observed.push("getPrototypeOf");
+        return Reflect.getPrototypeOf(object);
+      },
+      ownKeys(object) {
+        observed.push("ownKeys");
+        return Reflect.ownKeys(object);
+      },
+      getOwnPropertyDescriptor(object, key) {
+        observed.push(`getOwnPropertyDescriptor:${String(key)}`);
+        return Reflect.getOwnPropertyDescriptor(object, key);
+      }
+    });
+
+    expect(snapshotBoundedPolicyData(input)).toEqual({ value: 1 });
+    expect(observed).toEqual(["getPrototypeOf", "ownKeys", "getOwnPropertyDescriptor:value"]);
+  });
 });
