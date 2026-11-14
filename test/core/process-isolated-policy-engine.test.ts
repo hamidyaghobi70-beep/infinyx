@@ -87,6 +87,19 @@ describe("ProcessIsolatedPolicyEngine", () => {
     expect(engine.activeExecutionCount).toBe(0);
   });
 
+  it("accepts stderr output exactly at its per-stream byte boundary", async () => {
+    const engine = new ProcessIsolatedPolicyEngine({
+      moduleUrl: fixtureUrl,
+      maxStdoutBytes: 1024,
+      maxStderrBytes: 1024,
+      maxTotalOutputBytes: 2048
+    });
+    const result = await engine.evaluateDetailed(request("stderr-boundary"));
+    expect(result.outcome).toBe("COMPLETED");
+    expect(result.decision.effect).toBe("allow");
+    expect(engine.activeExecutionCount).toBe(0);
+  });
+
   it("fails closed when stdout and stderr cross their limits concurrently", async () => {
     const engine = new ProcessIsolatedPolicyEngine({
       moduleUrl: fixtureUrl,
