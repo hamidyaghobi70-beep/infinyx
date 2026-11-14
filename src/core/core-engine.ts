@@ -263,6 +263,7 @@ export class CoreEngine {
         { cause: error }
       );
       this.executorDrainPromise = Promise.reject(this.shutdownInitiationFailure);
+      void this.executorDrainPromise.catch(() => undefined);
     }
 
     // Always attempt policy shutdown, even if executor shutdown initiation failed.
@@ -284,6 +285,7 @@ export class CoreEngine {
       );
       this.shutdownInitiationFailure ??= failure;
       this.policyShutdownPromise = Promise.reject(failure);
+      void this.policyShutdownPromise.catch(() => undefined);
     }
   }
 
