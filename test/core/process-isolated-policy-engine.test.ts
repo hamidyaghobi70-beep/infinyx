@@ -183,6 +183,66 @@ describe("ProcessIsolatedPolicyEngine", () => {
     expect(engine.activeExecutionCount).toBe(0);
   });
 
+
+  it("preserves output failure as primary when it precedes caller cancellation", async () => {
+    const controller = new AbortController();
+    const states: string[] = [];
+    const engine = new ProcessIsolatedPolicyEngine({
+      moduleUrl: fixtureUrl,
+      maxStdoutBytes: 1024,
+      maxStderrBytes: 1024,
+      maxTotalOutputBytes: 2048,
+      onStateChange: (event) => {
+        states.push(event.state);
+        // STOP_REQUESTED from the output observer is the deterministic barrier.
+        if (event.state === "STOP_REQUESTED") controller.abort();
+      }
+    });
+
+    const result = await engine.evaluateDetailed(request("stdout-flood"), {
+      signal: controller.signal
+    });
+
+    expect(result.outcome).toBe("FAILED");
+    expect(result.stopReason).toBe("OUTPUT_LIMIT_EXCEEDED");
+    expect(result.decision).toEqual({
+      effect: "deny",
+      reason: "Policy evaluator exceeded its output budget; access denied."
+    });
+    expect(states).not.toContain("AUTHORIZED");
+    expect(engine.activeExecutionCount).toBe(0);
+  });
+
+  it("preserves caller cancellation as primary when it precedes output failure", async () => {
+    const controller = new AbortController();
+    const states: string[] = [];
+    const engine = new ProcessIsolatedPolicyEngine({
+      moduleUrl: fixtureUrl,
+      maxStdoutBytes: 1024,
+      maxStderrBytes: 1024,
+      maxTotalOutputBytes: 2048,
+      onStateChange: (event) => {
+        states.push(event.state);
+        // FINALIZING is emitted before the parent acknowledges the result;
+        // the fixture emits its late output only after that acknowledgement.
+        if (event.state === "FINALIZING") controller.abort();
+      }
+    });
+
+    const result = await engine.evaluateDetailed(request("late-stdout-flood"), {
+      signal: controller.signal
+    });
+
+    expect(result.outcome).toBe("CANCELLED");
+    expect(result.stopReason).toBe("CALLER_CANCELLED");
+    expect(result.decision).toEqual({
+      effect: "deny",
+      reason: "Policy execution cancelled by caller."
+    });
+    expect(states).not.toContain("AUTHORIZED");
+    expect(engine.activeExecutionCount).toBe(0);
+  });
+
   it("validates aggregate output budget against per-stream budgets", () => {
     expect(() => new ProcessIsolatedPolicyEngine({
       moduleUrl: fixtureUrl,
