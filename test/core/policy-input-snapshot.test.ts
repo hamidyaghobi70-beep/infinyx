@@ -87,6 +87,7 @@ describe("snapshotBoundedPolicyData", () => {
 
     expect(snapshotBoundedPolicyData(input)).toEqual([1]);
     expect(observed).toContain("get:length");
+    expect(observed.every((trap) => trap === "get:length")).toBe(true);
   });
 
   it("documents that property-descriptor reflection also executes Proxy traps", () => {
