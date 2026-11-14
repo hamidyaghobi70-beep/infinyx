@@ -7,6 +7,7 @@ on:
       - release/**
       - fix/infinyx-core-policy-cancellation
       - feat/gap-002-protected-operation-executor
+      - fix/policy-output-budget
       - fix/policy-terminal-authorization
       - integration/infinyx-core-runtime-v1
   pull_request:
@@ -15,6 +16,7 @@ on:
       - foundation/repository-foundation
       - main
       - feat/gap-002-protected-operation-executor
+      - fix/policy-output-budget
       - fix/policy-terminal-authorization
       - integration/infinyx-core-runtime-v1
 
