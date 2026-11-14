@@ -4,6 +4,12 @@ export default {
       return new Promise(() => undefined);
     }
 
+    if (request.action === "ignore-sigterm") {
+      process.on("SIGTERM", () => undefined);
+      setTimeout(() => process.exit(0), 500);
+      return new Promise(() => undefined);
+    }
+
     if (request.action === "cooperative") {
       return new Promise((resolve) => {
         if (options.signal.aborted) {
