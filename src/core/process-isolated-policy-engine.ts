@@ -383,6 +383,9 @@ export class ProcessIsolatedPolicyEngine implements PolicyEngine {
     };
 
     const requestOutputStop = (reason: PolicyOutputFailureReason): void => {
+      // A previously accepted cancellation/timeout veto is primary. If this
+      // output failure is accepted first, its reason remains primary at close;
+      // later cancellation is provenance-only and cannot replace the outcome.
       if (outputFailureReason !== undefined || resolved || closed || terminalVeto !== undefined) return;
       outputFailureReason = reason;
       stopReason = reason;
@@ -546,6 +549,10 @@ export class ProcessIsolatedPolicyEngine implements PolicyEngine {
         };
       }
 
+      // Arbitration is first-accepted-stop, not a fixed output-vs-cancellation
+      // priority: outputFailureReason can only be set before terminalVeto because
+      // requestOutputStop rejects events after a veto; when both exist, output
+      // failure was accepted first and remains the primary terminal cause.
       terminalCommitted = true;
       let outcome = (terminalVeto ?? candidate).outcome;
       let decision = (terminalVeto ?? candidate).decision;
