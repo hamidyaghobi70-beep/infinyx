@@ -438,6 +438,32 @@ describe("ProcessIsolatedPolicyEngine", () => {
     expect(engine.activeExecutionCount).toBe(0);
   });
 
+  it("lets parent cancellation veto a frozen allow while the child is held open", async () => {
+    const observer = stateObserver("FINALIZING");
+    const parent = new AbortController();
+    const engine = new ProcessIsolatedPolicyEngine({
+      moduleUrl: fixtureUrl,
+      timeoutMs: 5_000,
+      terminationGraceMs: 10,
+      killWaitMs: 500,
+      onStateChange: observer.onStateChange
+    });
+    const evaluation = engine.evaluateDetailed(request("allow-with-active-handle"), {
+      parentSignal: parent.signal
+    });
+
+    await observer.reached;
+    expect(engine.activeExecutionCount).toBe(1);
+    parent.abort();
+
+    const result = await evaluation;
+    expect(result.outcome).toBe("CANCELLED");
+    expect(result.stopReason).toBe("PARENT_CANCELLED");
+    expect(result.decision.effect).toBe("deny");
+    expect(observer.states).not.toContain("AUTHORIZED");
+    expect(engine.activeExecutionCount).toBe(0);
+  });
+
   it("keeps the deadline active after allow candidate freeze until terminal commitment", async () => {
     const observer = stateObserver("FINALIZING");
     const engine = new ProcessIsolatedPolicyEngine({
