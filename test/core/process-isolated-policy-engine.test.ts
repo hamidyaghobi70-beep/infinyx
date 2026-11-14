@@ -238,6 +238,24 @@ describe("ProcessIsolatedPolicyEngine", () => {
     expect(engine.activeExecutionCount).toBe(0);
   });
 
+  it("retains process capacity until an unresolved child actually closes", async () => {
+    const engine = new ProcessIsolatedPolicyEngine({
+      moduleUrl: fixtureUrl,
+      timeoutMs: 80,
+      terminationGraceMs: 10,
+      killWaitMs: 80,
+      maxConcurrent: 1
+    });
+    const result = await engine.evaluateDetailed(request("ignore-sigterm"));
+    expect(result.outcome).toBe("UNRESOLVED");
+    expect(result.runtimeStatus).toBe("UNRESOLVED");
+    expect(result.cleanupStatus).toBe("UNRESOLVED");
+    expect(engine.activeExecutionCount).toBe(1);
+
+    await new Promise((resolve) => setTimeout(resolve, 450));
+    expect(engine.activeExecutionCount).toBe(0);
+  });
+
   it("propagates parent cancellation as a distinct stop reason", async () => {
     const observer = stateObserver("RUNNING");
     const engine = new ProcessIsolatedPolicyEngine({
