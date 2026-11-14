@@ -7,6 +7,7 @@ on:
       - release/**
       - fix/infinyx-core-policy-cancellation
       - feat/gap-002-protected-operation-executor
+      - fix/policy-terminal-authorization
       - integration/infinyx-core-runtime-v1
   pull_request:
     branches:
