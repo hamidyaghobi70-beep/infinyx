@@ -419,6 +419,8 @@ describe("ProtectedOperationExecutor", () => {
 
   it("blocks cleanup after a handler drain deadline and observes late settlement without replay", async () => {
     let release!: (value: string) => void;
+    let signalHandlerStarted!: () => void;
+    const handlerStarted = new Promise<void>((resolve) => { signalHandlerStarted = resolve; });
     let handlerCalls = 0;
     let moduleStops = 0;
     const engine = new CoreEngine({
@@ -437,12 +439,13 @@ describe("ProtectedOperationExecutor", () => {
       validateInput: (value: unknown): value is string => typeof value === "string",
       handler: () => {
         handlerCalls += 1;
+        signalHandlerStarted();
         return new Promise<string>((resolve) => { release = resolve; });
       }
     });
     await ensureStarted(engine);
     const pending = engine.protectedOperations.execute(operation, { actorId: "pending" }, "work");
-    await Promise.resolve();
+    await handlerStarted;
     await expect(engine.stop()).rejects.toMatchObject({
       code: "PROTECTED_OPERATION_DRAIN_TIMEOUT"
     });
