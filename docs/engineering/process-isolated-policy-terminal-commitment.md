@@ -4,6 +4,7 @@
 **Status:** Engineering contract for PR #32, Stage 1  
 **Applies to:** `ProcessIsolatedPolicyEngine` terminal arbitration  
 **Baseline:** PR #32 audited head `9ee5303ae30eb14d5c425e203eae687779f16da0`
+**Reviewed revision:** `8268de37dd64f7e02eb89e86053f9c7b34823427`
 
 ## 1. Purpose
 
@@ -63,6 +64,8 @@ Use an evaluator fixture that exceeds the stdout budget. The engine's synchronou
 - deny decision uses the output-budget failure message;
 - `AUTHORIZED` is never emitted.
 
+Regression test: `preserves output failure as primary when it precedes caller cancellation`, using fixture action `stdout-flood`.
+
 ### 5.2 Cancellation before output failure
 
 Use an evaluator fixture that returns an allow candidate but emits output after the parent acknowledges finalization. The synchronous `FINALIZING` observer aborts the caller before that acknowledgement. Expected primary result:
@@ -72,11 +75,13 @@ Use an evaluator fixture that returns an allow candidate but emits output after 
 - decision is deny;
 - `AUTHORIZED` is never emitted.
 
+Regression test: `preserves caller cancellation as primary when it precedes output failure`, using fixture action `late-stdout-flood`.
+
 Both tests must assert the exact outcome, decision, primary stop reason, and absence of `AUTHORIZED`.
 
 ## 6. Relationship to INFINYX-ENG-002
 
-INFINYX-ENG-002 §11.2.4 requires the first accepted cancellation cause to remain the immutable primary cause and later distinct cancellation causes—including runtime shutdown—to be preserved as additional provenance events. This Stage 1 contract fixes the primary-cause arbitration for PR #32. P32-02 must implement and test the additional-provenance requirement without changing the primary terminal result defined here.
+INFINYX-ENG-002 §11.2.4 requires the first accepted cancellation cause to remain the immutable primary cause and later distinct cancellation causes—including runtime shutdown—to be preserved as additional provenance events. This Stage 1 contract fixes the primary-cause arbitration for PR #32. P32-02 implements and tests the additional-provenance requirement without changing the primary terminal result defined here.
 
 INFINYX-ENG-002 §11.2.9 retains the epoch-based meaning of the existing public `PolicyEvaluationOptions.deadlineAt`. The monotonic shutdown-drain clock requirement does not silently redefine this policy-evaluation API.
 
@@ -125,4 +130,4 @@ The P32-01 race tests and P32-02 provenance tests are the behavioral regression 
 
 `PolicyEvaluationOptions.deadlineAt` remains an epoch-millisecond wall-clock value. The coordinator computes the remaining duration against `Date.now()` and enforces the actual process timeout with its own timer. The child runner forwards the effective epoch-millisecond deadline hint unchanged to the evaluator; it does not use that value as a monotonic timer or convert it to `performance.now()`.
 
-This preserves the existing public API clock domain and keeps the shutdown-drain monotonic deadline separate. The checked INFINYX-ENG-002 revision at commit `555facf859d044368af145cc621af810e72e03db` states this compatibility rule in its clock-domain contract (normative §11.2.9); that revision does not contain a §11.1.8 heading, so this record does not mislabel the reference. This is consistent with the requested §11.1.8 principle: do not silently reinterpret the existing epoch-based `deadlineAt`.
+This preserves the existing public API clock domain and keeps the shutdown-drain monotonic deadline separate. The checked INFINYX-ENG-002 revision at commit `555facf859d044368af145cc621af810e72e03db` states this compatibility rule in its clock-domain contract (normative §11.2.9); that revision does not contain a §11.1.8 heading, so this record does not mislabel the reference. This is consistent with INFINYX-ENG-002 §11.2.9: do not silently reinterpret the existing epoch-based `deadlineAt`.
