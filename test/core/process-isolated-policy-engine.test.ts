@@ -285,6 +285,16 @@ describe("ProcessIsolatedPolicyEngine", () => {
     controller.abort();
 
     const result = await evaluation;
+    if (process.platform === "win32") {
+      // Windows child termination is forceful for this signal path; close is
+      // observed before the unresolved deadline, so capacity can be released.
+      expect(result.outcome).toBe("CANCELLED");
+      expect(result.runtimeStatus).toBe("STOPPED");
+      expect(result.cleanupStatus).toBe("COMPLETED");
+      expect(engine.activeExecutionCount).toBe(0);
+      return;
+    }
+
     expect(result.outcome).toBe("UNRESOLVED");
     expect(result.runtimeStatus).toBe("UNRESOLVED");
     expect(result.cleanupStatus).toBe("UNRESOLVED");
