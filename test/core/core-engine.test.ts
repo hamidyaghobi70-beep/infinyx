@@ -350,4 +350,20 @@ describe("CoreEngine guarded memory composition", () => {
     expect(second).toBeInstanceOf(GuardedMemoryPort);
     expect(first).not.toBe(second);
   });
+  it("rejects an explicitly present undefined drain deadline", () => {
+    expect(() => new CoreEngine({
+      protectedOperationShutdown: { drainDeadlineMs: undefined }
+    })).toThrow(expect.objectContaining({
+      code: "PROTECTED_OPERATION_SHUTDOWN_CONFIG_INVALID"
+    }));
+  });
+
+  it("uses a provisional default drain deadline when the setting is omitted", async () => {
+    const engine = new CoreEngine();
+    await engine.initialize();
+    await engine.start();
+    await engine.stop();
+    expect(engine.state).toBe("stopped");
+  });
+
 });
