@@ -15,6 +15,7 @@ on:
       - foundation/repository-foundation
       - main
       - feat/gap-002-protected-operation-executor
+      - fix/policy-output-budget
       - integration/infinyx-core-runtime-v1
 
 permissions:
