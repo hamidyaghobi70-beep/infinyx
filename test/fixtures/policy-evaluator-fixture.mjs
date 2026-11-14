@@ -27,6 +27,11 @@ export default {
       process.stdout.write(Buffer.alloc(512, 0x42));
       return { effect: "allow", reason: "Exact output boundary." };
     }
+    if (request.action === "stderr-boundary") {
+      process.stderr.write(Buffer.alloc(512, 0x41));
+      process.stderr.write(Buffer.alloc(512, 0x42));
+      return { effect: "allow", reason: "Exact stderr output boundary." };
+    }
     if (request.action === "simultaneous-flood") {
       process.stdout.write(Buffer.alloc(1100, 0x41));
       process.stderr.write(Buffer.alloc(1100, 0x42));
