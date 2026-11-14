@@ -11,7 +11,11 @@ interface CancelMessage {
   readonly reason: PolicyStopReason;
 }
 
-type ParentMessage = EvaluateMessage | CancelMessage;
+interface FinalizeMessage {
+  readonly type: "finalize";
+}
+
+type ParentMessage = EvaluateMessage | CancelMessage | FinalizeMessage;
 
 interface PolicyEvaluator {
   evaluate(
@@ -36,9 +40,9 @@ function sendFinal(message: unknown): void {
   if (finalMessageSent) return;
   finalMessageSent = true;
   if (!process.connected || !process.send) return;
-  process.send(message, () => {
-    if (process.connected) process.disconnect();
-  });
+  // Keep stdio observable until the parent freezes the candidate and
+  // acknowledges this final result. The parent still waits for "close".
+  process.send(message);
 }
 
 async function execute(message: EvaluateMessage): Promise<void> {
@@ -83,6 +87,11 @@ async function execute(message: EvaluateMessage): Promise<void> {
 process.on("message", (raw: unknown) => {
   if (!isRecord(raw)) return;
   const message = raw as unknown as ParentMessage;
+
+  if (message.type === "finalize") {
+    if (process.connected) process.disconnect();
+    return;
+  }
 
   if (message.type === "cancel") {
     controller?.abort({
