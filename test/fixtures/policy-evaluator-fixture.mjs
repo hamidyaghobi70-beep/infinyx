@@ -16,6 +16,15 @@ export default {
       });
     }
 
+    if (request.action === "aggregate-flood") {
+      process.stdout.write(Buffer.alloc(700, 0x41));
+      process.stderr.write(Buffer.alloc(700, 0x42));
+      return { effect: "allow", reason: "Aggregate flood attempted." };
+    }
+    if (request.action === "late-stdout-flood") {
+      setTimeout(() => process.stdout.write(Buffer.alloc(16 * 1024, 0x43)), 0);
+      return { effect: "allow", reason: "Late flood attempted." };
+    }
     if (request.action === "stdout-flood") {
       process.stdout.write(Buffer.alloc(16 * 1024, 0x41));
       return { effect: "allow", reason: "Flood attempted." };
