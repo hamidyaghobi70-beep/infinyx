@@ -386,10 +386,7 @@ export class ProcessIsolatedPolicyEngine implements PolicyEngine {
       if (message.type === "error" && typeof message.message === "string") {
         freezeCandidate({
           outcome: "FAILED",
-          decision: deny(
-            "Policy evaluator process failed; access denied. " +
-            message.message.trim().slice(0, 500)
-          )
+          decision: deny("Policy evaluator process failed; access denied.")
         });
       }
     });
@@ -413,8 +410,7 @@ export class ProcessIsolatedPolicyEngine implements PolicyEngine {
         candidate = {
           outcome: "FAILED",
           decision: deny(
-            "Policy evaluator process exited without a valid result; access denied." +
-            (stderr.trim() ? " " + stderr.trim().slice(0, 500) : "")
+            "Policy evaluator process exited without a valid result; access denied."
           )
         };
       }
