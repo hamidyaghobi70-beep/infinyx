@@ -163,4 +163,85 @@ describe("CoreEngine policy runtime shutdown", () => {
     releaseHandler();
     await execution;
   });
+
+  it("orders simultaneous failures from both shutdown subsystems deterministically", async () => {
+    const engine = new CoreEngine({
+      policy: {
+        evaluate: async () => ({ effect: "allow" as const, reason: "allowed" }),
+        shutdown: async () => { throw new Error("policy-private-detail"); }
+      }
+    });
+    Object.defineProperty(engine, "protectedOperationExecutor", {
+      value: {
+        closeAdmission: () => undefined,
+        drain: async () => { throw new Error("executor-private-detail"); }
+      }
+    });
+
+    let shutdownError: unknown;
+    try {
+      await engine.stop();
+    } catch (error) {
+      shutdownError = error;
+    }
+
+    expect(shutdownError).toMatchObject({
+      code: "POLICY_SHUTDOWN_FAILED",
+      shutdownBlockers: [
+        {
+          code: "POLICY_SHUTDOWN_FAILED",
+          subsystem: "policy",
+          state: "failed"
+        },
+        {
+          code: "PROTECTED_OPERATION_SHUTDOWN_FAILED",
+          subsystem: "protected_operations",
+          state: "failed"
+        }
+      ]
+    });
+    const message = shutdownError instanceof Error ? shutdownError.message : "";
+    expect(message).not.toContain("policy-private-detail");
+    expect(message).not.toContain("executor-private-detail");
+  });
+
+  it("reports both unresolved shutdown paths and selects the policy timeout as primary", async () => {
+    const engine = new CoreEngine({
+      protectedOperationShutdown: { drainDeadlineMs: 20 },
+      policy: {
+        evaluate: async () => ({ effect: "allow" as const, reason: "allowed" }),
+        shutdown: () => new Promise<void>(() => undefined)
+      }
+    });
+    Object.defineProperty(engine, "protectedOperationExecutor", {
+      value: {
+        closeAdmission: () => undefined,
+        drain: () => new Promise<void>(() => undefined)
+      }
+    });
+
+    let shutdownError: unknown;
+    try {
+      await engine.stop();
+    } catch (error) {
+      shutdownError = error;
+    }
+
+    expect(shutdownError).toMatchObject({
+      code: "POLICY_EVALUATION_DRAIN_TIMEOUT",
+      shutdownBlockers: [
+        {
+          code: "POLICY_EVALUATION_DRAIN_TIMEOUT",
+          subsystem: "policy",
+          state: "unresolved"
+        },
+        {
+          code: "PROTECTED_OPERATION_DRAIN_TIMEOUT",
+          subsystem: "protected_operations",
+          state: "unresolved"
+        }
+      ]
+    });
+    expect(engine.state).toBe("stopping");
+  });
 });
