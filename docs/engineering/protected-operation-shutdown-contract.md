@@ -264,3 +264,73 @@ The following is the recommended resolution of the open decisions above. It is a
 The baseline implementation currently passes the existing test that demonstrates an admitted handler may remain active after `CoreEngine.stop()` resolves. The executor currently sets handler context `operationId` to the registration ID. These are observed baseline behaviors, not accepted production guarantees.
 
 **Disposition:** Proposed contract for architecture and independent review. Implementation remains not authorized by this document.
+
+## 11.2 Mandatory resolution of the 2026-11-14 architecture review
+
+This section records the mandatory amendments from the final INFINYX-ENG-002 architecture review. It is normative and supersedes any earlier wording in this document that leaves these points open or suggests a weaker guarantee. It remains a documentation proposal; it does not authorize implementation.
+
+### 11.2.1 Ownership and proof of asynchronous activity termination
+
+1. **Handler promise ownership:** the promise returned by an admitted handler is the completion boundary for every asynchronous activity that the handler starts and that may access Runtime-owned resources or affect the operation's outcome. The handler must not return or fulfill while such dependent activity remains active.
+2. **No untracked detached work:** fire-and-forget or otherwise detached asynchronous work that can use Runtime-owned resources, perform operation side effects, or affect the handler's outcome is prohibited. A handler that needs child tasks must either await all of them before its returned promise settles, or register each task with the Runtime-owned child-activity registry before it can outlive the handler's own control flow.
+3. **Child registry:** separately registered child tasks must have stable per-task identity, explicit parent invocation identity, cancellation provenance, settlement tracking, and terminal bookkeeping. Registration must occur before the task can become detached. The shutdown drain barrier includes every registered child task and must not treat the parent handler as drained while any dependent child remains unsettled.
+4. **Policy parity:** the same ownership rule applies to Policy Evaluators and their delegates. A policy evaluation's tracked completion must represent all asynchronous work it starts that may access policy/runtime resources. Detached delegate work is prohibited unless registered in a policy-owned dependent-activity registry and included in policy drain.
+5. **Termination proof:** a handler or evaluator promise settling proves completion only when the applicable ownership rule guarantees that no unregistered dependent activity remains. An AbortSignal, wrapper Promise.race result, callback removal, or delegate shutdown acknowledgement without an explicit termination guarantee is not such proof.
+6. **Resource eligibility:** the policy drain is complete only when all underlying evaluations and their registered dependent activities have settled, or an explicitly accepted delegate guarantee proves their termination. The protected-operation drain is complete only when all admitted handlers and their registered dependent activities have settled and terminal bookkeeping is complete.
+
+### 11.2.2 Explicit initiation-failure and recovery policy
+
+The current contract adopts a fail-closed, sticky recovery policy for this stage:
+
+1. The coordinator distinguishes these observable states: `INITIATION_FAILED`, `DRAIN_PENDING`, `DRAIN_COMPLETED`, `RECOVERY_REQUIRED`, and `CLEANUP_ELIGIBLE`. These are shutdown-coordination states, not substitutes for the CoreEngine lifecycle states.
+2. If executor shutdown initiation throws or partially performs side effects, record `INITIATION_FAILED` and `RECOVERY_REQUIRED`. Retain all invocation and child-activity records. Do not assume cancellation reached every handler.
+3. If policy shutdown initiation or delegate shutdown fails, record the corresponding initiation/shutdown failure and `RECOVERY_REQUIRED`. Retain all underlying evaluator and child-activity records. Do not infer evaluator termination from a wrapper result or partial delegate effects.
+4. **No automatic or implicit re-invocation** of executor shutdown initiation or policy/delegate shutdown is permitted after an initiation failure or rejection in this stage. A later `CoreEngine.stop()` call may observe already tracked work and report its state, but must not repeat a potentially side-effecting initiation.
+5. A retry of either failed initiation is prohibited until a separate, explicit Recovery Contract is approved. That contract must identify the prior side-effect state, establish an idempotency or safe-resumption guarantee, define how partial cancellation/termination is reconciled, and include deterministic tests proving no duplicated side effects, lost records, or duplicate terminal bookkeeping.
+6. Until that Recovery Contract exists and is accepted, `RECOVERY_REQUIRED` is a sticky blocker: admission remains closed, cleanup remains prohibited, and `stop(): Promise<void>` must reject with the appropriate stable `CoreError.code`. The coordinator must not convert this state into success merely because currently visible handler/evaluator promises have settled.
+7. A drain timeout without an initiation failure remains `DRAIN_PENDING`; later explicit observation may use a fresh wait deadline over the same tracked records. It must never reopen admission, replay a handler, restart an evaluation, or reset cancellation provenance.
+8. `DRAIN_COMPLETED` is reachable only after every required handler, evaluator, and registered dependent activity is proven settled and all required terminal bookkeeping has completed. `CLEANUP_ELIGIBLE` is reachable only after that condition holds, no sticky `RECOVERY_REQUIRED` blocker exists, and the final monotonic-deadline check below passes.
+
+This policy intentionally chooses sticky failure over an assumed retry. Any future retry capability requires the separate Recovery Contract; it is not implied by this document.
+
+### 11.2.3 Monotonic deadline enforcement at the cleanup decision
+
+1. Each drain attempt has one finite absolute monotonic deadline. Handler, child-task, policy-evaluator, and delegate-shutdown observation share that same deadline and begin in the same synchronous shutdown-start turn.
+2. The implementation must compare the current monotonic clock with the absolute deadline at the actual cleanup-eligibility decision, immediately before any module cleanup is invoked. It must not rely solely on a timeout callback or timer promise to indicate that the deadline has or has not elapsed.
+3. If the event loop delays the timeout callback and the monotonic deadline has already elapsed, the attempt is expired even if the timer callback has not run. No cleanup may begin on the basis of late timer delivery.
+4. If all work settles after the absolute deadline but before a delayed timeout callback executes, the final monotonic check still rejects the attempt as expired. A later explicit observation attempt may use a fresh deadline over the same settled records, subject to the sticky initiation-failure rule.
+5. The deadline bounds the drain barrier only. It does not create a timeout guarantee for module cleanup.
+
+### 11.2.4 Cancellation competition and provenance
+
+1. Caller, parent, and Runtime-shutdown cancellation are competing causes, not separate handler invocations.
+2. Preserve the first accepted cause as the immutable primary cause for the invocation. Record each later distinct cause as an additional provenance event, including Runtime shutdown even if the signal was already aborted.
+3. Do not overwrite the primary cause, create a replacement signal that loses earlier provenance, or deliver duplicate terminal bookkeeping when another cancellation source arrives.
+4. The deterministic test contract must control the order of cancellation-source arrival and assert the primary cause, complete provenance set, and single terminal outcome.
+
+### 11.2.5 API compatibility and migration contract
+
+1. Preserve the public method signature exactly as `stop(): Promise<void>` in this compatibility stage. Successful completion resolves with `void`; timeout, unresolved drain, initiation failure, recovery-required state, and module cleanup failure reject.
+2. Preserve the source-level field name `operationId`, but define its meaning as the unique identifier of one invocation. Do not rename or remove it in this stage.
+3. Add the independent `operationDefinitionId` field for the stable registered definition identity. Both fields must be present in the new invocation context and relevant audit/lifecycle records.
+4. This is a semantic correction for consumers that previously interpreted `operationId` as the registration/definition identifier. Such consumers must migrate definition-level lookups and grouping to `operationDefinitionId`; invocation-level correlation continues to use `operationId`.
+5. Document the migration as a compatibility note: the field name remains source-compatible, but its value semantics change. Consumers must not assume old persisted registration IDs in `operationId` are invocation IDs. Historical records require version-aware interpretation or an explicit data migration; the Runtime must not silently relabel old records.
+6. Shutdown errors remain observable through stable `CoreError.code` values. Consumers must branch on codes rather than parsing messages. The method must never resolve successfully on timeout or drain failure.
+7. Do not introduce a return union or rename `operationId` as part of this change. Any future structured shutdown result or breaking identifier rename requires a separately versioned API decision.
+
+### 11.2.6 Additional deterministic acceptance tests
+
+The original 31 cases remain proposed acceptance criteria and are not evidence of executed tests. Add these four cases:
+
+32. **Handler child activity and detached-work prohibition:** use controllable parent and child promises. Prove that the handler cannot be considered settled while an awaited child remains active; prove that a registered child task remains in the drain registry after parent control flow ends; prove cleanup is blocked until the child settles and bookkeeping completes. Include a negative contract test showing that unregistered detached work capable of using Runtime-owned resources is rejected by the test harness/adapter contract.
+33. **Event-loop delay and absolute deadline:** use an injected monotonic clock and controllable scheduler rather than arbitrary sleeps. Advance the monotonic clock beyond the absolute deadline while delaying timer callback delivery; prove the final cleanup decision rejects and cleanup is not invoked. Also prove wall-clock changes do not affect the monotonic deadline.
+34. **Competing cancellation sources:** control caller, parent, and Runtime-shutdown cancellation arrival order. Assert that the first accepted cause remains immutable primary cause, later causes are preserved as provenance, all expected cancellation requests are observable, and handler invocation/terminal bookkeeping occurs exactly once.
+35. **Partial initiation failure and recovery gate:** simulate executor and policy/delegate shutdown initiation failures after partial side effects. Assert that state becomes `INITIATION_FAILED` and `RECOVERY_REQUIRED`, admission remains closed, all invocation/evaluator/child records remain tracked, cleanup is blocked, and later `stop()` observation does not re-invoke either initiation. Assert that only a separately approved Recovery Contract can authorize a retry and that such retry tests must prove no duplicated side effects or lost records.
+
+All 35 cases must use controllable promises, signals, an injected monotonic clock, and a deterministic scheduler as appropriate. No arbitrary sleeps are acceptable. These cases are specification-only until implemented and executed on a separately authorized implementation branch.
+
+### 11.2.7 Updated disposition
+
+**NOT READY FOR IMPLEMENTATION.** The accepted architecture decisions above are incorporated as proposed normative contract amendments. The document still requires a fresh architecture review of this exact revision and independent security/quality review. Passing documentation-branch CI is repository workflow evidence only; it is not proof that runtime behavior implements this contract.
+
+Implementation, source-code changes, executable-test changes, merge, release, deployment, and changes to `main` remain unauthorized.
