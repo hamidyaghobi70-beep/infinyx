@@ -63,6 +63,33 @@ describe("ProcessIsolatedPolicyEngine", () => {
     );
   });
 
+  it("accepts output exactly at the per-stream byte boundary across chunks", async () => {
+    const engine = new ProcessIsolatedPolicyEngine({
+      moduleUrl: fixtureUrl,
+      maxStdoutBytes: 1024,
+      maxStderrBytes: 1024,
+      maxTotalOutputBytes: 2048
+    });
+    const result = await engine.evaluateDetailed(request("stdout-boundary"));
+    expect(result.outcome).toBe("COMPLETED");
+    expect(result.decision.effect).toBe("allow");
+    expect(engine.activeExecutionCount).toBe(0);
+  });
+
+  it("fails closed when stdout and stderr cross their limits concurrently", async () => {
+    const engine = new ProcessIsolatedPolicyEngine({
+      moduleUrl: fixtureUrl,
+      maxStdoutBytes: 1024,
+      maxStderrBytes: 1024,
+      maxTotalOutputBytes: 2048
+    });
+    const result = await engine.evaluateDetailed(request("simultaneous-flood"));
+    expect(result.outcome).toBe("FAILED");
+    expect(result.decision.effect).toBe("deny");
+    expect(result.stopReason).toBe("OUTPUT_LIMIT_EXCEEDED");
+    expect(engine.activeExecutionCount).toBe(0);
+  });
+
   it("fails closed when stdout exceeds its byte budget", async () => {
     const engine = new ProcessIsolatedPolicyEngine({
       moduleUrl: fixtureUrl,
