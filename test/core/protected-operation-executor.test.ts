@@ -439,4 +439,19 @@ describe("ProtectedOperationExecutor", () => {
   });
 
 
+
+  it("denies an oversized caller context before policy evaluation or handler admission", async () => {
+    const evaluator = vi.fn(async () => allow);
+    const { engine, operation, handler } = makeEngine(evaluator);
+    await ensureStarted(engine);
+    const result = await engine.protectedOperations.execute(
+      operation,
+      { actorId: "oversized", context: { attributes: { payload: "x".repeat(16_385) } } },
+      { value: "x" }
+    );
+    expect(result).toMatchObject({ status: "denied" });
+    expect(evaluator).not.toHaveBeenCalled();
+    expect(handler).not.toHaveBeenCalled();
+  });
+
 });
