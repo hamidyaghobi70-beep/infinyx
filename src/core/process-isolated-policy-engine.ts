@@ -228,10 +228,8 @@ export class ProcessIsolatedPolicyEngine implements PolicyEngine {
     });
 
     child.stdout?.resume();
-    let stderr = "";
-    child.stderr?.on("data", (chunk: Buffer | string) => {
-      if (stderr.length < 4_096) stderr += String(chunk).slice(0, 4_096 - stderr.length);
-    });
+    // Drain diagnostics without retaining or exposing evaluator-controlled output.
+    child.stderr?.resume();
 
     let resolveCompletion!: (record: PolicyExecutionRecord) => void;
     const completion = new Promise<PolicyExecutionRecord>((resolve) => {
