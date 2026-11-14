@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import type {
   PolicyEngine,
   PolicyEvaluationOptions,
@@ -198,8 +199,9 @@ export class ProtectedOperationExecutor implements ProtectedOperationPort {
       if (decision.effect !== "allow") return this.denied(decision.reason);
       if (!this.isCoreReady()) return this.denied("Core Engine is stopping; protected operation denied.");
 
+      const operationId = randomUUID();
       const value = await registration.handler(input, Object.freeze({
-        operationId: registration.id, signal: operationController.signal
+        operationId, signal: operationController.signal
       }));
       return { status: "executed", value };
     } catch {
