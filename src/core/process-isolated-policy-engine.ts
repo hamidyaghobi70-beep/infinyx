@@ -1,7 +1,7 @@
 import { existsSync } from "node:fs";
 import { fork } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { observePolicyOutputStream } from "./policy-output-stream.js";
+import { observePolicyOutputStream, type PolicyOutputFailureReason } from "./policy-output-stream.js";
 import { dirname, isAbsolute, join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import type {
@@ -264,7 +264,7 @@ export class ProcessIsolatedPolicyEngine implements PolicyEngine {
     let stdoutBytes = 0;
     let stderrBytes = 0;
     let totalOutputBytes = 0;
-    let outputFailureReason: "OUTPUT_LIMIT_EXCEEDED" | "OUTPUT_STREAM_FAILED" | undefined;
+    let outputFailureReason: PolicyOutputFailureReason | undefined;
     let timeout: ReturnType<typeof setTimeout> | undefined;
     let graceTimer: ReturnType<typeof setTimeout> | undefined;
     let killWaitTimer: ReturnType<typeof setTimeout> | undefined;
@@ -349,7 +349,7 @@ export class ProcessIsolatedPolicyEngine implements PolicyEngine {
       scheduleHardTermination();
     };
 
-    const requestOutputStop = (reason: "OUTPUT_LIMIT_EXCEEDED" | "OUTPUT_STREAM_FAILED"): void => {
+    const requestOutputStop = (reason: PolicyOutputFailureReason): void => {
       if (outputFailureReason !== undefined || resolved || closed) return;
       outputFailureReason = reason;
       stopReason = reason;
