@@ -264,6 +264,7 @@ export class CoreEngine {
         this.shutdownInitiationFailure ??= failure;
         throw failure;
       });
+      void this.executorDrainPromise.catch(() => undefined);
     } catch (error) {
       this.shutdownInitiationFailure = new CoreError(
         "PROTECTED_OPERATION_SHUTDOWN_FAILED",
@@ -287,6 +288,7 @@ export class CoreEngine {
       }).then(() => {
         this.policyShutdownSettled = true;
       });
+      void this.policyShutdownPromise.catch(() => undefined);
     } catch (error) {
       const failure = new CoreError(
         "POLICY_SHUTDOWN_FAILED",
