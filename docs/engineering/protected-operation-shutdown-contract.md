@@ -204,6 +204,11 @@ The implementation is not acceptable without deterministic tests covering at lea
 21. A settled handler rejection is recorded as the operation's failed outcome but does not by itself prevent safe cleanup; a later module cleanup failure remains `MODULE_STOP_FAILED`.
 22. After a bounded stop attempt rejects with a drain timeout, lifecycle remains `stopping`; once the rejected shared promise is cleared, a later explicit `stop()` is accepted, shares no stale rejected promise, and re-observes the same tracked invocation without replay. Admission remains closed throughout.
 
+23. Handler draining and underlying policy-evaluation/delegate-shutdown observation consume one shared monotonic deadline; sequentially resolving one path must not grant the other path a fresh budget within the same attempt.
+24. Advancing or moving the wall clock while a drain attempt is pending does not extend or shorten the monotonic drain deadline.
+25. When multiple blockers coexist at the shared deadline, the primary stable error code follows section 11.1 precedence and immutable sanitized details include every blocker observed at that deadline.
+26. If delegate policy shutdown rejects while handlers remain active, the attempt rejects with the policy-shutdown failure, module cleanup remains blocked, and a later explicit attempt observes the same tracked work without replay or duplicate terminal bookkeeping.
+
 Tests must use controlled promises/signals rather than relying on arbitrary sleeps.
 
 ## 11. API and compatibility decisions still required
