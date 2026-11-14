@@ -126,6 +126,22 @@ Requirements:
 6. The executor and policy wrapper shutdown boundaries must be idempotent. Repeated calls may request/observe the same cancellation and tracked work, but may not duplicate terminal bookkeeping or restart work.
 7. Do not introduce a new successful return union in this compatibility stage. If a future API returns a structured shutdown report, that is a separately versioned compatibility decision.
 
+### 6.4 Retryable shutdown-attempt lifecycle
+
+A bounded shutdown attempt may reject while protected handlers or policy evaluators remain tracked. That rejection ends the current caller wait; it does not roll the CoreEngine lifecycle back to `running`, mark it `stopped`, or discard unresolved work.
+
+Requirements:
+
+1. Keep the engine in `stopping` after a drain timeout or policy-shutdown failure that leaves shutdown incomplete.
+2. If a `stopPromise` is currently pending, every concurrent `stop()` caller receives that exact same promise.
+3. If the previous attempt has settled by rejection and its shared promise has been cleared, a later explicit `stop()` call while lifecycle is `stopping` must be allowed to start a new bounded observation attempt. It must not reopen admission.
+4. A new attempt must reuse the same executor invocation records and underlying policy-evaluation records. It must not invoke a handler again, create a new `operationId`, or reset a prior cancellation cause.
+5. If all tracked handlers and policy evaluations have since settled successfully (and policy shutdown is confirmed complete), the later attempt may proceed to module cleanup. If work remains unresolved, it may wait until its configured deadline and reject again.
+6. Policy shutdown must be idempotent and observable across attempts: an earlier rejected caller wait is not proof that the delegate shutdown or evaluator work has settled.
+7. Only successful completion of all required drains and module cleanup may transition lifecycle to `stopped`. A failed module cleanup retains the existing explicit cleanup-retry rules and dependency protection.
+
+This is a continuation of the same shutdown, not a second shutdown or operation replay.
+
 ## 7. Timeout and retry semantics
 
 - The handler-drain deadline bounds how long one shutdown attempt waits for admitted handlers; it does not terminate JavaScript execution.
@@ -184,6 +200,7 @@ The implementation is not acceptable without deterministic tests covering at lea
 19. Policy-evaluation drain deadline expiry rejects with `POLICY_EVALUATION_DRAIN_TIMEOUT`, while a policy shutdown rejection maps to `POLICY_SHUTDOWN_FAILED`; neither starts cleanup.
 20. A later explicit `stop()` after a previously timed-out handler settles can complete cleanup without invoking the handler again or changing its `operationId`.
 21. A settled handler rejection is recorded as the operation's failed outcome but does not by itself prevent safe cleanup; a later module cleanup failure remains `MODULE_STOP_FAILED`.
+22. After a bounded stop attempt rejects with a drain timeout, lifecycle remains `stopping`; once the rejected shared promise is cleared, a later explicit `stop()` is accepted, shares no stale rejected promise, and re-observes the same tracked invocation without replay. Admission remains closed throughout.
 
 Tests must use controlled promises/signals rather than relying on arbitrary sleeps.
 
@@ -200,7 +217,7 @@ Before implementation, architecture review must explicitly decide:
 - How active-operation tracking is exposed to diagnostics without exposing mutable internal state.
 - How a permanently non-cooperative handler is handled operationally without silently cleaning up its dependencies.
 
-These are explicit design gates, not implementation details to guess.
+These are explicit design gates, not implementation details to guess. The retryable `stopping` lifecycle behavior in section 6.4 is a required compatibility correction because the current `stop()` lifecycle guard does not permit a new attempt once an earlier stop promise has rejected while the engine remains `stopping`.
 
 ## 12. Acceptance and promotion gates
 
