@@ -21,7 +21,8 @@ No branch was merged or deployed as part of this audit.
 | #13 | PostgreSQL memory audit adapter prototype | `integration/infinyx-core-runtime-v1` | `feat/stage4-postgres-audit-adapter` at `e94fe46d63bab12218fb7539a610bbcd878c2f45` | Draft; run `43500656793`: Linux, Windows, PostgreSQL integration and dependency audit jobs passed; macOS verification was cancelled before steps ran. Cross-platform evidence incomplete. Adapter is not integrated into GuardedMemoryPort. |
 | #14 | Informational landing-page shell | `integration/infinyx-core-runtime-v1` | `feat/infinyx-public-site-shell` at `3c04d4b6b2f83db51863a6bd6cb586c2eeacc381` | Draft; exact-head CI run `43503827509` success. Static informational shell only; not a production service. |
 | #15 | Bounded-deadline test stability | `fix/stage4-freeze-guarded-memory-prototype` | `fix/stage4-deadline-test-stability` at `18441d8908b2a3bd50a1f30d37f54b35f7b4c399` | Draft; no exact-head workflow run recorded. PR target branch is absent from the CI workflow's pull_request branch allowlist. Test-only change; no production behavior fix established. |
-| #16 | Global quality and product roadmap | `integration/infinyx-core-runtime-v1` | `docs/global-quality-roadmap` at `12bd0c1869990f30c582fb8bf05b6d0b7511960b` | Draft; documentation-only; exact-head CI run `43556337477` completed successfully on Ubuntu, macOS, Windows, and Dependency Security Audit. |
+| #16 | Global quality and product roadmap | `integration/infinyx-core-runtime-v1` | `docs/global-quality-roadmap` at `562f3be5affad2e23348228485dae257daa13e44` | Draft; documentation-only; prior exact-head CI run `43556337477` passed on its then-current head `907a67dd12efbb3327501f853015238f4d534440`. No workflow run is recorded yet for the current head after the governance correction. |
+| #17 | Protected-operation shutdown contract | `integration/infinyx-core-runtime-v1` | `docs/protected-operation-shutdown-contract` at `e5f76c4656ecd46b572ba9b6770e9e2012fd1038` | Draft; documentation-only; exact-head CI run `43567072989` passed on Ubuntu, macOS, Windows, and Dependency Security Audit. Internal architecture and security/quality passes are ACCEPT WITH CONDITIONS; same reviewer, not independent third-party assurance. |
 
 ## 3. Dependency and promotion interpretation
 
@@ -94,4 +95,4 @@ This audit does not authorize:
 - enabling authentication, user accounts, agents, tools, financial operations, or external side effects;
 - treating any Draft PR as accepted or production-ready.
 
-**Audit status:** Findings and the verification refresh are recorded for review. They are not a substitute for Haniyeh's architecture acceptance or an independent security review.
+**Audit status:** Findings and verification refresh are recorded for review. Current owner delegation assigns architecture and security/quality review passes to ChatGPT, explicitly as internal reviews by the same reviewer and not independent third-party assurance. Obtain external independent assurance only where required by risk assessment or a release gate.
