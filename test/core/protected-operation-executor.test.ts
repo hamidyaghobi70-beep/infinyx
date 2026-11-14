@@ -417,6 +417,52 @@ describe("ProtectedOperationExecutor", () => {
     expect(await pending).toEqual({ status: "executed", value: "completed" });
   });
 
+
+  it("waits for every concurrently admitted handler before module cleanup", async () => {
+    const releases = new Map<string, (value: string) => void>();
+    const started = new Set<string>();
+    let signalStarted!: () => void;
+    const allStarted = new Promise<void>((resolve) => { signalStarted = resolve; });
+    let moduleStops = 0;
+    const engine = new CoreEngine({ policy: { evaluate: async () => allow } });
+    engine.register({
+      id: "concurrent-resource-owner",
+      version: "1.0.0",
+      stop: () => { moduleStops += 1; }
+    });
+    const operation = engine.registerProtectedOperation({
+      id: "records.concurrent",
+      action: "record.write",
+      resource: "record:concurrent",
+      validateInput: (value: unknown): value is string => typeof value === "string",
+      handler: (value) => new Promise<string>((resolve) => {
+        releases.set(value, resolve);
+        started.add(value);
+        if (started.size === 2) signalStarted();
+      })
+    });
+    await ensureStarted(engine);
+    const first = engine.protectedOperations.execute(
+      operation, { actorId: "concurrent-first" }, "first"
+    );
+    const second = engine.protectedOperations.execute(
+      operation, { actorId: "concurrent-second" }, "second"
+    );
+    await allStarted;
+
+    const stopping = engine.stop();
+    expect(moduleStops).toBe(0);
+    releases.get("first")?.("first-done");
+    await Promise.resolve();
+    expect(moduleStops).toBe(0);
+
+    releases.get("second")?.("second-done");
+    await stopping;
+    expect(await first).toEqual({ status: "executed", value: "first-done" });
+    expect(await second).toEqual({ status: "executed", value: "second-done" });
+    expect(moduleStops).toBe(1);
+  });
+
   it("blocks cleanup after a handler drain deadline and observes late settlement without replay", async () => {
     let release!: (value: string) => void;
     let signalHandlerStarted!: () => void;
