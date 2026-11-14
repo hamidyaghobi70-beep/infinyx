@@ -210,11 +210,16 @@ describe("ProcessIsolatedPolicyEngine", () => {
     expect(engine.activeExecutionCount).toBe(0);
   });
 
-  it("fails closed when the evaluator returns an invalid decision", async () => {
-    const engine = new ProcessIsolatedPolicyEngine({ moduleUrl: fixtureUrl });
+  it("fails closed without authorization when the evaluator returns an invalid decision", async () => {
+    const observer = stateObserver("TERMINAL");
+    const engine = new ProcessIsolatedPolicyEngine({
+      moduleUrl: fixtureUrl,
+      onStateChange: observer.onStateChange
+    });
     const result = await engine.evaluateDetailed(request("invalid"));
     expect(result.outcome).toBe("DENIED");
     expect(result.decision.effect).toBe("deny");
+    expect(observer.states).not.toContain("AUTHORIZED");
   });
 
   it("does not start work when the caller signal is already aborted", async () => {
