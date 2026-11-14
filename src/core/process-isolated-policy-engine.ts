@@ -269,12 +269,17 @@ export class ProcessIsolatedPolicyEngine implements PolicyEngine {
     let resolved = false;
     let stopReason: PolicyStopReason | undefined;
     const stopProvenance: PolicyCancellationCause[] = [];
-    const recordStopCause = (reason: PolicyStopReason): void => {
-      if (stopProvenance.some((cause) => cause.code === reason)) return;
-      stopProvenance.push(Object.freeze({
-        code: reason,
-        message: stopMessage(reason)
-      }));
+    const acceptStopCause = (reason: PolicyStopReason): "PRIMARY" | "SECONDARY" | "IGNORED" => {
+      if (terminalCommitted || resolved || closed) return "IGNORED";
+      if (!stopProvenance.some((cause) => cause.code === reason)) {
+        stopProvenance.push(Object.freeze({
+          code: reason,
+          message: stopMessage(reason)
+        }));
+      }
+      if (stopReason !== undefined) return "SECONDARY";
+      stopReason = reason;
+      return "PRIMARY";
     };
     let stdoutBytes = 0;
     let stderrBytes = 0;
@@ -367,19 +372,15 @@ export class ProcessIsolatedPolicyEngine implements PolicyEngine {
     };
 
     const requestStop = (reason: PolicyStopReason): void => {
-      if (terminalCommitted || resolved || closed) return;
-      recordStopCause(reason);
-      // The first accepted cause is immutable primary. Later distinct causes
-      // are retained as provenance without changing the candidate or re-running
-      // cancellation/termination bookkeeping.
-      if (stopReason !== undefined) return;
+      // Both cancellation and output-stop paths use the same arbiter. Only the
+      // first accepted cause may change the candidate or initiate termination.
+      if (acceptStopCause(reason) !== "PRIMARY") return;
 
       const veto: Candidate = {
         outcome: reason === "POLICY_TIMEOUT" ? "TIMED_OUT" : "CANCELLED",
         decision: deny(stopMessage(reason)),
         stopReason: reason
       };
-      stopReason = reason;
       if (candidateFrozen) {
         // Candidate Freeze is immutable. A stop observed before terminal
         // commitment is recorded separately and vetoes authorization.
@@ -400,13 +401,9 @@ export class ProcessIsolatedPolicyEngine implements PolicyEngine {
     };
 
     const requestOutputStop = (reason: PolicyOutputFailureReason): void => {
-      if (terminalCommitted || resolved || closed) return;
-      recordStopCause(reason);
-      // A cancellation/timeout accepted first remains primary. Conversely,
-      // once an output failure is primary, later cancellation is provenance only.
-      if (stopReason !== undefined) return;
+      // Output failures share the same first-cause arbitration as cancellation.
+      if (acceptStopCause(reason) !== "PRIMARY") return;
 
-      stopReason = reason;
       outputFailureReason = reason;
       if (!candidateFrozen) {
         candidateFrozen = true;
