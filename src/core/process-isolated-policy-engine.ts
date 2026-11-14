@@ -11,6 +11,7 @@ import type {
   PolicyExecutionLifecycleState,
   PolicyEvaluationOptions,
   PolicyExecutionRecord,
+  PolicyCancellationCause,
   PolicyRequest,
   PolicyRuntimeStatus,
   PolicyStopReason,
@@ -70,7 +71,8 @@ function makeRecord(
   decision: PolicyDecision,
   runtimeStatus: PolicyRuntimeStatus,
   cleanupStatus: PolicyCleanupStatus,
-  stopReason?: PolicyStopReason
+  stopReason?: PolicyStopReason,
+  stopProvenance?: readonly PolicyCancellationCause[]
 ): PolicyExecutionRecord {
   return Object.freeze({
     lifecycle,
@@ -79,7 +81,10 @@ function makeRecord(
     runtimeStatus,
     cleanupStatus,
     candidateFrozen: true,
-    ...(stopReason === undefined ? {} : { stopReason })
+    ...(stopReason === undefined ? {} : { stopReason }),
+    ...(stopProvenance === undefined || stopProvenance.length === 0
+      ? {}
+      : { stopProvenance: Object.freeze([...stopProvenance]) })
   });
 }
 
@@ -263,6 +268,14 @@ export class ProcessIsolatedPolicyEngine implements PolicyEngine {
     let closed = false;
     let resolved = false;
     let stopReason: PolicyStopReason | undefined;
+    const stopProvenance: PolicyCancellationCause[] = [];
+    const recordStopCause = (reason: PolicyStopReason): void => {
+      if (stopProvenance.some((cause) => cause.code === reason)) return;
+      stopProvenance.push(Object.freeze({
+        code: reason,
+        message: stopMessage(reason)
+      }));
+    };
     let stdoutBytes = 0;
     let stderrBytes = 0;
     let totalOutputBytes = 0;
@@ -319,7 +332,8 @@ export class ProcessIsolatedPolicyEngine implements PolicyEngine {
         deny("Policy process termination could not be confirmed; access denied."),
         "UNRESOLVED",
         "UNRESOLVED",
-        stopReason
+        stopReason,
+        stopProvenance
       ));
     };
 
@@ -354,14 +368,18 @@ export class ProcessIsolatedPolicyEngine implements PolicyEngine {
 
     const requestStop = (reason: PolicyStopReason): void => {
       if (terminalCommitted || resolved || closed) return;
-      // Preserve the first stop observed before terminal commitment. Once a
-      // stop candidate is frozen, later cancellation sources cannot replace it.
-      if (terminalVeto !== undefined || (candidateFrozen && candidate?.stopReason !== undefined)) return;
+      recordStopCause(reason);
+      // The first accepted cause is immutable primary. Later distinct causes
+      // are retained as provenance without changing the candidate or re-running
+      // cancellation/termination bookkeeping.
+      if (stopReason !== undefined) return;
+
       const veto: Candidate = {
         outcome: reason === "POLICY_TIMEOUT" ? "TIMED_OUT" : "CANCELLED",
         decision: deny(stopMessage(reason)),
         stopReason: reason
       };
+      stopReason = reason;
       if (candidateFrozen) {
         // Candidate Freeze is immutable. A stop observed before terminal
         // commitment is recorded separately and vetoes authorization.
@@ -370,7 +388,6 @@ export class ProcessIsolatedPolicyEngine implements PolicyEngine {
         candidateFrozen = true;
         candidate = veto;
       }
-      stopReason = reason;
       notify("STOP_REQUESTED");
       if (spawned && child.connected) {
         try {
@@ -383,13 +400,14 @@ export class ProcessIsolatedPolicyEngine implements PolicyEngine {
     };
 
     const requestOutputStop = (reason: PolicyOutputFailureReason): void => {
-      // A previously accepted cancellation/timeout veto is primary. If this
-      // output failure is accepted first, its reason remains primary at close;
-      // later cancellation cannot replace the primary outcome. Secondary
-      // cause recording is intentionally deferred to the P32-02 change.
-      if (outputFailureReason !== undefined || resolved || closed || terminalVeto !== undefined) return;
-      outputFailureReason = reason;
+      if (terminalCommitted || resolved || closed) return;
+      recordStopCause(reason);
+      // A cancellation/timeout accepted first remains primary. Conversely,
+      // once an output failure is primary, later cancellation is provenance only.
+      if (stopReason !== undefined) return;
+
       stopReason = reason;
+      outputFailureReason = reason;
       if (!candidateFrozen) {
         candidateFrozen = true;
         candidate = {
@@ -576,7 +594,8 @@ export class ProcessIsolatedPolicyEngine implements PolicyEngine {
         decision,
         "STOPPED",
         "COMPLETED",
-        outputFailureReason ?? terminalVeto?.stopReason ?? candidate.stopReason
+        stopReason ?? outputFailureReason ?? terminalVeto?.stopReason ?? candidate.stopReason,
+        stopProvenance
       ));
     });
 
