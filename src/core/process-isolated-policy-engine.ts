@@ -397,7 +397,8 @@ export class ProcessIsolatedPolicyEngine implements PolicyEngine {
       if (candidateFrozen || resolved || closed) return;
       candidateFrozen = true;
       candidate = next;
-      if (next.outcome === "COMPLETED") notify("AUTHORIZED");
+      // Candidate selection is provisional. Authorization is emitted only
+      // after process close and all output/exit checks have committed an allow.
       notify("FINALIZING");
       scheduleHardTermination();
     };
@@ -499,6 +500,9 @@ export class ProcessIsolatedPolicyEngine implements PolicyEngine {
         decision = deny("Policy evaluator process exited abnormally; access denied.");
       }
 
+      // ChildProcess "close" fires after the child has ended and its stdio
+      // streams have closed. Only this point can publish a committed allow.
+      if (outcome === "COMPLETED") notify("AUTHORIZED");
       notify("TERMINAL");
       resolved = true;
       resolveCompletion(makeRecord(
