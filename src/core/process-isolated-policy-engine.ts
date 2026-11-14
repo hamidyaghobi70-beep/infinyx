@@ -121,6 +121,8 @@ function stopMessage(reason: PolicyStopReason): string {
       return "Policy execution timed out.";
     case "OUTPUT_LIMIT_EXCEEDED":
       return "Policy evaluator exceeded its output budget; access denied.";
+    case "OUTPUT_STREAM_FAILED":
+      return "Policy evaluator output stream failed; access denied.";
   }
 }
 
@@ -261,7 +263,7 @@ export class ProcessIsolatedPolicyEngine implements PolicyEngine {
     let stdoutBytes = 0;
     let stderrBytes = 0;
     let totalOutputBytes = 0;
-    let outputLimitExceeded = false;
+    let outputFailureReason: "OUTPUT_LIMIT_EXCEEDED" | "OUTPUT_STREAM_FAILED" | undefined;
     let timeout: ReturnType<typeof setTimeout> | undefined;
     let graceTimer: ReturnType<typeof setTimeout> | undefined;
     let killWaitTimer: ReturnType<typeof setTimeout> | undefined;
@@ -337,22 +339,22 @@ export class ProcessIsolatedPolicyEngine implements PolicyEngine {
       scheduleHardTermination();
     };
 
-    const requestOutputLimitStop = (): void => {
-      if (outputLimitExceeded || resolved || closed) return;
-      outputLimitExceeded = true;
-      stopReason = "OUTPUT_LIMIT_EXCEEDED";
+    const requestOutputStop = (reason: "OUTPUT_LIMIT_EXCEEDED" | "OUTPUT_STREAM_FAILED"): void => {
+      if (outputFailureReason !== undefined || resolved || closed) return;
+      outputFailureReason = reason;
+      stopReason = reason;
       if (!candidateFrozen) {
         candidateFrozen = true;
         candidate = {
           outcome: "FAILED",
-          decision: deny(stopMessage("OUTPUT_LIMIT_EXCEEDED")),
-          stopReason: "OUTPUT_LIMIT_EXCEEDED"
+          decision: deny(stopMessage(reason)),
+          stopReason: reason
         };
       }
       notify("STOP_REQUESTED");
       if (spawned && child.connected) {
         try {
-          child.send({ type: "cancel", reason: "OUTPUT_LIMIT_EXCEEDED" });
+          child.send({ type: "cancel", reason });
         } catch {
           // Hard termination remains authoritative.
         }
@@ -361,14 +363,14 @@ export class ProcessIsolatedPolicyEngine implements PolicyEngine {
     };
 
     const observeOutput = (stream: "stdout" | "stderr", chunk: unknown): void => {
-      if (outputLimitExceeded || resolved || closed) return;
+      if (outputFailureReason !== undefined || resolved || closed) return;
       const bytes = Buffer.isBuffer(chunk)
         ? chunk.byteLength
         : typeof chunk === "string"
           ? Buffer.byteLength(chunk)
           : Number.NaN;
       if (!Number.isSafeInteger(bytes) || bytes < 0) {
-        requestOutputLimitStop();
+        requestOutputStop("OUTPUT_LIMIT_EXCEEDED");
         return;
       }
 
@@ -377,7 +379,7 @@ export class ProcessIsolatedPolicyEngine implements PolicyEngine {
       const streamExceeded = bytes > streamLimit - streamCurrent;
       const totalExceeded = bytes > this.maxTotalOutputBytes - totalOutputBytes;
       if (streamExceeded || totalExceeded) {
-        requestOutputLimitStop();
+        requestOutputStop("OUTPUT_LIMIT_EXCEEDED");
         return;
       }
 
@@ -388,8 +390,8 @@ export class ProcessIsolatedPolicyEngine implements PolicyEngine {
 
     child.stdout?.on("data", (chunk: Buffer | string) => observeOutput("stdout", chunk));
     child.stderr?.on("data", (chunk: Buffer | string) => observeOutput("stderr", chunk));
-    child.stdout?.on("error", () => requestOutputLimitStop());
-    child.stderr?.on("error", () => requestOutputLimitStop());
+    child.stdout?.on("error", () => requestOutputStop("OUTPUT_STREAM_FAILED"));
+    child.stderr?.on("error", () => requestOutputStop("OUTPUT_STREAM_FAILED"));
 
     const freezeCandidate = (next: Candidate): void => {
       if (candidateFrozen || resolved || closed) return;
@@ -489,9 +491,9 @@ export class ProcessIsolatedPolicyEngine implements PolicyEngine {
 
       let outcome = candidate.outcome;
       let decision = candidate.decision;
-      if (outputLimitExceeded) {
+      if (outputFailureReason !== undefined) {
         outcome = "FAILED";
-        decision = deny(stopMessage("OUTPUT_LIMIT_EXCEEDED"));
+        decision = deny(stopMessage(outputFailureReason));
       } else if ((outcome === "COMPLETED" || outcome === "DENIED") && code !== 0) {
         outcome = "FAILED";
         decision = deny("Policy evaluator process exited abnormally; access denied.");
@@ -505,7 +507,7 @@ export class ProcessIsolatedPolicyEngine implements PolicyEngine {
         decision,
         "STOPPED",
         "COMPLETED",
-        outputLimitExceeded ? "OUTPUT_LIMIT_EXCEEDED" : candidate.stopReason
+        outputFailureReason ?? candidate.stopReason
       ));
     });
 
