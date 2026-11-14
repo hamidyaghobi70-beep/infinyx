@@ -104,8 +104,9 @@ This coordination requirement is necessary because the current `FailClosedPolicy
 
 ## 7. Timeout and retry semantics
 
-- The drain deadline bounds how long one shutdown attempt waits; it does not terminate JavaScript execution.
-- At deadline, the runtime reports that shutdown is unresolved/blocked. It must not claim successful shutdown.
+- The handler-drain deadline bounds how long one shutdown attempt waits for admitted handlers; it does not terminate JavaScript execution.
+- The policy-shutdown deadline independently bounds the wait for policy shutdown completion. Architecture must define whether both deadlines share one absolute shutdown budget or have separate bounded budgets.
+- When either deadline expires, the runtime reports that shutdown is unresolved/blocked. It must not claim successful shutdown.
 - The unresolved invocation remains tracked until its promise settles or the process terminates.
 - A subsequent explicit shutdown attempt may wait for the same invocation; it must not invoke the handler again.
 - No automatic retry of the protected operation is permitted as part of shutdown recovery.
@@ -150,6 +151,10 @@ The implementation is not acceptable without deterministic tests covering at lea
 10. Multiple active handlers are all signalled and all must settle before cleanup.
 11. Handler rejection is recorded as failure and does not prevent safe cleanup once the handler has settled.
 12. No automatic retry occurs after drain timeout.
+13. If policy delegate shutdown is held on a controllable promise, runtime-shutdown cancellation is still requested from every admitted handler immediately; handler draining does not wait for policy shutdown to settle.
+14. With zero initialized modules and one admitted handler, `stop()` still waits for handler settlement or reports unresolved/blocked; it must not take a no-module fast path to `stopped`.
+15. Policy shutdown rejection or deadline expiry blocks module cleanup even when all handlers have settled.
+16. A handler is not removed from the active registry until its settlement outcome and required terminal bookkeeping have completed.
 
 Tests must use controlled promises/signals rather than relying on arbitrary sleeps.
 
