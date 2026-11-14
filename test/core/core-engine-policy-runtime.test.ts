@@ -121,6 +121,9 @@ describe("CoreEngine policy runtime shutdown", () => {
         return "settled";
       }
     });
+    await engine.initialize();
+    await engine.start();
+
     const execution = engine.protectedOperations.execute(
       operation,
       { actorId: "test" },
