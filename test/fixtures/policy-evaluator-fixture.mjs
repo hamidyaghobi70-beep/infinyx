@@ -6,7 +6,7 @@ export default {
 
     if (request.action === "ignore-sigterm") {
       process.on("SIGTERM", () => undefined);
-      setTimeout(() => process.exit(0), 1_000);
+      setTimeout(() => process.exit(0), 2_000);
       return new Promise(() => undefined);
     }
 

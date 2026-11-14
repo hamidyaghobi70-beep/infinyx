@@ -321,11 +321,31 @@ export class ProcessIsolatedPolicyEngine implements PolicyEngine {
     };
 
     const scheduleHardTermination = (): void => {
-      if (graceTimer !== undefined || closed || resolved) return;
+      if (!spawned || graceTimer !== undefined || killWaitTimer !== undefined || closed || resolved) return;
       graceTimer = setTimeout(() => {
+        graceTimer = undefined;
         if (closed || resolved) return;
-        child.kill();
-        killWaitTimer = setTimeout(finishUnresolved, this.killWaitMs);
+
+        // First request cooperative termination. If the child ignores it,
+        // escalate to an uncatchable signal before declaring termination unknown.
+        try {
+          child.kill("SIGTERM");
+        } catch {
+          // Continue to forceful escalation after the grace window.
+        }
+
+        killWaitTimer = setTimeout(() => {
+          killWaitTimer = undefined;
+          if (closed || resolved) return;
+
+          try {
+            child.kill("SIGKILL");
+          } catch {
+            // The final close wait decides whether termination is confirmed.
+          }
+
+          killWaitTimer = setTimeout(finishUnresolved, this.killWaitMs);
+        }, this.killWaitMs);
       }, this.terminationGraceMs);
     };
 
@@ -437,9 +457,7 @@ export class ProcessIsolatedPolicyEngine implements PolicyEngine {
       spawned = true;
       if (candidateFrozen || this.shuttingDown) {
         if (!candidateFrozen) requestStop("RUNTIME_SHUTDOWN");
-        if (graceTimer !== undefined) clearTimeout(graceTimer);
-        child.kill();
-        killWaitTimer = setTimeout(finishUnresolved, this.killWaitMs);
+        else scheduleHardTermination();
         return;
       }
       try {
