@@ -449,7 +449,9 @@ export class ProcessIsolatedPolicyEngine implements PolicyEngine {
       // Candidate selection is provisional. Authorization is emitted only
       // after process close and all output/exit checks have committed an allow.
       notify("FINALIZING");
-      scheduleHardTermination();
+      // Do not terminate a valid candidate merely because it is frozen.
+      // Keep the child alive for natural close; timeout/cancellation owns
+      // the termination escalation path until terminal commitment.
     };
 
     this.active.set(executionId, { completion, cancel: requestStop });
