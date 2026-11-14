@@ -506,8 +506,9 @@ This section defines the required control boundary without overstating what same
 
 ## 12. Acceptance and promotion gates
 
-- Haniyeh's architecture acceptance is required before implementation.
-- Independent security/quality review is required for the shutdown race, cancellation, timeout, and audit-correlation design.
+- A documented architecture review by the owner-designated technical lead is required before implementation. Under the current owner delegation, ChatGPT performs and records this review.
+- A separately documented security/quality review pass is also required for shutdown races, cancellation, timeout, audit correlation, privacy, authorization, and isolation boundaries. ChatGPT performs this separate pass and must identify it as a same-reviewer assessment, not independent third-party assurance.
+- If the implementation risk assessment or a later release gate requires independent assurance, that review must be obtained separately; the internal review must never be represented as independent.
 - Exact-head CI must pass on the intended base and required platforms after implementation.
 - The PR remains Draft until the applicable review and evidence requirements are met.
 - This document does not authorize merging PR #17, modifying `main`, releasing, or deploying.
