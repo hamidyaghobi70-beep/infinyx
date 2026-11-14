@@ -331,6 +331,13 @@ The original 31 cases remain proposed acceptance criteria and are not evidence o
 
 All 35 cases must use controllable promises, signals, an injected monotonic clock, and a deterministic scheduler as appropriate. No arbitrary sleeps are acceptable. These cases are specification-only until implemented and executed on a separately authorized implementation branch.
 
+### 11.2.7 Updated disposition
+
+**NOT READY FOR IMPLEMENTATION.** The ACCEPT WITH CONDITIONS review findings ENG002-R08, ENG002-R09, and ENG002-R10 have been addressed as proposed normative amendments. This exact revision still requires fresh architecture review and independent security/quality review. The provisional 30,000 ms default must be validated against representative load-test evidence before implementation acceptance. Passing documentation-branch CI is repository workflow evidence only; it is not proof that runtime behavior implements this contract.
+
+Implementation, source-code changes, executable-test changes, merge, release, deployment, and changes to `main` remain unauthorized.
+
+
 ### 11.2.8 ENG002-R08 — Enforceable child-activity ownership and detached-work boundary
 
 1. **Runtime Resource Capability Broker:** handlers and Policy Evaluators must receive Runtime-owned resource access only through explicit, scoped capability interfaces supplied by the Runtime. Do not pass raw database clients, filesystem handles, sockets, module-owned resource objects, or unrestricted service containers into handler/evaluator context.
@@ -364,9 +371,3 @@ This section defines the required control boundary without overstating what same
 5. The 35 acceptance cases are proposed specification criteria, not evidence of implementation or executed tests. Cases 27–31 are interpreted under the sticky Recovery policy in section 11.2.2; case 32 must test capability-mediated child registration and the honest isolation boundary in section 11.2.8.
 6. References elsewhere in this document to pending decisions, recommended resolutions, or the former architecture-acceptance request are historical only and must not override the current decisions recorded in section 11.2.
 
-
-### 11.2.7 Updated disposition
-
-**NOT READY FOR IMPLEMENTATION.** The ACCEPT WITH CONDITIONS review findings ENG002-R08, ENG002-R09, and ENG002-R10 have been addressed as proposed normative amendments. This exact revision still requires fresh architecture review and independent security/quality review. The provisional 30,000 ms default must be validated against representative load-test evidence before implementation acceptance. Passing documentation-branch CI is repository workflow evidence only; it is not proof that runtime behavior implements this contract.
-
-Implementation, source-code changes, executable-test changes, merge, release, deployment, and changes to `main` remain unauthorized.
