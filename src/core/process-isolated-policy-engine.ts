@@ -222,10 +222,8 @@ export class ProcessIsolatedPolicyEngine implements PolicyEngine {
     });
 
     child.stdout?.resume();
-    let stderr = "";
-    child.stderr?.on("data", (chunk: Buffer | string) => {
-      if (stderr.length < 4_096) stderr += String(chunk).slice(0, 4_096 - stderr.length);
-    });
+    // Drain stderr without retaining or exposing child-process diagnostics.
+    child.stderr?.resume();
 
     let resolveCompletion!: (record: PolicyExecutionRecord) => void;
     const completion = new Promise<PolicyExecutionRecord>((resolve) => {
@@ -380,10 +378,7 @@ export class ProcessIsolatedPolicyEngine implements PolicyEngine {
       if (message.type === "error" && typeof message.message === "string") {
         freezeCandidate({
           outcome: "FAILED",
-          decision: deny(
-            "Policy evaluator process failed; access denied. " +
-            message.message.trim().slice(0, 500)
-          )
+          decision: deny("Policy evaluator process failed; access denied.")
         });
       }
     });
@@ -407,8 +402,7 @@ export class ProcessIsolatedPolicyEngine implements PolicyEngine {
         candidate = {
           outcome: "FAILED",
           decision: deny(
-            "Policy evaluator process exited without a valid result; access denied." +
-            (stderr.trim() ? " " + stderr.trim().slice(0, 500) : "")
+            "Policy evaluator process exited without a valid result; access denied."
           )
         };
       }
