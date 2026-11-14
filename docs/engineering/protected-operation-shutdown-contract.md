@@ -180,6 +180,10 @@ The implementation is not acceptable without deterministic tests covering at lea
 15. With zero initialized modules and one admitted handler, `stop()` still waits for handler settlement or reports unresolved/blocked; it must not take a no-module fast path to `stopped`.
 16. Policy shutdown rejection or deadline expiry blocks module cleanup even when all handlers have settled.
 17. A handler is not removed from the active registry until its settlement outcome and required terminal bookkeeping have completed.
+18. Handler-drain deadline expiry rejects `stop()` with `CoreError.code === "PROTECTED_OPERATION_DRAIN_TIMEOUT"`; it does not resolve successfully or start cleanup.
+19. Policy-evaluation drain deadline expiry rejects with `POLICY_EVALUATION_DRAIN_TIMEOUT`, while a policy shutdown rejection maps to `POLICY_SHUTDOWN_FAILED`; neither starts cleanup.
+20. A later explicit `stop()` after a previously timed-out handler settles can complete cleanup without invoking the handler again or changing its `operationId`.
+21. A settled handler rejection is recorded as the operation's failed outcome but does not by itself prevent safe cleanup; a later module cleanup failure remains `MODULE_STOP_FAILED`.
 
 Tests must use controlled promises/signals rather than relying on arbitrary sleeps.
 
