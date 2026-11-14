@@ -330,6 +330,8 @@ export class ProcessIsolatedPolicyEngine implements PolicyEngine {
 
     const finishUnresolved = (): void => {
       if (resolved || closed) return;
+      // UNRESOLVED is committed without a policy candidate; later child events
+      // cannot create or replace a candidate. The active entry remains until close.
       terminalCommitted = true;
       resolved = true;
       clearTimers();
@@ -408,6 +410,8 @@ export class ProcessIsolatedPolicyEngine implements PolicyEngine {
       // Output failures share the same first-cause arbitration as cancellation.
       if (acceptStopCause(reason) !== "PRIMARY") return;
 
+      // This assignment is reachable only for PRIMARY: the shared arbiter has
+      // accepted this output cause before any cancellation/timeout veto.
       outputFailureReason = reason;
       if (!candidateFrozen) {
         candidateFrozen = true;
@@ -557,6 +561,8 @@ export class ProcessIsolatedPolicyEngine implements PolicyEngine {
       clearTimers();
       removeAbortListeners();
       this.active.delete(executionId);
+      // finishUnresolved already committed a candidate-free UNRESOLVED record;
+      // close only releases capacity and must not run terminal candidate logic.
       if (resolved) return;
 
       if (!candidateFrozen || !candidate) {
