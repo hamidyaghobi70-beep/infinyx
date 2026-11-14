@@ -47,6 +47,49 @@ describe("ProcessIsolatedPolicyEngine", () => {
     expect(engine.activeExecutionCount).toBe(0);
   });
 
+  it("fails closed when stdout exceeds its byte budget", async () => {
+    const engine = new ProcessIsolatedPolicyEngine({
+      moduleUrl: fixtureUrl,
+      maxStdoutBytes: 1024,
+      maxStderrBytes: 1024,
+      maxTotalOutputBytes: 2048
+    });
+    const result = await engine.evaluateDetailed(request("stdout-flood"));
+    expect(result.outcome).toBe("FAILED");
+    expect(result.decision).toEqual({
+      effect: "deny",
+      reason: "Policy evaluator exceeded its output budget; access denied."
+    });
+    expect(result.stopReason).toBe("OUTPUT_LIMIT_EXCEEDED");
+    expect(result.runtimeStatus).toBe("STOPPED");
+    expect(engine.activeExecutionCount).toBe(0);
+  });
+
+  it("fails closed when stderr exceeds its byte budget", async () => {
+    const engine = new ProcessIsolatedPolicyEngine({
+      moduleUrl: fixtureUrl,
+      maxStdoutBytes: 1024,
+      maxStderrBytes: 1024,
+      maxTotalOutputBytes: 2048
+    });
+    const result = await engine.evaluateDetailed(request("stderr-flood"));
+    expect(result.outcome).toBe("FAILED");
+    expect(result.stopReason).toBe("OUTPUT_LIMIT_EXCEEDED");
+    expect(result.decision.reason).toBe(
+      "Policy evaluator exceeded its output budget; access denied."
+    );
+    expect(engine.activeExecutionCount).toBe(0);
+  });
+
+  it("validates aggregate output budget against per-stream budgets", () => {
+    expect(() => new ProcessIsolatedPolicyEngine({
+      moduleUrl: fixtureUrl,
+      maxStdoutBytes: 2048,
+      maxStderrBytes: 1024,
+      maxTotalOutputBytes: 1024
+    })).toThrow(RangeError);
+  });
+
   it("preserves an explicit deny decision", async () => {
     const engine = new ProcessIsolatedPolicyEngine({ moduleUrl: fixtureUrl });
     const result = await engine.evaluateDetailed(request("deny"));
