@@ -93,8 +93,9 @@ This is a fail-closed safety rule. Operational recovery for a permanently non-co
 The implementation must provide one lifecycle coordination boundary shared by `CoreEngine` and `ProtectedOperationExecutor`:
 
 1. `CoreEngine.stop()` first changes lifecycle to `stopping`, which closes the existing admission predicate synchronously.
-2. In the same synchronous start-of-stop turn, it invokes an executor shutdown method that synchronously marks the executor as closing and aborts the controllers of all registered admitted invocations. It must not wait for policy shutdown before doing this.
+2. In the same synchronous start-of-stop turn, it invokes an executor shutdown method that synchronously marks the executor as closing and aborts the controllers of all registered admitted invocations. It must not wait for policy shutdown before doing this. The abort must carry a structured shutdown cause; caller and parent cancellation provenance must not be silently overwritten.
 3. It also invokes `policy.shutdown()` synchronously in that start-of-stop turn. The returned promises are then observed concurrently; a rejection or deadline expiry is a shutdown failure/block, not permission to clean up.
+4. Policy shutdown must distinguish **cancelling the wrapper's wait** from **settlement of the underlying evaluator**. An `AbortSignal` request or a `Promise.race` returning Deny does not prove the delegate evaluator has stopped. The policy wrapper must retain and track each in-flight delegate evaluation until it settles, unless the delegate exposes a separately documented shutdown guarantee that establishes termination. If an evaluator remains unresolved and may still use resources, policy shutdown is unresolved and module cleanup remains blocked.
 4. The executor's active registry is populated before calling handler code and retains each invocation until its handler promise settles and terminal bookkeeping completes. Registering an invocation and calling the handler must not be separated by an `await`.
 5. Pending policy evaluations are not active handlers. They are stopped by the policy shutdown path; their late Allow results must fail the final lifecycle/admission check.
 6. The engine must use the same drain-and-block rules even if `initializedModules` is empty.
@@ -152,9 +153,10 @@ The implementation is not acceptable without deterministic tests covering at lea
 11. Handler rejection is recorded as failure and does not prevent safe cleanup once the handler has settled.
 12. No automatic retry occurs after drain timeout.
 13. If policy delegate shutdown is held on a controllable promise, runtime-shutdown cancellation is still requested from every admitted handler immediately; handler draining does not wait for policy shutdown to settle.
-14. With zero initialized modules and one admitted handler, `stop()` still waits for handler settlement or reports unresolved/blocked; it must not take a no-module fast path to `stopped`.
-15. Policy shutdown rejection or deadline expiry blocks module cleanup even when all handlers have settled.
-16. A handler is not removed from the active registry until its settlement outcome and required terminal bookkeeping have completed.
+14. A policy evaluator that ignores its signal and whose delegate shutdown does not establish termination remains tracked as unresolved; `stop()` must not treat the wrapper's early Deny result as proof that the evaluator settled.
+15. With zero initialized modules and one admitted handler, `stop()` still waits for handler settlement or reports unresolved/blocked; it must not take a no-module fast path to `stopped`.
+16. Policy shutdown rejection or deadline expiry blocks module cleanup even when all handlers have settled.
+17. A handler is not removed from the active registry until its settlement outcome and required terminal bookkeeping have completed.
 
 Tests must use controlled promises/signals rather than relying on arbitrary sleeps.
 
@@ -166,7 +168,8 @@ Before implementation, architecture review must explicitly decide:
 - The default and configurable drain deadline, and whether zero/unbounded values are prohibited.
 - The public shape of a blocked/unresolved shutdown result (typed result versus rejected `stop()` promise and stable error code).
 - The policy-shutdown deadline and its relationship to the protected-handler drain deadline; neither wait may silently remain unbounded.
-- How cancellation reasons are represented without relying on unsupported runtime-specific behavior.
+- How cancellation reasons are represented without relying on unsupported runtime-specific behavior, including precedence/provenance when caller, parent, and runtime shutdown cancellation race.
+- Whether a policy delegate's `shutdown()` contract guarantees evaluator termination, or whether the wrapper must independently drain tracked delegate evaluations.
 - How active-operation tracking is exposed to diagnostics without exposing mutable internal state.
 - How a permanently non-cooperative handler is handled operationally without silently cleaning up its dependencies.
 
