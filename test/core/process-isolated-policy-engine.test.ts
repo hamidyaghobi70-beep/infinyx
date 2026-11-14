@@ -181,6 +181,27 @@ describe("ProcessIsolatedPolicyEngine", () => {
     expect(engine.activeExecutionCount).toBe(0);
   });
 
+  it("does not expose evaluator exception messages in public decisions", async () => {
+    const engine = new ProcessIsolatedPolicyEngine({ moduleUrl: fixtureUrl });
+    const result = await engine.evaluateDetailed(request("sensitive-error"));
+    expect(result.outcome).toBe("FAILED");
+    expect(result.decision).toEqual({
+      effect: "deny",
+      reason: "Policy evaluator process failed; access denied."
+    });
+    expect(result.decision.reason).not.toContain("PRIVATE_EVALUATOR_DETAIL");
+  });
+
+  it("does not expose child stderr when the evaluator exits unexpectedly", async () => {
+    const engine = new ProcessIsolatedPolicyEngine({ moduleUrl: fixtureUrl });
+    const result = await engine.evaluateDetailed(request("crash"));
+    expect(result.outcome).toBe("FAILED");
+    expect(result.decision.reason).toBe(
+      "Policy evaluator process exited without a valid result; access denied."
+    );
+    expect(result.decision.reason).not.toContain("PRIVATE_STDERR_DETAIL");
+  });
+
   it("enforces the configured concurrent process capacity", async () => {
     const observer = stateObserver("RUNNING");
     const engine = new ProcessIsolatedPolicyEngine({
