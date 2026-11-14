@@ -219,6 +219,20 @@ Before implementation, architecture review must explicitly decide:
 
 These are explicit design gates, not implementation details to guess. The retryable `stopping` lifecycle behavior in section 6.4 is a required compatibility correction because the current `stop()` lifecycle guard does not permit a new attempt once an earlier stop promise has rejected while the engine remains `stopping`.
 
+### 11.1 Recommended architecture resolution package (pending Haniyeh acceptance)
+
+The following is the recommended resolution of the open decisions above. It is a review proposal only; none of these choices is an implementation authorization.
+
+1. **One absolute deadline per shutdown attempt:** start handler draining, policy-evaluation draining, and delegate shutdown observation in the same synchronous start-of-stop turn. Give each attempt one finite, configurable absolute deadline measured with a monotonic clock. This avoids accidentally adding sequential timeout windows. A later explicit attempt receives a fresh wait deadline but observes the same underlying invocation/evaluation records.
+2. **Per-invocation identity:** use Node.js `crypto.randomUUID()` once at invocation admission. Keep `operationDefinitionId` separate and immutable. Treat retries as new invocations with new IDs; never reuse an ID to imply idempotency.
+3. **Cancellation provenance:** record an immutable primary cancellation cause as the first accepted cause for an invocation. Preserve later causes (including runtime shutdown) as additional provenance events; do not overwrite the original cause or issue duplicate handler invocation. The shutdown coordinator independently records that runtime shutdown was requested even when the handler's signal had already been aborted by its caller or parent.
+4. **Evaluator settlement proof:** retain the underlying delegate evaluation promise in a policy-owned active-evaluation registry until it actually settles. A delegate `shutdown()` may replace individual waiting only if its documented contract explicitly guarantees termination of all in-flight evaluations and a deterministic test proves that guarantee.
+5. **Simultaneous blockers:** collect all drain blockers observed at the attempt deadline and expose a sanitized immutable blocker list in error details. Preserve the existing stable error codes; choose the primary code deterministically using this precedence when multiple blockers coexist: `POLICY_SHUTDOWN_FAILED`, then `POLICY_EVALUATION_DRAIN_TIMEOUT`, then `PROTECTED_OPERATION_DRAIN_TIMEOUT`. Keep the other blockers in details so callers do not mistake the primary code for the only unresolved path. Preserve the original cause for a policy shutdown failure.
+6. **Retry and idempotency:** retries are explicit calls only. A retry observes the same unresolved work and same cancellation provenance; it never replays handlers, restarts evaluations, regenerates IDs, or resets the shutdown state.
+7. **Diagnostics:** expose counts and immutable, privacy-minimized snapshots only. Do not expose mutable registries, AbortControllers, raw caller context, or secrets.
+
+**Architecture acceptance requested:** accept or amend each item above, especially the single-deadline model and deterministic simultaneous-blocker precedence, before runtime implementation begins.
+
 ## 12. Acceptance and promotion gates
 
 - Haniyeh's architecture acceptance is required before implementation.
