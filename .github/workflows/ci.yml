@@ -6,6 +6,7 @@ on:
       - foundation/repository-foundation
       - release/**
       - fix/infinyx-core-policy-cancellation
+      - fix/policy-terminal-commit-veto
       - feat/gap-002-protected-operation-executor
       - integration/infinyx-core-runtime-v1
   pull_request:

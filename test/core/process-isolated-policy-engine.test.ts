@@ -183,6 +183,124 @@ describe("ProcessIsolatedPolicyEngine", () => {
     expect(engine.activeExecutionCount).toBe(0);
   });
 
+
+  it("preserves output failure as primary when it precedes caller cancellation", async () => {
+    const controller = new AbortController();
+    const states: string[] = [];
+    const engine = new ProcessIsolatedPolicyEngine({
+      moduleUrl: fixtureUrl,
+      maxStdoutBytes: 1024,
+      maxStderrBytes: 1024,
+      maxTotalOutputBytes: 2048,
+      onStateChange: (event) => {
+        states.push(event.state);
+        // STOP_REQUESTED from the output observer is the deterministic barrier.
+        if (event.state === "STOP_REQUESTED") controller.abort();
+      }
+    });
+
+    const result = await engine.evaluateDetailed(request("stdout-flood"), {
+      signal: controller.signal
+    });
+
+    expect(result.outcome).toBe("FAILED");
+    expect(result.stopReason).toBe("OUTPUT_LIMIT_EXCEEDED");
+    expect(result.decision).toEqual({
+      effect: "deny",
+      reason: "Policy evaluator exceeded its output budget; access denied."
+    });
+    expect(states).not.toContain("AUTHORIZED");
+    expect(engine.activeExecutionCount).toBe(0);
+  });
+
+  it("preserves caller cancellation as primary when it precedes output failure", async () => {
+    const controller = new AbortController();
+    const states: string[] = [];
+    const engine = new ProcessIsolatedPolicyEngine({
+      moduleUrl: fixtureUrl,
+      maxStdoutBytes: 1024,
+      maxStderrBytes: 1024,
+      maxTotalOutputBytes: 2048,
+      onStateChange: (event) => {
+        states.push(event.state);
+        // FINALIZING is emitted before the parent acknowledges the result;
+        // the fixture emits its late output only after that acknowledgement.
+        if (event.state === "FINALIZING") controller.abort();
+      }
+    });
+
+    const result = await engine.evaluateDetailed(request("late-stdout-flood"), {
+      signal: controller.signal
+    });
+
+    expect(result.outcome).toBe("CANCELLED");
+    expect(result.stopReason).toBe("CALLER_CANCELLED");
+    expect(result.decision).toEqual({
+      effect: "deny",
+      reason: "Policy execution cancelled by caller."
+    });
+    expect(states).not.toContain("AUTHORIZED");
+    expect(engine.activeExecutionCount).toBe(0);
+  });
+
+  it("retains runtime shutdown as secondary provenance after policy timeout", async () => {
+    let shutdownPromise: Promise<void> | undefined;
+    const engine = new ProcessIsolatedPolicyEngine({
+      moduleUrl: fixtureUrl,
+      timeoutMs: 80,
+      terminationGraceMs: 10,
+      killWaitMs: 500,
+      onStateChange: (event) => {
+        if (event.state === "STOP_REQUESTED" && shutdownPromise === undefined) {
+          // The timeout's STOP_REQUESTED notification is the deterministic
+          // barrier; shutdown is initiated in the same coordinator turn.
+          shutdownPromise = engine.shutdown();
+        }
+      }
+    });
+
+    const result = await engine.evaluateDetailed(request("hang"));
+    await shutdownPromise;
+
+    expect(result.outcome).toBe("TIMED_OUT");
+    expect(result.stopReason).toBe("POLICY_TIMEOUT");
+    expect(result.stopProvenance).toEqual([
+      { code: "POLICY_TIMEOUT", message: "Policy execution timed out." },
+      { code: "RUNTIME_SHUTDOWN", message: "Runtime shutdown cancelled policy execution." }
+    ]);
+    expect(Object.isFrozen(result.stopProvenance)).toBe(true);
+    expect(result.stopProvenance?.every((cause) => Object.isFrozen(cause))).toBe(true);
+    expect(engine.activeExecutionCount).toBe(0);
+  });
+
+  it("retains runtime shutdown provenance when the caller signal is already aborted", async () => {
+    const controller = new AbortController();
+    let shutdownPromise: Promise<void> | undefined;
+    const engine = new ProcessIsolatedPolicyEngine({
+      moduleUrl: fixtureUrl,
+      terminationGraceMs: 10,
+      killWaitMs: 500,
+      onStateChange: (event) => {
+        if (event.state === "STOP_REQUESTED" && shutdownPromise === undefined) {
+          shutdownPromise = engine.shutdown();
+        }
+      }
+    });
+    const evaluation = engine.evaluateDetailed(request("hang"), { signal: controller.signal });
+    controller.abort();
+
+    const result = await evaluation;
+    await shutdownPromise;
+
+    expect(result.outcome).toBe("CANCELLED");
+    expect(result.stopReason).toBe("CALLER_CANCELLED");
+    expect(result.stopProvenance).toEqual([
+      { code: "CALLER_CANCELLED", message: "Policy execution cancelled by caller." },
+      { code: "RUNTIME_SHUTDOWN", message: "Runtime shutdown cancelled policy execution." }
+    ]);
+    expect(engine.activeExecutionCount).toBe(0);
+  });
+
   it("validates aggregate output budget against per-stream budgets", () => {
     expect(() => new ProcessIsolatedPolicyEngine({
       moduleUrl: fixtureUrl,
@@ -297,6 +415,69 @@ describe("ProcessIsolatedPolicyEngine", () => {
     expect(Date.now() - startedAt).toBeLessThan(1_500);
   });
 
+  it("ignores a child error after unresolved commitment and releases its active reference on close", async () => {
+    let child: ChildProcess | undefined;
+    let resolveUnresolved!: () => void;
+    const unresolvedReached = new Promise<void>((resolve) => {
+      resolveUnresolved = resolve;
+    });
+    const observer = stateObserver("RUNNING");
+    const killSpy = vi.spyOn(ChildProcess.prototype, "kill").mockImplementation(
+      function (this: ChildProcess): boolean {
+        child = this;
+        return false;
+      }
+    );
+
+    try {
+      const controller = new AbortController();
+      const engine = new ProcessIsolatedPolicyEngine({
+        moduleUrl: fixtureUrl,
+        timeoutMs: 5_000,
+        terminationGraceMs: 5,
+        killWaitMs: 20,
+        onStateChange: (event) => {
+          observer.onStateChange(event);
+          if (event.state === "UNRESOLVED") resolveUnresolved();
+        }
+      });
+      const evaluation = engine.evaluateDetailed(request("ignore-sigterm"), {
+        signal: controller.signal
+      });
+
+      await observer.reached;
+      controller.abort();
+      await unresolvedReached;
+
+      const result = await evaluation;
+      expect(result.outcome).toBe("UNRESOLVED");
+      expect(result.runtimeStatus).toBe("UNRESOLVED");
+      expect(engine.activeExecutionCount).toBe(1);
+      expect(child).toBeDefined();
+
+      // Simulate a late ChildProcess error after finishUnresolved committed
+      // the immutable record. freezeCandidate must not create a new candidate.
+      child!.emit("error", new Error("synthetic late child error"));
+      expect(result.outcome).toBe("UNRESOLVED");
+      expect(result.decision.reason).toBe(
+        "Policy process termination could not be confirmed; access denied."
+      );
+
+      const closed = new Promise<void>((resolve) => {
+        child!.once("close", () => resolve());
+      });
+      killSpy.mockRestore();
+      child!.kill("SIGKILL");
+      await closed;
+      expect(engine.activeExecutionCount).toBe(0);
+    } finally {
+      killSpy.mockRestore();
+      if (child && child.exitCode === null && child.signalCode === null) {
+        child.kill("SIGKILL");
+      }
+    }
+  });
+
   it("retains capacity when forceful termination cannot be confirmed", async () => {
     const killSpy = vi.spyOn(ChildProcess.prototype, "kill").mockReturnValue(false);
     try {
@@ -391,7 +572,7 @@ describe("ProcessIsolatedPolicyEngine", () => {
     expect(result.decision.effect).toBe("allow");
   });
 
-  it("does not let late cancellation overwrite a frozen terminal candidate", async () => {
+  it("lets cancellation veto authorization after candidate freeze but before terminal commitment", async () => {
     const controller = new AbortController();
     const observer = stateObserver("FINALIZING");
     const engine = new ProcessIsolatedPolicyEngine({
@@ -402,9 +583,85 @@ describe("ProcessIsolatedPolicyEngine", () => {
       }
     });
     const result = await engine.evaluateDetailed(request(), { signal: controller.signal });
-    expect(result.outcome).toBe("COMPLETED");
-    expect(result.decision.effect).toBe("allow");
+    expect(result.outcome).toBe("CANCELLED");
+    expect(result.stopReason).toBe("CALLER_CANCELLED");
+    expect(result.decision.effect).toBe("deny");
+    expect(observer.states).not.toContain("AUTHORIZED");
     expect(result.candidateFrozen).toBe(true);
+  });
+
+
+  it("lets caller cancellation veto a frozen allow while the child is held open", async () => {
+    const observer = stateObserver("FINALIZING");
+    const controller = new AbortController();
+    const engine = new ProcessIsolatedPolicyEngine({
+      moduleUrl: fixtureUrl,
+      timeoutMs: 5_000,
+      terminationGraceMs: 10,
+      killWaitMs: 500,
+      onStateChange: observer.onStateChange
+    });
+    const evaluation = engine.evaluateDetailed(request("allow-with-active-handle"), {
+      signal: controller.signal
+    });
+
+    // FINALIZING is the barrier: the allow candidate is frozen, while the
+    // fixture's active interval prevents natural child close.
+    await observer.reached;
+    expect(engine.activeExecutionCount).toBe(1);
+    controller.abort();
+
+    const result = await evaluation;
+    expect(result.outcome).toBe("CANCELLED");
+    expect(result.stopReason).toBe("CALLER_CANCELLED");
+    expect(result.decision.effect).toBe("deny");
+    expect(observer.states).not.toContain("AUTHORIZED");
+    expect(engine.activeExecutionCount).toBe(0);
+  });
+
+  it("lets parent cancellation veto a frozen allow while the child is held open", async () => {
+    const observer = stateObserver("FINALIZING");
+    const parent = new AbortController();
+    const engine = new ProcessIsolatedPolicyEngine({
+      moduleUrl: fixtureUrl,
+      timeoutMs: 5_000,
+      terminationGraceMs: 10,
+      killWaitMs: 500,
+      onStateChange: observer.onStateChange
+    });
+    const evaluation = engine.evaluateDetailed(request("allow-with-active-handle"), {
+      parentSignal: parent.signal
+    });
+
+    await observer.reached;
+    expect(engine.activeExecutionCount).toBe(1);
+    parent.abort();
+
+    const result = await evaluation;
+    expect(result.outcome).toBe("CANCELLED");
+    expect(result.stopReason).toBe("PARENT_CANCELLED");
+    expect(result.decision.effect).toBe("deny");
+    expect(observer.states).not.toContain("AUTHORIZED");
+    expect(engine.activeExecutionCount).toBe(0);
+  });
+
+  it("keeps the deadline active after allow candidate freeze until terminal commitment", async () => {
+    const observer = stateObserver("FINALIZING");
+    const engine = new ProcessIsolatedPolicyEngine({
+      moduleUrl: fixtureUrl,
+      timeoutMs: 1_500,
+      terminationGraceMs: 10,
+      killWaitMs: 500,
+      onStateChange: observer.onStateChange
+    });
+    const evaluation = engine.evaluateDetailed(request("allow-with-active-handle"));
+    await observer.reached;
+    const result = await evaluation;
+    expect(result.outcome).toBe("TIMED_OUT");
+    expect(result.stopReason).toBe("POLICY_TIMEOUT");
+    expect(result.decision.effect).toBe("deny");
+    expect(observer.states).not.toContain("AUTHORIZED");
+    expect(engine.activeExecutionCount).toBe(0);
   });
 
   it("reports child crashes as failures and never grants access", async () => {
