@@ -287,6 +287,7 @@ describe("ProcessIsolatedPolicyEngine", () => {
 
     const result = await evaluation;
     expect(result.outcome).toBe("CANCELLED");
+    expect(result.stopReason).toBe("CALLER_CANCELLED");
     expect(result.runtimeStatus).toBe("STOPPED");
     expect(result.cleanupStatus).toBe("COMPLETED");
     expect(engine.activeExecutionCount).toBe(0);
