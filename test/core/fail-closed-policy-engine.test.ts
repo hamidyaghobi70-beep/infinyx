@@ -275,7 +275,7 @@ describe("FailClosedPolicyEngine caller and parent cancellation", () => {
     });
     const result = await policy.evaluate(request, { signal: controller.signal });
     controller.abort();
-    expect(result).toEqual({ effect: "allow", reason: "completed first" });
+    expect(result).toEqual({ effect: "allow", reason: "Policy evaluator allowed the operation." });
   });
 
   it("denies an expired parent deadline without invoking the evaluator", async () => {

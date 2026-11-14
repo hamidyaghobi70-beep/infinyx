@@ -26,6 +26,9 @@ const DEFAULT_TERMINATION_GRACE_MS = 100;
 const DEFAULT_KILL_WAIT_MS = 1_000;
 const DEFAULT_MAX_CONCURRENT = 4;
 const DEFAULT_MAX_OLD_SPACE_SIZE_MB = 128;
+const DEFAULT_MAX_STDOUT_BYTES = 64 * 1024;
+const DEFAULT_MAX_STDERR_BYTES = 64 * 1024;
+const DEFAULT_MAX_TOTAL_OUTPUT_BYTES = 128 * 1024;
 
 interface Candidate {
   readonly outcome: PolicyTerminalOutcome;
@@ -50,6 +53,9 @@ export interface ProcessIsolatedPolicyEngineOptions {
   readonly killWaitMs?: number;
   readonly maxConcurrent?: number;
   readonly maxOldSpaceSizeMb?: number;
+  readonly maxStdoutBytes?: number;
+  readonly maxStderrBytes?: number;
+  readonly maxTotalOutputBytes?: number;
   readonly onStateChange?: (event: PolicyExecutionEvent) => void;
 }
 
@@ -113,6 +119,10 @@ function stopMessage(reason: PolicyStopReason): string {
       return "Runtime shutdown cancelled policy execution.";
     case "POLICY_TIMEOUT":
       return "Policy execution timed out.";
+    case "OUTPUT_LIMIT_EXCEEDED":
+      return "Policy evaluator exceeded its output budget; access denied.";
+    case "OUTPUT_STREAM_FAILED":
+      return "Policy evaluator output stream failed; access denied.";
   }
 }
 
@@ -134,6 +144,9 @@ export class ProcessIsolatedPolicyEngine implements PolicyEngine {
   private readonly killWaitMs: number;
   private readonly maxConcurrent: number;
   private readonly maxOldSpaceSizeMb: number;
+  private readonly maxStdoutBytes: number;
+  private readonly maxStderrBytes: number;
+  private readonly maxTotalOutputBytes: number;
   private readonly onStateChange: ((event: PolicyExecutionEvent) => void) | undefined;
   private readonly active = new Map<string, ActiveExecution>();
   private shuttingDown = false;
@@ -145,13 +158,20 @@ export class ProcessIsolatedPolicyEngine implements PolicyEngine {
     this.killWaitMs = options.killWaitMs ?? DEFAULT_KILL_WAIT_MS;
     this.maxConcurrent = options.maxConcurrent ?? DEFAULT_MAX_CONCURRENT;
     this.maxOldSpaceSizeMb = options.maxOldSpaceSizeMb ?? DEFAULT_MAX_OLD_SPACE_SIZE_MB;
+    this.maxStdoutBytes = options.maxStdoutBytes ?? DEFAULT_MAX_STDOUT_BYTES;
+    this.maxStderrBytes = options.maxStderrBytes ?? DEFAULT_MAX_STDERR_BYTES;
+    this.maxTotalOutputBytes = options.maxTotalOutputBytes ?? DEFAULT_MAX_TOTAL_OUTPUT_BYTES;
     this.onStateChange = options.onStateChange;
 
     if (!Number.isFinite(this.timeoutMs) || this.timeoutMs <= 0 ||
         !Number.isFinite(this.terminationGraceMs) || this.terminationGraceMs < 0 ||
         !Number.isFinite(this.killWaitMs) || this.killWaitMs <= 0 ||
         !Number.isInteger(this.maxConcurrent) || this.maxConcurrent < 1 ||
-        !Number.isInteger(this.maxOldSpaceSizeMb) || this.maxOldSpaceSizeMb < 16) {
+        !Number.isInteger(this.maxOldSpaceSizeMb) || this.maxOldSpaceSizeMb < 16 ||
+        !Number.isSafeInteger(this.maxStdoutBytes) || this.maxStdoutBytes < 1 ||
+        !Number.isSafeInteger(this.maxStderrBytes) || this.maxStderrBytes < 1 ||
+        !Number.isSafeInteger(this.maxTotalOutputBytes) ||
+        this.maxTotalOutputBytes < Math.max(this.maxStdoutBytes, this.maxStderrBytes)) {
       throw new RangeError("Policy runtime limits must be finite and positive.");
     }
   }
@@ -227,9 +247,7 @@ export class ProcessIsolatedPolicyEngine implements PolicyEngine {
       windowsHide: true
     });
 
-    child.stdout?.resume();
-    // Drain diagnostics without retaining or exposing evaluator-controlled output.
-    child.stderr?.resume();
+
 
     let resolveCompletion!: (record: PolicyExecutionRecord) => void;
     const completion = new Promise<PolicyExecutionRecord>((resolve) => {
@@ -242,6 +260,10 @@ export class ProcessIsolatedPolicyEngine implements PolicyEngine {
     let closed = false;
     let resolved = false;
     let stopReason: PolicyStopReason | undefined;
+    let stdoutBytes = 0;
+    let stderrBytes = 0;
+    let totalOutputBytes = 0;
+    let outputFailureReason: "OUTPUT_LIMIT_EXCEEDED" | "OUTPUT_STREAM_FAILED" | undefined;
     let timeout: ReturnType<typeof setTimeout> | undefined;
     let graceTimer: ReturnType<typeof setTimeout> | undefined;
     let killWaitTimer: ReturnType<typeof setTimeout> | undefined;
@@ -316,6 +338,60 @@ export class ProcessIsolatedPolicyEngine implements PolicyEngine {
       }
       scheduleHardTermination();
     };
+
+    const requestOutputStop = (reason: "OUTPUT_LIMIT_EXCEEDED" | "OUTPUT_STREAM_FAILED"): void => {
+      if (outputFailureReason !== undefined || resolved || closed) return;
+      outputFailureReason = reason;
+      stopReason = reason;
+      if (!candidateFrozen) {
+        candidateFrozen = true;
+        candidate = {
+          outcome: "FAILED",
+          decision: deny(stopMessage(reason)),
+          stopReason: reason
+        };
+      }
+      notify("STOP_REQUESTED");
+      if (spawned && child.connected) {
+        try {
+          child.send({ type: "cancel", reason });
+        } catch {
+          // Hard termination remains authoritative.
+        }
+      }
+      scheduleHardTermination();
+    };
+
+    const observeOutput = (stream: "stdout" | "stderr", chunk: unknown): void => {
+      if (outputFailureReason !== undefined || resolved || closed) return;
+      const bytes = Buffer.isBuffer(chunk)
+        ? chunk.byteLength
+        : typeof chunk === "string"
+          ? Buffer.byteLength(chunk)
+          : Number.NaN;
+      if (!Number.isSafeInteger(bytes) || bytes < 0) {
+        requestOutputStop("OUTPUT_LIMIT_EXCEEDED");
+        return;
+      }
+
+      const streamLimit = stream === "stdout" ? this.maxStdoutBytes : this.maxStderrBytes;
+      const streamCurrent = stream === "stdout" ? stdoutBytes : stderrBytes;
+      const streamExceeded = bytes > streamLimit - streamCurrent;
+      const totalExceeded = bytes > this.maxTotalOutputBytes - totalOutputBytes;
+      if (streamExceeded || totalExceeded) {
+        requestOutputStop("OUTPUT_LIMIT_EXCEEDED");
+        return;
+      }
+
+      if (stream === "stdout") stdoutBytes += bytes;
+      else stderrBytes += bytes;
+      totalOutputBytes += bytes;
+    };
+
+    child.stdout?.on("data", (chunk: Buffer | string) => observeOutput("stdout", chunk));
+    child.stderr?.on("data", (chunk: Buffer | string) => observeOutput("stderr", chunk));
+    child.stdout?.on("error", () => requestOutputStop("OUTPUT_STREAM_FAILED"));
+    child.stderr?.on("error", () => requestOutputStop("OUTPUT_STREAM_FAILED"));
 
     const freezeCandidate = (next: Candidate): void => {
       if (candidateFrozen || resolved || closed) return;
@@ -415,7 +491,10 @@ export class ProcessIsolatedPolicyEngine implements PolicyEngine {
 
       let outcome = candidate.outcome;
       let decision = candidate.decision;
-      if ((outcome === "COMPLETED" || outcome === "DENIED") && code !== 0) {
+      if (outputFailureReason !== undefined) {
+        outcome = "FAILED";
+        decision = deny(stopMessage(outputFailureReason));
+      } else if ((outcome === "COMPLETED" || outcome === "DENIED") && code !== 0) {
         outcome = "FAILED";
         decision = deny("Policy evaluator process exited abnormally; access denied.");
       }
@@ -428,7 +507,7 @@ export class ProcessIsolatedPolicyEngine implements PolicyEngine {
         decision,
         "STOPPED",
         "COMPLETED",
-        candidate.stopReason
+        outputFailureReason ?? candidate.stopReason
       ));
     });
 
