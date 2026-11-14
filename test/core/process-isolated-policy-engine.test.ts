@@ -351,11 +351,16 @@ describe("ProcessIsolatedPolicyEngine", () => {
   });
 
   it("reports child crashes as failures and never grants access", async () => {
-    const engine = new ProcessIsolatedPolicyEngine({ moduleUrl: fixtureUrl });
+    const observer = stateObserver("TERMINAL");
+    const engine = new ProcessIsolatedPolicyEngine({
+      moduleUrl: fixtureUrl,
+      onStateChange: observer.onStateChange
+    });
     const result = await engine.evaluateDetailed(request("crash"));
     expect(result.outcome).toBe("FAILED");
     expect(result.decision.effect).toBe("deny");
     expect(result.runtimeStatus).toBe("STOPPED");
+    expect(observer.states).not.toContain("AUTHORIZED");
     expect(engine.activeExecutionCount).toBe(0);
   });
 
