@@ -389,30 +389,45 @@ describe("ProcessIsolatedPolicyEngine", () => {
   it("escalates ignored SIGTERM and releases capacity only after child close", async () => {
     const observer = stateObserver("RUNNING");
     const controller = new AbortController();
-    const engine = new ProcessIsolatedPolicyEngine({
-      moduleUrl: fixtureUrl,
-      timeoutMs: 5_000,
-      terminationGraceMs: 10,
-      killWaitMs: 80,
-      maxConcurrent: 1,
-      onStateChange: observer.onStateChange
-    });
-    const evaluation = engine.evaluateDetailed(request("ignore-sigterm"), {
-      signal: controller.signal
-    });
-    await observer.reached;
-    const startedAt = Date.now();
-    controller.abort();
+    const killSignals: Array<NodeJS.Signals | number | undefined> = [];
+    const originalKill = ChildProcess.prototype.kill;
+    const killSpy = vi.spyOn(ChildProcess.prototype, "kill").mockImplementation(
+      function (this: ChildProcess, signal?: NodeJS.Signals | number): boolean {
+        killSignals.push(signal);
+        return originalKill.call(this, signal);
+      }
+    );
 
-    const result = await evaluation;
-    expect(result.outcome).toBe("CANCELLED");
-    expect(result.stopReason).toBe("CALLER_CANCELLED");
-    expect(result.runtimeStatus).toBe("STOPPED");
-    expect(result.cleanupStatus).toBe("COMPLETED");
-    expect(engine.activeExecutionCount).toBe(0);
-    // The fixture has a 2-second fallback exit. Completion before that
-    // deadline proves the escalation path terminated the SIGTERM-resistant child.
-    expect(Date.now() - startedAt).toBeLessThan(1_500);
+    try {
+      const engine = new ProcessIsolatedPolicyEngine({
+        moduleUrl: fixtureUrl,
+        timeoutMs: 5_000,
+        terminationGraceMs: 10,
+        killWaitMs: 80,
+        maxConcurrent: 1,
+        onStateChange: observer.onStateChange
+      });
+      const evaluation = engine.evaluateDetailed(request("ignore-sigterm"), {
+        signal: controller.signal
+      });
+      await observer.reached;
+      controller.abort();
+
+      const result = await evaluation;
+      expect(result.outcome).toBe("CANCELLED");
+      expect(result.stopReason).toBe("CALLER_CANCELLED");
+      expect(result.runtimeStatus).toBe("STOPPED");
+      expect(result.cleanupStatus).toBe("COMPLETED");
+      expect(engine.activeExecutionCount).toBe(0);
+
+      // Assert the actual escalation sequence instead of elapsed wall-clock time.
+      const sigtermIndex = killSignals.indexOf("SIGTERM");
+      const sigkillIndex = killSignals.indexOf("SIGKILL");
+      expect(sigtermIndex).toBeGreaterThanOrEqual(0);
+      expect(sigkillIndex).toBeGreaterThan(sigtermIndex);
+    } finally {
+      killSpy.mockRestore();
+    }
   });
 
   it("ignores a child error after unresolved commitment and releases its active reference on close", async () => {
@@ -505,8 +520,15 @@ describe("ProcessIsolatedPolicyEngine", () => {
       expect(killSpy).toHaveBeenNthCalledWith(1, "SIGTERM");
       expect(killSpy).toHaveBeenNthCalledWith(2, "SIGKILL");
 
-      // The fixture exits independently after 2 seconds; until then its
-      // unresolved execution must continue to occupy the only capacity slot.
+      // UNRESOLVED must keep the only slot occupied and reject new work.
+      const rejected = await engine.evaluateDetailed(request());
+      expect(rejected.outcome).toBe("FAILED");
+      expect(rejected.runtimeStatus).toBe("NOT_STARTED");
+      expect(rejected.decision.reason).toContain("capacity is exhausted");
+      expect(engine.activeExecutionCount).toBe(1);
+
+      // The fixture exits independently after 2 seconds; only its actual close
+      // releases the retained slot.
       await new Promise((resolve) => setTimeout(resolve, 2_100));
       expect(engine.activeExecutionCount).toBe(0);
     } finally {
