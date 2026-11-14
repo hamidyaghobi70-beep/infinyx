@@ -499,8 +499,21 @@ describe("ProcessIsolatedPolicyEngine", () => {
     }
   });
 
-  it("retains capacity when forceful termination cannot be confirmed", async () => {
-    const killSpy = vi.spyOn(ChildProcess.prototype, "kill").mockReturnValue(false);
+  it("retains capacity until the actual child close after unconfirmed termination", async () => {
+    let child: ChildProcess | undefined;
+    let resolveClose!: () => void;
+    const closeObserved = new Promise<void>((resolve) => {
+      resolveClose = resolve;
+    });
+    const killSpy = vi.spyOn(ChildProcess.prototype, "kill").mockImplementation(
+      function (this: ChildProcess): boolean {
+        if (!child) {
+          child = this;
+          child.once("close", () => resolveClose());
+        }
+        return false;
+      }
+    );
     try {
       const observer = stateObserver("RUNNING");
       const controller = new AbortController();
@@ -523,6 +536,7 @@ describe("ProcessIsolatedPolicyEngine", () => {
       expect(result.runtimeStatus).toBe("UNRESOLVED");
       expect(result.cleanupStatus).toBe("UNRESOLVED");
       expect(engine.activeExecutionCount).toBe(1);
+      expect(child).toBeDefined();
       expect(killSpy).toHaveBeenNthCalledWith(1, "SIGTERM");
       expect(killSpy).toHaveBeenNthCalledWith(2, "SIGKILL");
 
@@ -533,12 +547,15 @@ describe("ProcessIsolatedPolicyEngine", () => {
       expect(rejected.decision.reason).toContain("capacity is exhausted");
       expect(engine.activeExecutionCount).toBe(1);
 
-      // The fixture exits independently after 2 seconds; only its actual close
-      // releases the retained slot.
-      await new Promise((resolve) => setTimeout(resolve, 2_100));
+      // The listener was attached before termination was requested. Only the
+      // actual ChildProcess close event may release the retained capacity slot.
+      await closeObserved;
       expect(engine.activeExecutionCount).toBe(0);
     } finally {
       killSpy.mockRestore();
+      if (child && child.exitCode === null && child.signalCode === null) {
+        child.kill("SIGKILL");
+      }
     }
   });
 
