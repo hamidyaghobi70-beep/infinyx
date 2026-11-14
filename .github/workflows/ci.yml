@@ -4,20 +4,20 @@ on:
   push:
     branches:
       - foundation/repository-foundation
+      - fix/policy-terminal-authorization
       - release/**
       - fix/infinyx-core-policy-cancellation
       - feat/gap-002-protected-operation-executor
       - fix/policy-output-budget
-      - fix/policy-terminal-authorization
       - integration/infinyx-core-runtime-v1
   pull_request:
     branches:
       - integration/infinyx-core-runtime-v1
       - foundation/repository-foundation
+      - fix/policy-terminal-authorization
       - main
       - feat/gap-002-protected-operation-executor
       - fix/policy-output-budget
-      - fix/policy-terminal-authorization
       - integration/infinyx-core-runtime-v1
 
 permissions:
