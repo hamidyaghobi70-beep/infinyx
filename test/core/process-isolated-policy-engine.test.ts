@@ -849,6 +849,48 @@ describe("ProcessIsolatedPolicyEngine", () => {
     }
   });
 
+  it("ignores parent cancellation after child close has committed the frozen allow", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    try {
+      const finalizing = stateObserver("FINALIZING");
+      const terminal = stateObserver("TERMINAL");
+      const states: string[] = [];
+      const parent = new AbortController();
+      const engine = new ProcessIsolatedPolicyEngine({
+        moduleUrl: fixtureUrl,
+        timeoutMs: 100,
+        onStateChange: (event) => {
+          states.push(event.state);
+          finalizing.onStateChange(event);
+          terminal.onStateChange(event);
+        }
+      });
+      const evaluation = engine.evaluateDetailed(request(), {
+        parentSignal: parent.signal
+      });
+
+      // TERMINAL is the close-time commitment barrier. Cancellation arrives
+      // only after the committed result has been returned.
+      await finalizing.reached;
+      await terminal.reached;
+      const result = await evaluation;
+      const committedStates = [...states];
+      parent.abort();
+
+      expect(result.outcome).toBe("COMPLETED");
+      expect(result.decision.effect).toBe("allow");
+      expect(result.stopReason).toBeUndefined();
+      expect(result.stopProvenance).toBeUndefined();
+      expect(states.filter((state) => state === "AUTHORIZED")).toHaveLength(1);
+      expect(states.indexOf("AUTHORIZED")).toBeLessThan(states.indexOf("TERMINAL"));
+      expect(states.indexOf("STOP_REQUESTED")).toBe(-1);
+      expect(states).toEqual(committedStates);
+      expect(engine.activeExecutionCount).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("commits a frozen allow when the child-close barrier precedes the deadline", async () => {
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
     try {
@@ -876,8 +918,10 @@ describe("ProcessIsolatedPolicyEngine", () => {
       expect(result.outcome).toBe("COMPLETED");
       expect(result.decision.effect).toBe("allow");
       expect(result.stopReason).toBeUndefined();
-      expect(states).toContain("AUTHORIZED");
+      expect(result.stopProvenance).toBeUndefined();
+      expect(states.filter((state) => state === "AUTHORIZED")).toHaveLength(1);
       expect(states.indexOf("AUTHORIZED")).toBeLessThan(states.indexOf("TERMINAL"));
+      expect(states.indexOf("STOP_REQUESTED")).toBe(-1);
       expect(engine.activeExecutionCount).toBe(0);
     } finally {
       vi.useRealTimers();
