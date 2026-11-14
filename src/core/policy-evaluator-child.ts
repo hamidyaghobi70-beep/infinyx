@@ -3,6 +3,7 @@ import type { PolicyStopReason } from "./contracts.js";
 interface EvaluateMessage {
   readonly type: "evaluate";
   readonly request: unknown;
+  /** Epoch milliseconds; evaluator hint only, not a monotonic scheduling deadline. */
   readonly deadlineAt?: number;
 }
 
@@ -67,6 +68,9 @@ async function execute(message: EvaluateMessage): Promise<void> {
     }
 
     sendProgress({ type: "started" });
+    // Preserve the parent's epoch-millisecond value unchanged. The parent
+    // process owns timeout enforcement; this field is only the existing
+    // PolicyEvaluationOptions deadline hint exposed to the evaluator.
     const options = {
       signal: controller.signal,
       ...(message.deadlineAt === undefined ? {} : { deadlineAt: message.deadlineAt })

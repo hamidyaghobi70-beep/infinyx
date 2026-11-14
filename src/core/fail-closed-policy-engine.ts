@@ -76,6 +76,10 @@ function cancellationMessage(reason: PolicyStopReason): string {
       return "Runtime shutdown cancelled policy evaluation; access denied.";
     case "POLICY_TIMEOUT":
       return "Policy evaluation timed out; access denied.";
+    case "OUTPUT_LIMIT_EXCEEDED":
+      return "Policy evaluator exceeded its output budget; access denied.";
+    case "OUTPUT_STREAM_FAILED":
+      return "Policy evaluator output stream failed; access denied.";
   }
 }
 

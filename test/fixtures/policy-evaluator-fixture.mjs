@@ -4,9 +4,14 @@ export default {
       return new Promise(() => undefined);
     }
 
+    if (request.action === "allow-with-active-handle") {
+      setInterval(() => undefined, 1_000);
+      return { effect: "allow", reason: "Candidate precedes deadline." };
+    }
+
     if (request.action === "ignore-sigterm") {
       process.on("SIGTERM", () => undefined);
-      setTimeout(() => process.exit(0), 1_000);
+      setTimeout(() => process.exit(0), 2_000);
       return new Promise(() => undefined);
     }
 
