@@ -1,3 +1,5 @@
+import { snapshotBoundedPolicyData } from "./policy-input-snapshot.js";
+
 import type {
   PolicyCancellationCause,
   PolicyDecision,
@@ -23,26 +25,6 @@ function isNonEmptyString(value: unknown): value is string {
   return typeof value === "string" && value.trim().length > 0;
 }
 
-function isSafeData(value: unknown, ancestors = new Set<object>()): boolean {
-  if (value === null || typeof value === "string" || typeof value === "boolean" ||
-      typeof value === "undefined") return true;
-  if (typeof value === "number") return Number.isFinite(value);
-  if (typeof value !== "object" || ancestors.has(value)) return false;
-  if (!Array.isArray(value) && !isPlainRecord(value)) return false;
-  ancestors.add(value);
-  const descriptors = Object.getOwnPropertyDescriptors(value);
-  for (const key of Reflect.ownKeys(descriptors)) {
-    if (typeof key === "symbol" || (Array.isArray(value) && key === "length")) continue;
-    const descriptor = descriptors[key as keyof typeof descriptors];
-    if (!descriptor || !("value" in descriptor) ||
-        !isSafeData(descriptor.value, ancestors)) {
-      ancestors.delete(value);
-      return false;
-    }
-  }
-  ancestors.delete(value);
-  return true;
-}
 
 function freezeDeep<T>(value: T): T {
   if (value !== null && typeof value === "object" && !Object.isFrozen(value)) {
@@ -54,8 +36,7 @@ function freezeDeep<T>(value: T): T {
 
 export function snapshotPolicyRequest(request: PolicyRequest): PolicyRequest | undefined {
   try {
-    if (!isSafeData(request)) return undefined;
-    return freezeDeep(structuredClone(request));
+    return snapshotBoundedPolicyData(request) as PolicyRequest | undefined;
   } catch {
     return undefined;
   }
