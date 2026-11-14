@@ -20,7 +20,17 @@ describe("FailClosedPolicyEngine", () => {
     });
     await expect(policy.evaluate(request)).resolves.toEqual({
       effect: "allow",
-      reason: "Explicit test grant."
+      reason: "Policy evaluator allowed the operation."
+    });
+  });
+
+  it("redacts evaluator-controlled decision reasons", async () => {
+    const policy = new FailClosedPolicyEngine({
+      evaluate: async () => ({ effect: "deny", reason: "PRIVATE_TOKEN=fixture-secret-value" })
+    });
+    await expect(policy.evaluate(request)).resolves.toEqual({
+      effect: "deny",
+      reason: "Policy evaluator denied the operation."
     });
   });
 
@@ -110,7 +120,7 @@ describe("FailClosedPolicyEngine", () => {
     };
     await expect(policy.evaluate(contextualRequest)).resolves.toEqual({
       effect: "allow",
-      reason: "context accepted"
+      reason: "Policy evaluator allowed the operation."
     });
     expect(evaluator).toHaveBeenCalledWith(expect.objectContaining({ actorId: contextualRequest.actorId }), expect.objectContaining({ signal: expect.any(AbortSignal) }));
   });
@@ -145,7 +155,7 @@ describe("Policy snapshot and cancellation regressions", () => {
     const decision = await policy.evaluate(request);
     mutable.effect = "deny";
     mutable.reason = "changed later";
-    expect(decision).toEqual({ effect: "allow", reason: "approved" });
+    expect(decision).toEqual({ effect: "allow", reason: "Policy evaluator allowed the operation." });
     expect(Object.isFrozen(decision)).toBe(true);
   });
 
