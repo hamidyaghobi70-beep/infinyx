@@ -379,7 +379,7 @@ This policy intentionally chooses sticky failure over an assumed retry. Any futu
 
 ### 11.2.6 Additional deterministic acceptance tests
 
-The original 31 cases remain proposed acceptance criteria and are not evidence of executed tests. Add cases 49–52 below; deadline-configuration cases 32–48 are specified in section 10:
+The original 31 cases remain proposed acceptance criteria and are not evidence of executed tests. Add cases 49–53 below; deadline-configuration cases 32–48 are specified in section 10:
 
 49. **Handler child activity, capability mediation, and detached-work boundary:** use controllable parent and child promises. Prove that Runtime-resource capabilities register child activity before scheduling it; prove that a registered child remains in the drain registry after parent control flow ends; prove cleanup is blocked until the child settles and bookkeeping completes; and prove an unregistered child cannot obtain a Runtime-owned resource through the supported capability API. Also test and document the same-process ambient-API limitation described in section 11.2.8; do not represent a lint rule or adapter contract as a security sandbox.
 50. **Event-loop delay and absolute deadline:** use an injected monotonic clock and controllable scheduler rather than arbitrary sleeps. Advance the monotonic clock beyond the absolute deadline while delaying timer callback delivery; prove the final cleanup decision rejects and cleanup is not invoked. Also prove wall-clock changes do not affect the monotonic deadline.
@@ -388,7 +388,7 @@ The original 31 cases remain proposed acceptance criteria and are not evidence o
 
 53. **Diagnostics allowlist, denylist, and error redaction:** exercise both `PROTECTED_OPERATION_DRAIN_TIMEOUT` and `PROTECTED_OPERATION_SHUTDOWN_CONFIG_INVALID` with synthetic sensitive payloads, caller identity, arbitrary error messages, stack traces, nested causes, and mutable registry objects. Assert that emitted logs, diagnostic snapshots, `CoreError.details`, and serialized errors contain only the section 9.2 allowlisted fields; prohibited values are completely absent (not hashed or masked); causes retain only an allowlisted `name` and stable `code`; snapshots are immutable and contain no live internal references; and an unknown field defaults to omission. Assert separately that application modules/handlers cannot read diagnostic registries and that diagnostics access is limited to the authorized operational roles defined in section 9.2.
 
-All 52 cases must use controllable promises, signals, an injected monotonic clock, and a deterministic scheduler as appropriate. No arbitrary sleeps are acceptable. These cases are specification-only until implemented and executed on a separately authorized implementation branch.
+All 53 cases must use controllable promises, signals, an injected monotonic clock, and a deterministic scheduler as appropriate. No arbitrary sleeps are acceptable. These cases are specification-only until implemented and executed on a separately authorized implementation branch.
 
 ### 11.2.7 Updated disposition
 
