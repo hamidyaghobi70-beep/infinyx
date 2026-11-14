@@ -278,6 +278,15 @@ export class ProcessIsolatedPolicyEngine implements PolicyEngine {
       }
     };
 
+    const acknowledgeFinalMessage = (): void => {
+      if (!child.connected) return;
+      try {
+        child.send({ type: "finalize" });
+      } catch {
+        // Process close/termination remains the finalization authority.
+      }
+    };
+
     const clearTimers = (): void => {
       if (timeout !== undefined) clearTimeout(timeout);
       if (graceTimer !== undefined) clearTimeout(graceTimer);
@@ -450,12 +459,14 @@ export class ProcessIsolatedPolicyEngine implements PolicyEngine {
             outcome: "DENIED",
             decision: deny("Policy evaluator returned an invalid decision; access denied.")
           });
+          acknowledgeFinalMessage();
           return;
         }
         freezeCandidate({
           outcome: decision.effect === "allow" ? "COMPLETED" : "DENIED",
           decision
         });
+        acknowledgeFinalMessage();
         return;
       }
       if (message.type === "error" && typeof message.message === "string") {
@@ -463,6 +474,11 @@ export class ProcessIsolatedPolicyEngine implements PolicyEngine {
           outcome: "FAILED",
           decision: deny("Policy evaluator process failed; access denied.")
         });
+        acknowledgeFinalMessage();
+        return;
+      }
+      if (message.type === "cancelled") {
+        acknowledgeFinalMessage();
       }
     });
 
