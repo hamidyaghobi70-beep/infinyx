@@ -18,6 +18,12 @@ interface InternalHandle extends ProtectedOperationHandle {
   readonly [handleBrand]: true;
 }
 
+interface ActiveHandler {
+  readonly controller: AbortController;
+  readonly settled: Promise<void>;
+  readonly settle: () => void;
+}
+
 interface RegisteredOperation<TInput = unknown, TOutput = unknown> {
   readonly id: string;
   readonly action: string;
@@ -87,11 +93,38 @@ export class ProtectedOperationExecutor implements ProtectedOperationPort {
   // This is in-memory, per-process object-identity duplicate suppression only.
   // It is not durable replay protection and does not provide exactly-once semantics.
   private readonly usedRequests = new WeakMap<object, WeakSet<object>>();
+  private readonly activeHandlers = new Map<string, ActiveHandler>();
+  private admissionClosed = false;
 
   constructor(
     private readonly policy: PolicyEngine,
     private readonly isCoreReady: () => boolean
   ) {}
+
+  get activeHandlerCount(): number {
+    return this.activeHandlers.size;
+  }
+
+  /** Close the admission boundary synchronously and request cooperative cancellation. */
+  closeAdmission(): void {
+    this.admissionClosed = true;
+    for (const active of this.activeHandlers.values()) {
+      if (!active.controller.signal.aborted) {
+        active.controller.abort({
+          code: "RUNTIME_SHUTDOWN",
+          message: "Runtime shutdown requested protected-operation cancellation."
+        });
+      }
+    }
+  }
+
+  /** Observe actual handler settlement; this method never cancels or replays handlers. */
+  async drain(): Promise<void> {
+    while (this.activeHandlers.size > 0) {
+      const pending = [...this.activeHandlers.values()].map((active) => active.settled);
+      await Promise.all(pending);
+    }
+  }
 
   register<TInput, TOutput>(definition: ProtectedOperationDefinition<TInput, TOutput>): ProtectedOperationHandle<TInput, TOutput> {
     if (!definition || typeof definition.id !== "string" || !definition.id.trim() ||
@@ -117,7 +150,7 @@ export class ProtectedOperationExecutor implements ProtectedOperationPort {
     input: TInput,
     options?: PolicyEvaluationOptions
   ): Promise<ProtectedOperationResult<TOutput>> {
-    if (!this.isCoreReady()) return this.denied("Core Engine is not running; protected operation denied.");
+    if (!this.isCoreReady() || this.admissionClosed) return this.denied("Core Engine is not running; protected operation denied.");
     const registration = operation && typeof operation === "object"
       ? this.registrations.get(operation as object) as RegisteredOperation<TInput, TOutput> | undefined
       : undefined;
@@ -193,17 +226,31 @@ export class ProtectedOperationExecutor implements ProtectedOperationPort {
 
       // Recheck lifecycle and cancellation immediately before handler admission;
       // there is no await between these checks and invoking the handler.
-      if (!this.isCoreReady()) return this.denied("Core Engine is stopping; protected operation denied.");
+      if (!this.isCoreReady() || this.admissionClosed) return this.denied("Core Engine is stopping; protected operation denied.");
       if (operationController.signal.aborted) return this.denied("Protected operation was cancelled during authorization.");
       if (!isValidPolicyDecision(decision)) return this.denied("Policy returned an invalid decision; protected operation denied.");
       if (decision.effect !== "allow") return this.denied(decision.reason);
-      if (!this.isCoreReady()) return this.denied("Core Engine is stopping; protected operation denied.");
+      if (!this.isCoreReady() || this.admissionClosed) return this.denied("Core Engine is stopping; protected operation denied.");
 
       const operationId = randomUUID();
-      const value = await registration.handler(input, Object.freeze({
-        operationId, signal: operationController.signal
-      }));
-      return { status: "executed", value };
+      let settle!: () => void;
+      const settled = new Promise<void>((resolve) => { settle = resolve; });
+      this.activeHandlers.set(operationId, {
+        controller: operationController,
+        settled,
+        settle
+      });
+      try {
+        // Register before invoking user code; no await separates the final gate,
+        // registry insertion, and handler invocation.
+        const value = await registration.handler(input, Object.freeze({
+          operationId, signal: operationController.signal
+        }));
+        return { status: "executed", value };
+      } finally {
+        this.activeHandlers.delete(operationId);
+        settle();
+      }
     } catch {
       return { status: "failed", reason: "Protected operation handler failed." };
     } finally {
