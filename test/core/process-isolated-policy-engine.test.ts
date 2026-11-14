@@ -278,11 +278,11 @@ describe("ProcessIsolatedPolicyEngine", () => {
       maxConcurrent: 1,
       onStateChange: observer.onStateChange
     });
-    const startedAt = Date.now();
     const evaluation = engine.evaluateDetailed(request("ignore-sigterm"), {
       signal: controller.signal
     });
     await observer.reached;
+    const startedAt = Date.now();
     controller.abort();
 
     const result = await evaluation;
