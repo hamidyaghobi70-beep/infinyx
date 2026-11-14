@@ -257,6 +257,8 @@ export class ProcessIsolatedPolicyEngine implements PolicyEngine {
 
     let candidate: Candidate | undefined;
     let candidateFrozen = false;
+    let terminalVeto: Candidate | undefined;
+    let terminalCommitted = false;
     let spawned = false;
     let closed = false;
     let resolved = false;
@@ -306,6 +308,7 @@ export class ProcessIsolatedPolicyEngine implements PolicyEngine {
 
     const finishUnresolved = (): void => {
       if (resolved || closed) return;
+      terminalCommitted = true;
       resolved = true;
       clearTimers();
       removeAbortListeners();
@@ -350,14 +353,24 @@ export class ProcessIsolatedPolicyEngine implements PolicyEngine {
     };
 
     const requestStop = (reason: PolicyStopReason): void => {
-      if (candidateFrozen || resolved || closed) return;
-      candidateFrozen = true;
-      stopReason = reason;
-      candidate = {
+      if (terminalCommitted || resolved || closed) return;
+      // Preserve the first stop observed before terminal commitment. Once a
+      // stop candidate is frozen, later cancellation sources cannot replace it.
+      if (terminalVeto !== undefined || (candidateFrozen && candidate?.stopReason !== undefined)) return;
+      const veto: Candidate = {
         outcome: reason === "POLICY_TIMEOUT" ? "TIMED_OUT" : "CANCELLED",
         decision: deny(stopMessage(reason)),
         stopReason: reason
       };
+      if (candidateFrozen) {
+        // Candidate Freeze is immutable. A stop observed before terminal
+        // commitment is recorded separately and vetoes authorization.
+        terminalVeto = veto;
+      } else {
+        candidateFrozen = true;
+        candidate = veto;
+      }
+      stopReason = reason;
       notify("STOP_REQUESTED");
       if (spawned && child.connected) {
         try {
@@ -370,7 +383,7 @@ export class ProcessIsolatedPolicyEngine implements PolicyEngine {
     };
 
     const requestOutputStop = (reason: PolicyOutputFailureReason): void => {
-      if (outputFailureReason !== undefined || resolved || closed) return;
+      if (outputFailureReason !== undefined || resolved || closed || terminalVeto !== undefined) return;
       outputFailureReason = reason;
       stopReason = reason;
       if (!candidateFrozen) {
@@ -436,7 +449,9 @@ export class ProcessIsolatedPolicyEngine implements PolicyEngine {
       // Candidate selection is provisional. Authorization is emitted only
       // after process close and all output/exit checks have committed an allow.
       notify("FINALIZING");
-      scheduleHardTermination();
+      // Do not terminate a valid candidate merely because it is frozen.
+      // Keep the child alive for natural close; timeout/cancellation owns
+      // the termination escalation path until terminal commitment.
     };
 
     this.active.set(executionId, { completion, cancel: requestStop });
@@ -531,8 +546,9 @@ export class ProcessIsolatedPolicyEngine implements PolicyEngine {
         };
       }
 
-      let outcome = candidate.outcome;
-      let decision = candidate.decision;
+      terminalCommitted = true;
+      let outcome = (terminalVeto ?? candidate).outcome;
+      let decision = (terminalVeto ?? candidate).decision;
       if (outputFailureReason !== undefined) {
         outcome = "FAILED";
         decision = deny(stopMessage(outputFailureReason));
@@ -552,7 +568,7 @@ export class ProcessIsolatedPolicyEngine implements PolicyEngine {
         decision,
         "STOPPED",
         "COMPLETED",
-        outputFailureReason ?? candidate.stopReason
+        outputFailureReason ?? terminalVeto?.stopReason ?? candidate.stopReason
       ));
     });
 
