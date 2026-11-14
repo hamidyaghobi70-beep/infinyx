@@ -127,32 +127,35 @@ Requirements:
 6. Repeated `stop()` calls must observe the same tracked invocation/evaluation work and must not duplicate terminal bookkeeping or restart work. Whether they may re-invoke either executor or policy shutdown initiation after that initiation throws or rejects is an explicit architecture decision, not an assumed idempotency guarantee; follow the accepted recovery rule in section 11 before permitting such re-invocation.
 7. Do not introduce a new successful return union in this compatibility stage. If a future API returns a structured shutdown report, that is a separately versioned compatibility decision.
 
-### 6.4 Retryable shutdown-attempt lifecycle
+### 6.4 Drain observation and sticky initiation failure
 
-A bounded shutdown attempt may reject while protected handlers or policy evaluators remain tracked. That rejection ends the current caller wait; it does not roll the CoreEngine lifecycle back to `running`, mark it `stopped`, or discard unresolved work.
+A bounded drain-observation attempt may reject while protected handlers or policy evaluators remain tracked. The coordinator must distinguish a drain-only timeout from a failed shutdown initiation; these states have different follow-up behavior.
 
 Requirements:
 
-1. Keep the engine in `stopping` after a drain timeout or policy-shutdown failure that leaves shutdown incomplete.
-2. If a `stopPromise` is currently pending, every concurrent `stop()` caller receives that exact same promise.
-3. If the previous attempt has settled by rejection and its shared promise has been cleared, a later explicit `stop()` call while lifecycle is `stopping` must be allowed to start a new bounded observation attempt. It must not reopen admission.
-4. A new attempt must reuse the same executor invocation records and underlying policy-evaluation records. It must not invoke a handler again, create a new `operationId`, or reset a prior cancellation cause.
-5. If all tracked handlers and policy evaluations have since settled successfully (and policy shutdown is confirmed complete), the later attempt may proceed to module cleanup. If work remains unresolved, it may wait until its configured deadline and reject again.
-6. Policy shutdown state and underlying evaluator work must remain observable across attempts: an earlier rejected caller wait is not proof that delegate shutdown or evaluator work has settled. Re-invoking delegate shutdown after initiation failure/rejection is permitted only if the architecture-approved recovery contract in section 11 explicitly establishes its safety; otherwise a later attempt only observes tracked state and reports the unresolved failure.
-7. Only successful completion of all required drains and module cleanup may transition lifecycle to `stopped`. A failed module cleanup retains the existing explicit cleanup-retry rules and dependency protection.
+1. Keep the engine in `stopping` after any drain timeout or shutdown failure. Admission must never reopen.
+2. If a `stopPromise` is pending, every concurrent caller receives that exact same promise.
+3. If a drain-only observation attempt rejects with `DRAIN_PENDING` and no executor, policy, or delegate shutdown initiation has failed, a later explicit `stop()` may start a fresh bounded observation wait over the same tracked work and a fresh deadline.
+4. A fresh observation attempt must not re-invoke executor shutdown initiation, policy shutdown initiation, a delegate shutdown method, a handler, or an evaluator. It must not create a new `operationId`, reset cancellation provenance, or duplicate terminal bookkeeping.
+5. If all required tracked work later settles and no sticky initiation-failure blocker exists, a later observation may establish `DRAIN_COMPLETED` and proceed to the separately governed cleanup decision.
+6. If any executor, policy, or delegate shutdown initiation throws, rejects, or may have partially performed side effects, set sticky `RECOVERY_REQUIRED`. Later `stop()` calls must report that blocker and may inspect retained state only; they must not retry or re-invoke the failed initiation.
+7. `RECOVERY_REQUIRED` cannot be cleared merely because visible handler/evaluator promises later settle. Clearing it or performing a retry requires a separate, explicitly reviewed and approved Recovery Contract that reconciles prior side effects and retained records.
+8. Only successful completion of all required drains, absence of sticky recovery blockers, satisfaction of the final monotonic-deadline check, and successful module cleanup may transition lifecycle to `stopped`.
+9. Existing explicit module-cleanup retry behavior is outside this drain/initiation rule and remains subject to its own dependency-protection contract.
 
-This is a continuation of the same shutdown, not a second shutdown or operation replay.
+A later drain observation is not a retry of shutdown initiation, a second shutdown, or an operation replay.
 
-## 7. Timeout and retry semantics
+## 7. Timeout, observation, and recovery semantics
 
-- The recommended model is one finite absolute deadline per drain attempt, measured with a monotonic clock. It bounds the concurrent barrier covering admitted-handler settlement, underlying policy-evaluation settlement, and delegate-shutdown observation; it does not terminate JavaScript execution.
-- Handler and policy drain waits begin in the same synchronous start-of-stop turn and consume the same remaining budget. Do not add separate sequential timeout windows or restart the budget when one path settles.
-- A policy shutdown rejection may fail the attempt immediately before the shared deadline. If the shared deadline expires while one or more paths remain unresolved, report all observed blockers using the deterministic primary-code precedence in section 11.1.
+- Each drain observation uses one finite absolute deadline measured with a monotonic clock. It bounds the concurrent barrier covering admitted-handler settlement, child-activity settlement, underlying policy-evaluation settlement, and observation of already-initiated shutdown work; it does not terminate JavaScript execution.
+- Handler and policy drain observation begin in the same synchronous start-of-stop turn and consume the same remaining budget. Do not add sequential timeout windows or restart the budget when one path settles.
+- A policy or executor initiation failure/rejection is not a drain timeout. It sets sticky `RECOVERY_REQUIRED` under section 11.2.2; the failed initiation must not be repeated by a later `stop()` call.
+- When the drain deadline expires without an initiation failure, report the state as `DRAIN_PENDING`. A later explicit `stop()` may observe the same tracked work with a fresh observation deadline, but must not repeat any shutdown initiation, handler invocation, or evaluation.
+- If the shared deadline expires while one or more paths remain unresolved, report all observed blockers using the deterministic primary-code precedence in section 11.2.10.
 - When the drain deadline expires, the runtime reports shutdown as unresolved/blocked. It must not claim successful shutdown or begin module cleanup.
-- The unresolved invocation/evaluation remains tracked until its underlying promise settles or the process terminates.
-- A subsequent explicit shutdown attempt may wait for the same tracked work with a fresh wait deadline; it must not invoke a handler again, restart an evaluation, or regenerate an invocation ID.
-- No automatic retry of the protected operation is permitted as part of shutdown recovery.
-- The drain deadline does not bound the later module-cleanup phase. Until a separate cleanup timeout/recovery contract is accepted and implemented, do not describe the entire stop() operation as globally time-bounded.
+- The unresolved invocation/evaluation and registered child activities remain tracked until their underlying work settles or the process terminates.
+- No automatic retry of the protected operation, executor shutdown initiation, policy shutdown initiation, or delegate shutdown initiation is permitted. A future recovery action requires a separate, reviewed and approved Recovery Contract.
+- The drain deadline does not bound the later module-cleanup phase. Until a separate cleanup timeout/recovery contract is accepted and implemented, do not describe the entire `stop()` operation as globally time-bounded.
 - If a handler never settles, graceful shutdown cannot be declared complete. Any forceful process termination is an external operational decision and must be separately authorized and documented.
 
 ## 8. Concurrency and race requirements
@@ -215,6 +218,22 @@ The implementation is not acceptable without deterministic tests covering at lea
 29. If executor shutdown initiation throws synchronously, policy shutdown is still attempted and the executor-initiation failure is surfaced as `PROTECTED_OPERATION_SHUTDOWN_FAILED`. Policy-path success alone does not resolve the executor failure or permit module cleanup; cleanup remains blocked by sticky `RECOVERY_REQUIRED` until a separately approved Recovery Contract resolves it and every admitted handler is independently proven settled. If both paths fail, primary error selection follows section 11.2.10.
 30. If executor shutdown throws after partially closing or signalling its active registry, CoreEngine admission nevertheless remains closed by the independent lifecycle predicate; the contract does not assume all active handlers received cancellation and retains all invocation records. Cleanup remains blocked by sticky `RECOVERY_REQUIRED` until a separately approved Recovery Contract resolves the failure and every admitted handler is independently proven settled. A deterministic test must cover partial cancellation delivery followed by the executor initiation failure.
 31. If executor shutdown initiation fails after partial side effects, a later explicit stop observation must not repeat initiation and must continue reporting `RECOVERY_REQUIRED`. No idempotent retry is permitted unless a separately approved Recovery Contract explicitly authorizes it and proves no duplicated side effects, lost invocation records, or duplicate terminal bookkeeping.
+32. Omitted `protectedOperationShutdown.drainDeadlineMs` selects the documented provisional default exactly once; diagnostics identify that the value came from the default.
+33. A valid explicit integer override at the minimum accepted value (1 ms) is accepted and becomes the effective value.
+34. A valid explicit integer override at the maximum accepted value (2,147,483,647 ms) is accepted without timer overflow or coercion.
+35. A valid explicit interior override is accepted unchanged and is reported accurately in sanitized diagnostics.
+36. Zero is rejected before the engine enters `running`; no admission opens and no unbounded fallback is selected.
+37. A negative value is rejected before the engine enters `running`; no admission opens.
+38. A fractional numeric value is rejected rather than rounded, truncated, or coerced.
+39. `NaN` is rejected before the engine enters `running`.
+40. Positive and negative `Infinity` are rejected before the engine enters `running`.
+41. Explicit `null` is rejected and is not treated as omission or as permission to use an unbounded deadline.
+42. Values below the minimum or above the maximum are rejected before the engine enters `running`.
+43. String, boolean, object, and other non-number values are rejected rather than implicitly coerced.
+44. Omitted value and explicit invalid value are distinguished: only omission may select the provisional default.
+45. Every invalid configuration produces the stable configuration error, leaves lifecycle outside `running`, keeps admission closed, and does not silently substitute another value.
+46. The effective validated duration and its source (default or explicit override) appear in sanitized diagnostics without exposing secrets or caller data.
+47. Reconfiguration after the engine enters `running` cannot mutate the active attempt's absolute deadline; any supported runtime reconfiguration requires a separately specified contract.
 Tests must use controlled promises/signals rather than relying on arbitrary sleeps.
 
 ## 11. Historical architecture decision log (superseded)
@@ -322,14 +341,14 @@ This policy intentionally chooses sticky failure over an assumed retry. Any futu
 
 ### 11.2.6 Additional deterministic acceptance tests
 
-The original 31 cases remain proposed acceptance criteria and are not evidence of executed tests. Add these four cases:
+The original 31 cases remain proposed acceptance criteria and are not evidence of executed tests. Add cases 48–51 below; deadline-configuration cases 32–47 are specified in section 10:
 
 32. **Handler child activity, capability mediation, and detached-work boundary:** use controllable parent and child promises. Prove that Runtime-resource capabilities register child activity before scheduling it; prove that a registered child remains in the drain registry after parent control flow ends; prove cleanup is blocked until the child settles and bookkeeping completes; and prove an unregistered child cannot obtain a Runtime-owned resource through the supported capability API. Also test and document the same-process ambient-API limitation described in section 11.2.8; do not represent a lint rule or adapter contract as a security sandbox.
 33. **Event-loop delay and absolute deadline:** use an injected monotonic clock and controllable scheduler rather than arbitrary sleeps. Advance the monotonic clock beyond the absolute deadline while delaying timer callback delivery; prove the final cleanup decision rejects and cleanup is not invoked. Also prove wall-clock changes do not affect the monotonic deadline.
 34. **Competing cancellation sources:** control caller, parent, and Runtime-shutdown cancellation arrival order. Assert that the first accepted cause remains immutable primary cause, later causes are preserved as provenance, all expected cancellation requests are observable, and handler invocation/terminal bookkeeping occurs exactly once.
 35. **Partial initiation failure and recovery gate:** simulate executor and policy/delegate shutdown initiation failures after partial side effects. Assert that state becomes `INITIATION_FAILED` and `RECOVERY_REQUIRED`, admission remains closed, all invocation/evaluator/child records remain tracked, cleanup is blocked, and later `stop()` observation does not re-invoke either initiation. Assert that only a separately approved Recovery Contract can authorize a retry and that such retry tests must prove no duplicated side effects or lost records.
 
-All 35 cases must use controllable promises, signals, an injected monotonic clock, and a deterministic scheduler as appropriate. No arbitrary sleeps are acceptable. These cases are specification-only until implemented and executed on a separately authorized implementation branch.
+All 51 cases must use controllable promises, signals, an injected monotonic clock, and a deterministic scheduler as appropriate. No arbitrary sleeps are acceptable. These cases are specification-only until implemented and executed on a separately authorized implementation branch.
 
 ### 11.2.7 Updated disposition
 
@@ -362,12 +381,40 @@ This section defines the required control boundary without overstating what same
 6. An explicit valid override replaces the default for that runtime profile. The effective value and configuration source must be included in sanitized diagnostics, without exposing secrets or caller data.
 7. The 30,000 ms default remains provisional until load-test evidence and the shutdown-latency objective are recorded in the implementation proposal. Changing the default later requires updating this contract and its deterministic configuration tests.
 
+
+### 11.2.11 ENG002-R11 — Unambiguous sticky recovery and observation-only stop calls
+
+1. Sections 6.3, 6.4, and 7 are active requirements and must be read consistently with the sticky recovery policy in section 11.2.2.
+2. A drain-only timeout with no initiation failure is `DRAIN_PENDING`. A later explicit `stop()` may start a new bounded observation wait over the same retained records. This is observation only: it must not repeat executor shutdown initiation, policy shutdown initiation, delegate shutdown, handler invocation, or evaluator start.
+3. Any executor shutdown initiation throw, policy shutdown initiation throw/rejection, delegate shutdown throw/rejection, or known partial initiation side effect sets sticky `RECOVERY_REQUIRED`. Later `stop()` calls may inspect and report retained state only; they must not retry the failed initiation.
+4. A sticky `RECOVERY_REQUIRED` blocker cannot be cleared by promise settlement alone. No cleanup is eligible while it remains. A recovery action or retry requires a separate explicit Recovery Contract approved through the project's architecture and security review gates.
+5. The terms “retry,” “later attempt,” and “subsequent stop” in active sections refer only to bounded observation of already-initiated work unless an approved Recovery Contract explicitly authorizes a distinct recovery action. They never imply implicit re-invocation.
+6. Acceptance cases 27–31 test sticky recovery and non-reinvocation; they remain specification criteria until separately authorized implementation and execution.
+
+### 11.2.12 ENG002-R12 — Deterministic deadline-configuration acceptance matrix
+
+1. The proposed acceptance suite independently covers: omitted setting/default selection; valid explicit overrides; minimum and maximum accepted integers; zero; negative; fractional; `NaN`; positive and negative `Infinity`; `null`; below-range and above-range numbers; non-number types; and distinction between omission and explicit invalid input.
+2. Every invalid value must be rejected before CoreEngine enters `running`, leave admission closed, return the stable configuration error, and never fall back to an unbounded wait or silently substitute the default.
+3. The effective validated duration and whether it came from the default or an explicit override must be visible in sanitized diagnostics.
+4. The expanded configuration cases are acceptance cases 32–47 in section 10. They are required design criteria, not evidence that tests have been implemented or executed.
+5. Tests must use deterministic typed inputs and must not rely on JSON serialization for values such as `NaN`, infinities, or `undefined`.
+
+### 11.2.13 ENG002-R13 — Evidence plan for the provisional drain-deadline default
+
+1. The 30,000 ms value remains a provisional candidate only. It is not an evidence-backed production default and must not be described as validated until the evidence below is collected and reviewed.
+2. Before implementation acceptance, the implementation proposal must define representative workload profiles, including at minimum: no active operations; typical concurrent handler load; high but supported concurrency; handlers with registered child activities; policy evaluations with realistic delegate latency; cooperative cancellation; and controlled slow/unresolved work.
+3. For each profile, record sample size, runtime and host configuration, concurrency, handler/evaluator/child settlement distributions, shutdown drain latency, timeout frequency, event-loop delay, and observed blocker/error codes. Record warm/cold conditions where they materially affect results.
+4. Before running the benchmark, the product/operations owner must document the shutdown-latency objective and acceptable timeout/error budget for each relevant profile. Do not invent target percentiles or claim that a percentile is acceptable without that prior decision.
+5. Evaluate the 30,000 ms candidate against the predeclared objectives and representative measurements. Retain it only if the evidence meets those objectives without unsafe cleanup, hidden untracked work, or excessive unresolved shutdowns; otherwise propose a revised value and rerun the same reproducible profiles.
+6. Preserve benchmark scripts/configuration, raw measurements, environment details, summary analysis, and reviewer disposition as evidence linked to the implementation proposal. Synthetic unit-test timings are not a substitute for representative load evidence.
+7. The deadline candidate may become a final default only after Haniyeh's architecture acceptance and independent security/quality review of the evidence. Until then, the numeric default remains provisional.
+
 ### 11.2.10 ENG002-R10 — Normative precedence and document authority
 
 1. Section 11 and section 11.1 are historical decision records only. They preserve earlier proposals and review questions; they are not active decision gates.
-2. Section 11.2, including sections 11.2.1 through 11.2.10, is the current normative proposal. Where historical wording conflicts with it, section 11.2 controls.
+2. Section 11.2, including sections 11.2.1 through 11.2.13, is the current normative proposal. Where historical wording conflicts with it, section 11.2 controls.
 3. The primary shutdown error precedence is: `POLICY_SHUTDOWN_FAILED`, then `PROTECTED_OPERATION_SHUTDOWN_FAILED`, then `POLICY_EVALUATION_DRAIN_TIMEOUT`, then `PROTECTED_OPERATION_DRAIN_TIMEOUT`. Every concurrently observed blocker must still be retained in sanitized immutable error details.
 4. The Recovery policy is sticky `RECOVERY_REQUIRED`; no implicit re-invocation is permitted. A retry can be authorized only by a separately reviewed and approved Recovery Contract.
-5. The 35 acceptance cases are proposed specification criteria, not evidence of implementation or executed tests. Cases 27–31 are interpreted under the sticky Recovery policy in section 11.2.2; case 32 must test capability-mediated child registration and the honest isolation boundary in section 11.2.8.
+5. The 51 acceptance cases are proposed specification criteria, not evidence of implementation or executed tests. Cases 27–31 cover sticky recovery; cases 32–47 cover deadline configuration; cases 48–51 cover capability, deadline scheduling, cancellation competition, and partial initiation failure.
 6. References elsewhere in this document to pending decisions, recommended resolutions, or the former architecture-acceptance request are historical only and must not override the current decisions recorded in section 11.2.
 
