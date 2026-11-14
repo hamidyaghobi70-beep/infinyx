@@ -380,12 +380,18 @@ describe("ProtectedOperationExecutor", () => {
     expect(firstContext?.operationId).not.toBe(secondContext?.operationId);
   });
 
-  it("keeps an already-admitted handler in flight during shutdown without claiming cancellation", async () => {
+  it("drains an admitted handler before allowing module cleanup", async () => {
     let release!: (value: string) => void;
     let signalHandlerStarted!: () => void;
     const handlerStarted = new Promise<void>((resolve) => { signalHandlerStarted = resolve; });
     let handlerSignal: AbortSignal | undefined;
+    let moduleStopped = false;
     const engine = new CoreEngine({ policy: { evaluate: async () => allow } });
+    engine.register({
+      id: "resource-owner",
+      version: "1.0.0",
+      stop: () => { moduleStopped = true; }
+    });
     const handler = vi.fn((_input: string, context: { operationId: string; signal: AbortSignal }) => {
       handlerSignal = context.signal;
       signalHandlerStarted();
@@ -403,10 +409,49 @@ describe("ProtectedOperationExecutor", () => {
     await handlerStarted;
     expect(handler).toHaveBeenCalledTimes(1);
     const stopping = engine.stop();
-    await stopping;
-    expect(handlerSignal?.aborted).toBe(false);
+    expect(handlerSignal?.aborted).toBe(true);
+    expect(moduleStopped).toBe(false);
     release("completed");
+    await stopping;
+    expect(moduleStopped).toBe(true);
     expect(await pending).toEqual({ status: "executed", value: "completed" });
+  });
+
+  it("blocks cleanup after a handler drain deadline and observes late settlement without replay", async () => {
+    let release!: (value: string) => void;
+    let handlerCalls = 0;
+    let moduleStops = 0;
+    const engine = new CoreEngine({
+      policy: { evaluate: async () => allow },
+      protectedOperationShutdown: { drainDeadlineMs: 5 }
+    });
+    engine.register({
+      id: "resource-owner",
+      version: "1.0.0",
+      stop: () => { moduleStops += 1; }
+    });
+    const operation = engine.registerProtectedOperation({
+      id: "records.pending",
+      action: "record.write",
+      resource: "record:pending",
+      validateInput: (value: unknown): value is string => typeof value === "string",
+      handler: () => {
+        handlerCalls += 1;
+        return new Promise<string>((resolve) => { release = resolve; });
+      }
+    });
+    await ensureStarted(engine);
+    const pending = engine.protectedOperations.execute(operation, { actorId: "pending" }, "work");
+    await Promise.resolve();
+    await expect(engine.stop()).rejects.toMatchObject({
+      code: "PROTECTED_OPERATION_DRAIN_TIMEOUT"
+    });
+    expect(moduleStops).toBe(0);
+    release("late-completion");
+    await pending;
+    await engine.stop();
+    expect(handlerCalls).toBe(1);
+    expect(moduleStops).toBe(1);
   });
 
   it("fails closed for non-cloneable context values before PolicyEngine", async () => {
