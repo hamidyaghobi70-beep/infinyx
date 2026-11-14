@@ -168,17 +168,56 @@ A later drain observation is not a retry of shutdown initiation, a second shutdo
 
 ## 9. Audit and observability requirements
 
-For each invocation, observable records should include:
+Audit records and operational diagnostics are separate data products. They have different purposes, schemas, retention rules, and access paths. Neither may be treated as a substitute for the other.
 
-- `operationId` (per invocation);
-- `operationDefinitionId` (registration identity);
-- actor/caller identity under the existing privacy and data-minimization rules;
-- admission timestamp and outcome;
-- cancellation source/reason where applicable;
-- drain deadline observation, if unresolved;
-- final settlement timestamp and outcome, including late settlement.
+### 9.1 Audit records
 
-Do not log raw secrets, private keys, credentials, or unrestricted caller context. Audit persistence must define its own commit/acknowledgement and reconciliation semantics. A log message alone is not proof of durable audit.
+1. Durable audit records document invocation intent, authorization/admission, cancellation provenance, and terminal outcome. The stable `operationId` correlates records for one invocation; `operationDefinitionId` identifies its registered definition.
+2. The exact durable schema, persistence guarantees, commit/acknowledgement protocol, reconciliation behavior, retention period, and authorized audit-reader roles belong to a separately reviewed Audit Persistence and Access Contract. Until that contract is approved, this document does not authorize durable audit storage or claim that any log is durable evidence.
+3. At this contract boundary, audit content must be data-minimized. Do not persist operation payloads, handler arguments/results, credentials, secrets, private keys, raw request bodies, unrestricted caller context, or arbitrary exception messages/stacks.
+4. Actor/caller attribution is not permission to store raw identity. If attribution is required by a future approved audit schema, use only a purpose-limited opaque subject reference with documented provenance and access controls. Do not invent or infer identity fields.
+5. Audit records must not contain mutable registry references, live objects, AbortControllers, signals, resource handles, or executable values. Serialize only an explicitly versioned immutable schema.
+6. No external privacy policy is implicitly incorporated by the phrase “existing privacy and data-minimization rules.” Until a separately identified and versioned policy is adopted, the minimum rules in this section are the binding baseline for this contract.
+
+### 9.2 Diagnostics and observability
+
+Diagnostics are operational troubleshooting data, not the durable audit ledger. The following allowlist is exhaustive for protected-operation shutdown diagnostics in this contract. Any additional field requires a reviewed amendment before implementation.
+
+**Allowed fields**
+
+- `operationId`: opaque per-invocation identifier, only where invocation-level troubleshooting is necessary.
+- `operationDefinitionId`: registered definition identifier, provided it is not populated from caller-controlled payload.
+- `lifecycleState`: one of the documented finite lifecycle-state values.
+- `blockerCodes[]`: stable `CoreError.code` values from the documented shutdown error-code allowlist; no arbitrary text.
+- `effectiveDrainDeadlineMs`: validated integer duration only.
+- `deadlineSource`: exactly `default` or `explicit`.
+- `observedAt` and settlement timestamps: normalized timestamps needed for operational sequencing; do not include raw caller-supplied time values.
+- `cause.name` and `cause.code`: only when the name is a bounded standard error class and the code is a recognized stable application error code. Omit either field when it does not meet this rule.
+
+**Prohibited fields**
+
+- Operation payloads, handler arguments, handler results, policy input/context, request bodies, or arbitrary user-supplied strings.
+- Credentials, access tokens, secrets, private keys, connection strings, or other authentication material.
+- Raw caller/actor identity, email addresses, IP addresses, session identifiers, or unrestricted caller context.
+- Exception messages, stack traces, nested arbitrary causes, source snippets, filesystem paths, environment values, and serialized error objects.
+- Mutable registry maps, live invocation/evaluator/child-task objects, AbortControllers, AbortSignals, resource handles, or references that permit mutation or access to runtime internals.
+- Arbitrary blocker descriptions or caller-provided labels. Blockers are represented only by stable allowlisted error codes and bounded counts where needed.
+
+**Redaction and error-detail rules**
+
+1. Apply denylist removal before data leaves the owning runtime boundary; do not rely on downstream log processors to sanitize sensitive values.
+2. For an error cause, retain only an allowlisted `name` and stable `code`. Drop the message, stack, nested causes, custom enumerable properties, and the original error object. If safe extraction cannot be established, omit the cause entirely.
+3. Do not hash or partially mask prohibited values as a substitute for removal. Omit them completely. Opaque runtime-generated identifiers explicitly listed in the allowlist may be retained for correlation.
+4. The same sanitization applies to structured logs, diagnostic snapshots, `CoreError.details`, blocker lists, and any serialized error representation. Immutability is required after sanitization; it does not itself make data safe.
+5. Diagnostic snapshots must be newly constructed immutable value objects. They must never expose references to internal registries, controllers, signals, handlers, or resource objects.
+
+**Access boundaries and privacy default**
+
+1. Protected-operation diagnostics are restricted to authorized runtime operators and designated security/quality reviewers who need them for operational review. Application modules, handlers, policy evaluators, ordinary callers, and public interfaces receive no direct diagnostic-registry access.
+2. Access to invocation-level identifiers and blocker details must be limited to the same authorized operational roles and protected by the host application's authentication and authorization controls. This contract does not create a public diagnostics endpoint or grant access to any person by name.
+3. Durable audit access is separate and remains undefined until the Audit Persistence and Access Contract specifies authorized roles, approval, retention, and review logging. Access to diagnostics does not imply access to the durable audit store.
+4. Default to omission: if a field is not explicitly allowlisted above, it must not be emitted. If the runtime cannot prove a value conforms to the allowlist, omit it rather than attempting best-effort sanitization.
+5. These minimum rules are the in-document privacy/data-minimization baseline for INFINYX-ENG-002. A future organization-wide privacy policy may strengthen them, but cannot weaken them without an explicit architecture and security review.
 
 ## 10. Required acceptance tests
 
@@ -347,13 +386,15 @@ The original 31 cases remain proposed acceptance criteria and are not evidence o
 51. **Competing cancellation sources:** control caller, parent, and Runtime-shutdown cancellation arrival order. Assert that the first accepted cause remains immutable primary cause, later causes are preserved as provenance, all expected cancellation requests are observable, and handler invocation/terminal bookkeeping occurs exactly once.
 52. **Partial initiation failure and recovery gate:** simulate executor and policy/delegate shutdown initiation failures after partial side effects. Assert that state becomes `INITIATION_FAILED` and `RECOVERY_REQUIRED`, admission remains closed, all invocation/evaluator/child records remain tracked, cleanup is blocked, and later `stop()` observation does not re-invoke either initiation. Assert that only a separately approved Recovery Contract can authorize a retry and that such retry tests must prove no duplicated side effects or lost records.
 
+53. **Diagnostics allowlist, denylist, and error redaction:** exercise both `PROTECTED_OPERATION_DRAIN_TIMEOUT` and `PROTECTED_OPERATION_SHUTDOWN_CONFIG_INVALID` with synthetic sensitive payloads, caller identity, arbitrary error messages, stack traces, nested causes, and mutable registry objects. Assert that emitted logs, diagnostic snapshots, `CoreError.details`, and serialized errors contain only the section 9.2 allowlisted fields; prohibited values are completely absent (not hashed or masked); causes retain only an allowlisted `name` and stable `code`; snapshots are immutable and contain no live internal references; and an unknown field defaults to omission. Assert separately that application modules/handlers cannot read diagnostic registries and that diagnostics access is limited to the authorized operational roles defined in section 9.2.
+
 All 52 cases must use controllable promises, signals, an injected monotonic clock, and a deterministic scheduler as appropriate. No arbitrary sleeps are acceptable. These cases are specification-only until implemented and executed on a separately authorized implementation branch.
 
 ### 11.2.7 Updated disposition
 
 **ARCHITECTURE ACCEPTED — IMPLEMENTATION NOT AUTHORIZED.** Haniyeh issued an unconditional architecture decision of **ACCEPT** for this exact document revision at commit `9cc51b14777faf35936d67ec1b773e57c4cde965` on 2026-11-14. This acceptance is limited to the architecture proposal and does not establish runtime implementation or execution evidence.
 
-Independent security/quality review by Shima and/or DeepSeek is still pending; no such approval is recorded by this disposition. The provisional 30,000 ms default must still be validated against representative load-test evidence before implementation acceptance. Passing documentation-branch CI is repository workflow evidence only; it is not proof that runtime behavior implements this contract.
+Shima's independent security/quality review of commit `2ef7ce82e940b25422256e8905bb60b9aafb0e87` returned **ACCEPT WITH CONDITIONS** on 2026-11-14. The remaining conditions are the Audit/Diagnostics separation and privacy contract in sections 9.1–9.2 plus acceptance case 53. Final independent re-review of the amended revision is pending; no unconditional security/quality approval is recorded. The provisional 30,000 ms default must still be validated against representative load-test evidence before implementation acceptance. Passing documentation-branch CI is repository workflow evidence only; it is not proof that runtime behavior implements this contract.
 
 Implementation, source-code changes, executable-test changes, merge, release, deployment, and changes to `main` remain unauthorized pending independent security/quality review and separate explicit implementation authorization.
 
@@ -389,7 +430,7 @@ This section defines the required control boundary without overstating what same
 2. Section 11.2, including sections 11.2.1 through 11.2.13, is the current normative proposal. Where historical wording conflicts with it, section 11.2 controls.
 3. The primary shutdown error precedence is: `POLICY_SHUTDOWN_FAILED`, then `PROTECTED_OPERATION_SHUTDOWN_FAILED`, then `POLICY_EVALUATION_DRAIN_TIMEOUT`, then `PROTECTED_OPERATION_DRAIN_TIMEOUT`. Every concurrently observed blocker must still be retained in sanitized immutable error details.
 4. The Recovery policy is sticky `RECOVERY_REQUIRED`; no implicit re-invocation is permitted. A retry can be authorized only by a separately reviewed and approved Recovery Contract.
-5. The 52 acceptance cases are proposed specification criteria, not evidence of implementation or executed tests. Cases 27–31 cover sticky recovery; cases 32–48 cover deadline configuration (including absent versus explicitly present `undefined`); cases 49–52 cover capability, deadline scheduling, cancellation competition, and partial initiation failure.
+5. The 53 acceptance cases are proposed specification criteria, not evidence of implementation or executed tests. Cases 27–31 cover sticky recovery; cases 32–48 cover deadline configuration (including absent versus explicitly present `undefined`); cases 49–52 cover capability, deadline scheduling, cancellation competition, and partial initiation failure; case 53 covers diagnostics allowlisting, redaction, immutability, and access boundaries.
 6. References elsewhere in this document to pending decisions, recommended resolutions, or the former architecture-acceptance request are historical only and must not override the current decisions recorded in section 11.2.
 
 
