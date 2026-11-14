@@ -342,4 +342,17 @@ describe("FailClosedPolicyEngine caller and parent cancellation", () => {
     });
   });
 
+
+  it("denies an oversized policy request before invoking the delegate", async () => {
+    const evaluator = vi.fn(async () => ({ effect: "allow" as const, reason: "must not execute" }));
+    const policy = new FailClosedPolicyEngine({ evaluate: evaluator });
+    await expect(policy.evaluate({
+      actorId: "bounded",
+      action: "record.read",
+      resource: "record:1",
+      context: { attributes: { oversized: "x".repeat(16_385) } }
+    })).resolves.toMatchObject({ effect: "deny" });
+    expect(evaluator).not.toHaveBeenCalled();
+  });
+
 });
