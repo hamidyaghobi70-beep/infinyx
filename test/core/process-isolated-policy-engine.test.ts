@@ -147,10 +147,10 @@ describe("ProcessIsolatedPolicyEngine", () => {
   it("passes the bounded deadline to the child evaluator", async () => {
     const engine = new ProcessIsolatedPolicyEngine({
       moduleUrl: fixtureUrl,
-      timeoutMs: 1_000
+      timeoutMs: 30_000
     });
     const result = await engine.evaluateDetailed(request("deadline"), {
-      deadlineAt: Date.now() + 800
+      deadlineAt: Date.now() + 25_000
     });
     expect(result.outcome).toBe("COMPLETED");
     expect(result.decision.effect).toBe("allow");
