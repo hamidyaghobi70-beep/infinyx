@@ -18,7 +18,10 @@ describe("snapshotBoundedPolicyData", () => {
 
   it("rejects excessive node counts and container entries", () => {
     expect(snapshotBoundedPolicyData(Array.from({ length: 1_001 }, () => 1))).toBeUndefined();
-    expect(snapshotBoundedPolicyData(Array.from({ length: 10_001 }, () => 1))).toBeUndefined();
+    const manyNodes = Array.from({ length: 10 }, () => Array.from({ length: 1_000 }, () => 1));
+    expect(snapshotBoundedPolicyData(manyNodes)).toBeUndefined();
+    expect(snapshotBoundedPolicyData({ values: ["a".repeat(16_000), "b".repeat(16_000)] })).toBeDefined();
+    expect(snapshotBoundedPolicyData({ values: Array.from({ length: 17 }, () => "c".repeat(16_000)) })).toBeUndefined();
   });
 
   it("rejects cycles, accessors, sparse arrays, and non-finite numbers", () => {
