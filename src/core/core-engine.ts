@@ -383,7 +383,7 @@ export class CoreEngine {
         precedence.indexOf(left.code) - precedence.indexOf(right.code)
       );
       throw new CoreError(
-        blockers[0].code,
+        blockers[0]!.code,
         "Shutdown is blocked; module cleanup was not started.",
         undefined,
         blockers
