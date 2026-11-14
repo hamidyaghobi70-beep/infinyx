@@ -118,7 +118,6 @@ Use stable, machine-readable `CoreError.code` values rather than requiring calle
 | `MODULE_STOP_FAILED` | Existing module cleanup failure after safe cleanup was attempted | Cleanup has been attempted according to dependency rules |
 
 Requirements:
-
 1. Add the new codes to the existing `CoreErrorCode` union, including `PROTECTED_OPERATION_SHUTDOWN_FAILED` for executor shutdown initiation failure; preserve `MODULE_STOP_FAILED` for actual module cleanup failures rather than using it for every shutdown failure.
 2. Keep the original underlying error as `cause` where one exists. Deadline errors must identify the failure category without exposing caller context, secrets, or mutable registry internals.
 3. A handler's own rejected promise is an operation outcome, not by itself a shutdown failure. Once it has settled and terminal bookkeeping is complete, it may be removed from the active registry and safe cleanup may proceed.
@@ -231,14 +230,13 @@ The implementation is not acceptable without deterministic tests covering at lea
 42. Values below the minimum or above the maximum are rejected before the engine enters `running`.
 43. String, boolean, object, and other non-number values are rejected rather than implicitly coerced.
 44. Omitted value and explicit invalid value are distinguished: only omission may select the provisional default.
-45. Every invalid configuration produces the stable configuration error, leaves lifecycle outside `running`, keeps admission closed, and does not silently substitute another value.
+45. Every invalid configuration produces `CoreError.code === "PROTECTED_OPERATION_SHUTDOWN_CONFIG_INVALID"`, leaves lifecycle outside `running`, keeps admission closed, and does not silently substitute another value.
 46. The effective validated duration and its source (default or explicit override) appear in sanitized diagnostics without exposing secrets or caller data.
 47. Reconfiguration after the engine enters `running` cannot mutate the active attempt's absolute deadline; any supported runtime reconfiguration requires a separately specified contract.
-48. An explicitly present `protectedOperationShutdown.drainDeadlineMs` property whose value is `undefined` is rejected as invalid before the engine enters `running`; it must not be treated as an omitted property and must not select the provisional default. Test this separately from a configuration object in which the property is absent.
+48. An explicitly present `protectedOperationShutdown.drainDeadlineMs` property whose value is `undefined` is rejected before the engine enters `running` with `CoreError.code === "PROTECTED_OPERATION_SHUTDOWN_CONFIG_INVALID"`; it must not be treated as an omitted property and must not select the provisional default. Test this separately from a configuration object in which the property is absent.
 Tests must use controlled promises/signals rather than relying on arbitrary sleeps.
 
 ## 11. Historical architecture decision log (superseded)
-
 > **Historical record only:** Sections 11 and 11.1 preserve the decision history from earlier review rounds. They are not open decisions and are not normative where they conflict with section 11.2. The current binding contract is section 11.2 and its amendments. Do not use historical wording below to reopen a decision already resolved in section 11.2.
 
 Before implementation, architecture review must explicitly decide:
@@ -353,10 +351,11 @@ All 52 cases must use controllable promises, signals, an injected monotonic cloc
 
 ### 11.2.7 Updated disposition
 
-**NOT READY FOR IMPLEMENTATION.** The ACCEPT WITH CONDITIONS review findings ENG002-R08, ENG002-R09, and ENG002-R10 have been addressed as proposed normative amendments. This exact revision still requires fresh architecture review and independent security/quality review. The provisional 30,000 ms default must be validated against representative load-test evidence before implementation acceptance. Passing documentation-branch CI is repository workflow evidence only; it is not proof that runtime behavior implements this contract.
+**ARCHITECTURE ACCEPTED — IMPLEMENTATION NOT AUTHORIZED.** Haniyeh issued an unconditional architecture decision of **ACCEPT** for this exact document revision at commit `9cc51b14777faf35936d67ec1b773e57c4cde965` on 2026-11-14. This acceptance is limited to the architecture proposal and does not establish runtime implementation or execution evidence.
 
-Implementation, source-code changes, executable-test changes, merge, release, deployment, and changes to `main` remain unauthorized.
+Independent security/quality review by Shima and/or DeepSeek is still pending; no such approval is recorded by this disposition. The provisional 30,000 ms default must still be validated against representative load-test evidence before implementation acceptance. Passing documentation-branch CI is repository workflow evidence only; it is not proof that runtime behavior implements this contract.
 
+Implementation, source-code changes, executable-test changes, merge, release, deployment, and changes to `main` remain unauthorized pending independent security/quality review and separate explicit implementation authorization.
 
 ### 11.2.8 ENG002-R08 — Enforceable child-activity ownership and detached-work boundary
 
@@ -378,9 +377,10 @@ This section defines the required control boundary without overstating what same
 2. The proposed default is **30,000 ms** when the setting is omitted. This is a provisional baseline value, not a claim derived from production telemetry. Before implementation acceptance, the value must be validated against representative load tests and documented shutdown-latency objectives; evidence may justify changing the default.
 3. The accepted numeric range is a finite safe integer from **1 through 2,147,483,647 ms**, inclusive. The upper bound avoids timer-range overflow in the Node.js timer model. Zero, negative values, fractional values, NaN, Infinity, null, and an unbounded/disabled setting are invalid.
 4. The coordinator converts the configured duration into one absolute deadline using the monotonic clock (for example, `performance.now()`). All handler, child-activity, policy-evaluator, and delegate-shutdown waits share that absolute deadline. Wall-clock timestamps and the existing epoch-based `PolicyEvaluationOptions.deadlineAt` are not substitutes for this clock domain.
-5. Configuration is validated before the engine enters `running`. Invalid or out-of-range configuration fails closed: startup is rejected with a stable configuration error, no protected-operation admission is opened, and no fallback to an unbounded wait or silent default is permitted.
+5. Configuration is validated before the engine enters `running`. Invalid or out-of-range configuration fails closed: startup is rejected with `CoreError.code === "PROTECTED_OPERATION_SHUTDOWN_CONFIG_INVALID"`, no protected-operation admission is opened, and no fallback to an unbounded wait or silent default is permitted. The implementation must add this exact literal to the existing `CoreErrorCode` union; the current baseline union does not yet contain it.
 6. An explicit valid override replaces the default for that runtime profile. The effective value and configuration source must be included in sanitized diagnostics, without exposing secrets or caller data.
 7. The 30,000 ms default remains provisional until load-test evidence and the shutdown-latency objective are recorded in the implementation proposal. Changing the default later requires updating this contract and its deterministic configuration tests.
+8. `PROTECTED_OPERATION_SHUTDOWN_CONFIG_INVALID` is the single stable configuration error code for every invalid explicit `drainDeadlineMs` value, including zero, negative, fractional, `NaN`, either infinity, `null`, out-of-range values, wrong types, and an own property explicitly set to `undefined`. It is not used when the property is absent and the provisional default is selected. Error details must be sanitized and must not include secrets or caller data.
 
 
 ### 11.2.10 ENG002-R10 — Normative precedence and document authority
@@ -424,4 +424,3 @@ This section defines the required control boundary without overstating what same
 9. Evaluate the 30,000 ms candidate against the predeclared objectives and representative measurements. Retain it only if the evidence meets those objectives without unsafe cleanup, hidden untracked work, or excessive unresolved shutdowns; otherwise propose a revised value and rerun the same reproducible profiles and analysis protocol. Any protocol change after measurement begins must be documented, justified, and treated as a new benchmark version; do not selectively combine results from incompatible protocol versions.
 10. Preserve benchmark scripts/configuration, workload-generator version, seeds or input schedules, protocol version, raw measurements, per-run identifiers, environment details, analysis code or exact analysis procedure, summary analysis, uncertainty estimates, deviations, and reviewer disposition as evidence linked to the implementation proposal. Synthetic unit-test timings are not a substitute for representative load evidence.
 11. The deadline candidate may become a final default only after Haniyeh's architecture acceptance and independent security/quality review of the evidence. Until then, the numeric default remains provisional.
-
