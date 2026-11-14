@@ -75,4 +75,26 @@ describe("snapshotBoundedPolicyData", () => {
     expect(snapshotBoundedPolicyData(input)).toBeUndefined();
     expect(observed).toEqual(["getPrototypeOf", "ownKeys"]);
   });
+
+  it("documents that property-descriptor reflection also executes Proxy traps", () => {
+    const observed: string[] = [];
+    const target = { value: 1 };
+    const input = new Proxy(target, {
+      getPrototypeOf(object) {
+        observed.push("getPrototypeOf");
+        return Reflect.getPrototypeOf(object);
+      },
+      ownKeys(object) {
+        observed.push("ownKeys");
+        return Reflect.ownKeys(object);
+      },
+      getOwnPropertyDescriptor(object, key) {
+        observed.push(`getOwnPropertyDescriptor:${String(key)}`);
+        return Reflect.getOwnPropertyDescriptor(object, key);
+      }
+    });
+
+    expect(snapshotBoundedPolicyData(input)).toEqual({ value: 1 });
+    expect(observed).toEqual(["getPrototypeOf", "ownKeys", "getOwnPropertyDescriptor:value"]);
+  });
 });
