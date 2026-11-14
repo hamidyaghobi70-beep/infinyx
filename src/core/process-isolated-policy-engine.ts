@@ -240,6 +240,10 @@ export class ProcessIsolatedPolicyEngine implements PolicyEngine {
 
     const executionId = randomUUID();
     const timeoutMs = Math.min(this.timeoutMs, deadlineRemaining);
+    // PolicyEvaluationOptions.deadlineAt is an epoch-millisecond wall-clock
+    // value. Keep that clock domain for the child evaluator's compatibility
+    // hint; the parent enforces the actual bound with its own timeout timer.
+    // Never substitute performance.now() or a shutdown-drain monotonic value.
     const deadlineAt = options?.deadlineAt === undefined
       ? Date.now() + timeoutMs
       : Math.min(options.deadlineAt, Date.now() + this.timeoutMs);
