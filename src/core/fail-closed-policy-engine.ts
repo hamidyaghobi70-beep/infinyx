@@ -144,6 +144,10 @@ export class FailClosedPolicyEngine implements PolicyEngine {
     if (options?.parentSignal?.aborted) {
       return deny(cancellationMessage("PARENT_CANCELLED"));
     }
+    if (options?.deadlineAt !== undefined &&
+        (typeof options.deadlineAt !== "number" || !Number.isFinite(options.deadlineAt))) {
+      return deny("Policy deadline is invalid; access denied.");
+    }
 
     const remainingDeadlineMs = options?.deadlineAt === undefined
       ? this.timeoutMs
