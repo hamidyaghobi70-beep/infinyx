@@ -282,4 +282,34 @@ describe("ProcessIsolatedPolicyEngine", () => {
     expect(result.runtimeStatus).toBe("STOPPED");
   });
 
+
+  it("redacts evaluator-controlled decision reasons", async () => {
+    const engine = new ProcessIsolatedPolicyEngine({ moduleUrl: fixtureUrl });
+    const result = await engine.evaluateDetailed(request("secret-reason"));
+    expect(result.outcome).toBe("COMPLETED");
+    expect(result.decision).toEqual({
+      effect: "allow",
+      reason: "Policy evaluator allowed the operation."
+    });
+    expect(result.decision.reason).not.toContain("PRIVATE_TOKEN");
+  });
+
+  it("redacts exception messages returned over child IPC", async () => {
+    const engine = new ProcessIsolatedPolicyEngine({ moduleUrl: fixtureUrl });
+    const result = await engine.evaluateDetailed(request("secret-error"));
+    expect(result.outcome).toBe("FAILED");
+    expect(result.decision.reason).toBe("Policy evaluator process failed; access denied.");
+    expect(result.decision.reason).not.toContain("PRIVATE_TOKEN");
+  });
+
+  it("does not expose child stderr when the process exits without a result", async () => {
+    const engine = new ProcessIsolatedPolicyEngine({ moduleUrl: fixtureUrl });
+    const result = await engine.evaluateDetailed(request("secret-stderr"));
+    expect(result.outcome).toBe("FAILED");
+    expect(result.decision.reason).toBe(
+      "Policy evaluator process exited without a valid result; access denied."
+    );
+    expect(result.decision.reason).not.toContain("PRIVATE_TOKEN");
+  });
+
 });

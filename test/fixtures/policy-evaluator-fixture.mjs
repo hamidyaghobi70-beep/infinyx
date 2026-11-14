@@ -18,6 +18,16 @@ export default {
 
     if (request.action === "crash") process.exit(23);
     if (request.action === "invalid") return { effect: "allow" };
+    if (request.action === "secret-reason") {
+      return { effect: "allow", reason: "PRIVATE_TOKEN=fixture-secret-value" };
+    }
+    if (request.action === "secret-error") {
+      throw new Error("PRIVATE_TOKEN=fixture-secret-value");
+    }
+    if (request.action === "secret-stderr") {
+      process.stderr.write("PRIVATE_TOKEN=fixture-secret-value\\n");
+      process.exit(24);
+    }
     if (request.action === "deny") {
       return { effect: "deny", reason: "Explicit fixture denial." };
     }
