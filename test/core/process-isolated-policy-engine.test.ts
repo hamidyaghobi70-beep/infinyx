@@ -410,6 +410,34 @@ describe("ProcessIsolatedPolicyEngine", () => {
   });
 
 
+  it("lets caller cancellation veto a frozen allow while the child is held open", async () => {
+    const observer = stateObserver("FINALIZING");
+    const controller = new AbortController();
+    const engine = new ProcessIsolatedPolicyEngine({
+      moduleUrl: fixtureUrl,
+      timeoutMs: 5_000,
+      terminationGraceMs: 10,
+      killWaitMs: 500,
+      onStateChange: observer.onStateChange
+    });
+    const evaluation = engine.evaluateDetailed(request("allow-with-active-handle"), {
+      signal: controller.signal
+    });
+
+    // FINALIZING is the barrier: the allow candidate is frozen, while the
+    // fixture's active interval prevents natural child close.
+    await observer.reached;
+    expect(engine.activeExecutionCount).toBe(1);
+    controller.abort();
+
+    const result = await evaluation;
+    expect(result.outcome).toBe("CANCELLED");
+    expect(result.stopReason).toBe("CALLER_CANCELLED");
+    expect(result.decision.effect).toBe("deny");
+    expect(observer.states).not.toContain("AUTHORIZED");
+    expect(engine.activeExecutionCount).toBe(0);
+  });
+
   it("keeps the deadline active after allow candidate freeze until terminal commitment", async () => {
     const observer = stateObserver("FINALIZING");
     const engine = new ProcessIsolatedPolicyEngine({
