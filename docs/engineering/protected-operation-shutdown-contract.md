@@ -113,6 +113,7 @@ Use stable, machine-readable `CoreError.code` values rather than requiring calle
 |---|---|---|
 | `PROTECTED_OPERATION_DRAIN_TIMEOUT` | One or more admitted handlers remain unsettled at the handler-drain deadline | No |
 | `PROTECTED_OPERATION_SHUTDOWN_FAILED` | Executor shutdown initiation throws or otherwise fails before handler cancellation/drain can be established | No |
+| `PROTECTED_OPERATION_SHUTDOWN_CONFIG_INVALID` | `protectedOperationShutdown.drainDeadlineMs` is explicitly present but invalid or outside the accepted range; startup is rejected before `running` | No |
 | `POLICY_EVALUATION_DRAIN_TIMEOUT` | One or more underlying policy evaluations remain unsettled at the policy-drain deadline | No |
 | `POLICY_SHUTDOWN_FAILED` | Policy shutdown initiation or delegate shutdown rejects before the drain deadline | No |
 | `MODULE_STOP_FAILED` | Existing module cleanup failure after safe cleanup was attempted | Cleanup has been attempted according to dependency rules |
@@ -194,7 +195,7 @@ Diagnostics are operational troubleshooting data, not the durable audit ledger. 
 - `effectiveDrainDeadlineMs`: validated integer duration only.
 - `deadlineSource`: exactly `default` or `explicit`.
 - `observedAt` and settlement timestamps: normalized timestamps needed for operational sequencing; do not include raw caller-supplied time values.
-- `cause.name` and `cause.code`: only when the name is a bounded standard error class and the code is a recognized stable application error code. Omit either field when it does not meet this rule.
+- `cause.name` and `cause.code`: `cause.name` is permitted only when it exactly matches one of `Error`, `AggregateError`, `EvalError`, `RangeError`, `ReferenceError`, `SyntaxError`, `TypeError`, or `URIError`; no custom subclass name is accepted. `cause.code` is permitted only when it exactly matches a stable code in the section 6.3 shutdown error table. Omit either field when it does not meet this rule.
 
 **Prohibited fields**
 
@@ -208,7 +209,7 @@ Diagnostics are operational troubleshooting data, not the durable audit ledger. 
 **Redaction and error-detail rules**
 
 1. Apply denylist removal before data leaves the owning runtime boundary; do not rely on downstream log processors to sanitize sensitive values.
-2. For an error cause, retain only an allowlisted `name` and stable `code`. Drop the message, stack, nested causes, custom enumerable properties, and the original error object. If safe extraction cannot be established, omit the cause entirely.
+2. For an error cause, retain only a `name` from the exact built-in error-name set above and a `code` from the section 6.3 table. Drop custom subclass names, the message, stack, nested causes, custom enumerable properties, and the original error object. If safe extraction cannot be established, omit the cause entirely.
 3. Do not hash or partially mask prohibited values as a substitute for removal. Omit them completely. Opaque runtime-generated identifiers explicitly listed in the allowlist may be retained for correlation.
 4. The same sanitization applies to structured logs, diagnostic snapshots, `CoreError.details`, blocker lists, and any serialized error representation. Immutability is required after sanitization; it does not itself make data safe.
 5. Diagnostic snapshots must be newly constructed immutable value objects. They must never expose references to internal registries, controllers, signals, handlers, or resource objects.
