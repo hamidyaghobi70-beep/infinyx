@@ -5,6 +5,7 @@ on:
     branches:
       - foundation/repository-foundation
       - fix/policy-terminal-authorization
+      - fix/policy-hard-termination-final
       - release/**
       - fix/infinyx-core-policy-cancellation
       - feat/gap-002-protected-operation-executor
@@ -18,7 +19,6 @@ on:
       - main
       - feat/gap-002-protected-operation-executor
       - fix/policy-output-budget
-      - integration/infinyx-core-runtime-v1
 
 permissions:
   contents: read

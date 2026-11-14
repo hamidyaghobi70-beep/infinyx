@@ -120,6 +120,8 @@ export interface PolicyExecutionRecord {
   readonly decision: PolicyDecision;
   readonly runtimeStatus: PolicyRuntimeStatus;
   readonly cleanupStatus: PolicyCleanupStatus;
+  /** Immutable, deduplicated stop causes in first-observed order; index 0 is primary. */
+  readonly stopProvenance?: readonly PolicyCancellationCause[];
   readonly stopReason?: PolicyStopReason;
   readonly candidateFrozen: true;
 }

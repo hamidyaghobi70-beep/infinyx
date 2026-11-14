@@ -11,6 +11,7 @@ import type {
   PolicyExecutionLifecycleState,
   PolicyEvaluationOptions,
   PolicyExecutionRecord,
+  PolicyCancellationCause,
   PolicyRequest,
   PolicyRuntimeStatus,
   PolicyStopReason,
@@ -70,7 +71,8 @@ function makeRecord(
   decision: PolicyDecision,
   runtimeStatus: PolicyRuntimeStatus,
   cleanupStatus: PolicyCleanupStatus,
-  stopReason?: PolicyStopReason
+  stopReason?: PolicyStopReason,
+  stopProvenance?: readonly PolicyCancellationCause[]
 ): PolicyExecutionRecord {
   return Object.freeze({
     lifecycle,
@@ -79,7 +81,10 @@ function makeRecord(
     runtimeStatus,
     cleanupStatus,
     candidateFrozen: true,
-    ...(stopReason === undefined ? {} : { stopReason })
+    ...(stopReason === undefined ? {} : { stopReason }),
+    ...(stopProvenance === undefined || stopProvenance.length === 0
+      ? {}
+      : { stopProvenance: Object.freeze([...stopProvenance]) })
   });
 }
 
@@ -235,6 +240,10 @@ export class ProcessIsolatedPolicyEngine implements PolicyEngine {
 
     const executionId = randomUUID();
     const timeoutMs = Math.min(this.timeoutMs, deadlineRemaining);
+    // PolicyEvaluationOptions.deadlineAt is an epoch-millisecond wall-clock
+    // value. Keep that clock domain for the child evaluator's compatibility
+    // hint; the parent enforces the actual bound with its own timeout timer.
+    // Never substitute performance.now() or a shutdown-drain monotonic value.
     const deadlineAt = options?.deadlineAt === undefined
       ? Date.now() + timeoutMs
       : Math.min(options.deadlineAt, Date.now() + this.timeoutMs);
@@ -257,10 +266,25 @@ export class ProcessIsolatedPolicyEngine implements PolicyEngine {
 
     let candidate: Candidate | undefined;
     let candidateFrozen = false;
+    let terminalVeto: Candidate | undefined;
+    let terminalCommitted = false;
     let spawned = false;
     let closed = false;
     let resolved = false;
     let stopReason: PolicyStopReason | undefined;
+    const stopProvenance: PolicyCancellationCause[] = [];
+    const acceptStopCause = (reason: PolicyStopReason): "PRIMARY" | "SECONDARY" | "IGNORED" => {
+      if (terminalCommitted || resolved || closed) return "IGNORED";
+      if (!stopProvenance.some((cause) => cause.code === reason)) {
+        stopProvenance.push(Object.freeze({
+          code: reason,
+          message: stopMessage(reason)
+        }));
+      }
+      if (stopReason !== undefined) return "SECONDARY";
+      stopReason = reason;
+      return "PRIMARY";
+    };
     let stdoutBytes = 0;
     let stderrBytes = 0;
     let totalOutputBytes = 0;
@@ -306,6 +330,9 @@ export class ProcessIsolatedPolicyEngine implements PolicyEngine {
 
     const finishUnresolved = (): void => {
       if (resolved || closed) return;
+      // UNRESOLVED is committed without a policy candidate; later child events
+      // cannot create or replace a candidate. The active entry remains until close.
+      terminalCommitted = true;
       resolved = true;
       clearTimers();
       removeAbortListeners();
@@ -316,28 +343,58 @@ export class ProcessIsolatedPolicyEngine implements PolicyEngine {
         deny("Policy process termination could not be confirmed; access denied."),
         "UNRESOLVED",
         "UNRESOLVED",
-        stopReason
+        stopReason,
+        stopProvenance
       ));
     };
 
     const scheduleHardTermination = (): void => {
-      if (graceTimer !== undefined || closed || resolved) return;
+      if (!spawned || graceTimer !== undefined || killWaitTimer !== undefined || closed || resolved) return;
       graceTimer = setTimeout(() => {
+        graceTimer = undefined;
         if (closed || resolved) return;
-        child.kill();
-        killWaitTimer = setTimeout(finishUnresolved, this.killWaitMs);
+
+        // First request cooperative termination. If the child ignores it,
+        // escalate to an uncatchable signal before declaring termination unknown.
+        try {
+          child.kill("SIGTERM");
+        } catch {
+          // Continue to forceful escalation after the grace window.
+        }
+
+        killWaitTimer = setTimeout(() => {
+          killWaitTimer = undefined;
+          if (closed || resolved) return;
+
+          try {
+            child.kill("SIGKILL");
+          } catch {
+            // The final close wait decides whether termination is confirmed.
+          }
+
+          killWaitTimer = setTimeout(finishUnresolved, this.killWaitMs);
+        }, this.killWaitMs);
       }, this.terminationGraceMs);
     };
 
     const requestStop = (reason: PolicyStopReason): void => {
-      if (candidateFrozen || resolved || closed) return;
-      candidateFrozen = true;
-      stopReason = reason;
-      candidate = {
+      // Both cancellation and output-stop paths use the same arbiter. Only the
+      // first accepted cause may change the candidate or initiate termination.
+      if (acceptStopCause(reason) !== "PRIMARY") return;
+
+      const veto: Candidate = {
         outcome: reason === "POLICY_TIMEOUT" ? "TIMED_OUT" : "CANCELLED",
         decision: deny(stopMessage(reason)),
         stopReason: reason
       };
+      if (candidateFrozen) {
+        // Candidate Freeze is immutable. A stop observed before terminal
+        // commitment is recorded separately and vetoes authorization.
+        terminalVeto = veto;
+      } else {
+        candidateFrozen = true;
+        candidate = veto;
+      }
       notify("STOP_REQUESTED");
       if (spawned && child.connected) {
         try {
@@ -350,9 +407,12 @@ export class ProcessIsolatedPolicyEngine implements PolicyEngine {
     };
 
     const requestOutputStop = (reason: PolicyOutputFailureReason): void => {
-      if (outputFailureReason !== undefined || resolved || closed) return;
+      // Output failures share the same first-cause arbitration as cancellation.
+      if (acceptStopCause(reason) !== "PRIMARY") return;
+
+      // This assignment is reachable only for PRIMARY: the shared arbiter has
+      // accepted this output cause before any cancellation/timeout veto.
       outputFailureReason = reason;
-      stopReason = reason;
       if (!candidateFrozen) {
         candidateFrozen = true;
         candidate = {
@@ -416,7 +476,9 @@ export class ProcessIsolatedPolicyEngine implements PolicyEngine {
       // Candidate selection is provisional. Authorization is emitted only
       // after process close and all output/exit checks have committed an allow.
       notify("FINALIZING");
-      scheduleHardTermination();
+      // Do not terminate a valid candidate merely because it is frozen.
+      // Keep the child alive for natural close; timeout/cancellation owns
+      // the termination escalation path until terminal commitment.
     };
 
     this.active.set(executionId, { completion, cancel: requestStop });
@@ -437,9 +499,7 @@ export class ProcessIsolatedPolicyEngine implements PolicyEngine {
       spawned = true;
       if (candidateFrozen || this.shuttingDown) {
         if (!candidateFrozen) requestStop("RUNTIME_SHUTDOWN");
-        if (graceTimer !== undefined) clearTimeout(graceTimer);
-        child.kill();
-        killWaitTimer = setTimeout(finishUnresolved, this.killWaitMs);
+        else scheduleHardTermination();
         return;
       }
       try {
@@ -501,6 +561,8 @@ export class ProcessIsolatedPolicyEngine implements PolicyEngine {
       clearTimers();
       removeAbortListeners();
       this.active.delete(executionId);
+      // finishUnresolved already committed a candidate-free UNRESOLVED record;
+      // close only releases capacity and must not run terminal candidate logic.
       if (resolved) return;
 
       if (!candidateFrozen || !candidate) {
@@ -513,8 +575,15 @@ export class ProcessIsolatedPolicyEngine implements PolicyEngine {
         };
       }
 
-      let outcome = candidate.outcome;
-      let decision = candidate.decision;
+      // Arbitration is first-accepted-stop, not a fixed output-vs-cancellation
+      // priority. outputFailureReason is assigned only when requestOutputStop
+      // receives PRIMARY from acceptStopCause; therefore, when present, it is
+      // necessarily the primary stop cause. A later output failure is rejected
+      // after a cancellation/timeout veto, while a later veto cannot replace an
+      // output failure that was accepted first.
+      terminalCommitted = true;
+      let outcome = (terminalVeto ?? candidate).outcome;
+      let decision = (terminalVeto ?? candidate).decision;
       if (outputFailureReason !== undefined) {
         outcome = "FAILED";
         decision = deny(stopMessage(outputFailureReason));
@@ -534,7 +603,8 @@ export class ProcessIsolatedPolicyEngine implements PolicyEngine {
         decision,
         "STOPPED",
         "COMPLETED",
-        outputFailureReason ?? candidate.stopReason
+        stopReason ?? outputFailureReason ?? terminalVeto?.stopReason ?? candidate.stopReason,
+        stopProvenance
       ));
     });
 
