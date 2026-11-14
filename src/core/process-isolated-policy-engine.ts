@@ -286,7 +286,7 @@ export class ProcessIsolatedPolicyEngine implements PolicyEngine {
       if (graceTimer !== undefined || closed || resolved) return;
       graceTimer = setTimeout(() => {
         if (closed || resolved) return;
-        child.kill();
+        child.kill("SIGKILL");
         killWaitTimer = setTimeout(finishUnresolved, this.killWaitMs);
       }, this.terminationGraceMs);
     };
@@ -339,7 +339,7 @@ export class ProcessIsolatedPolicyEngine implements PolicyEngine {
       if (candidateFrozen || this.shuttingDown) {
         if (!candidateFrozen) requestStop("RUNTIME_SHUTDOWN");
         if (graceTimer !== undefined) clearTimeout(graceTimer);
-        child.kill();
+        child.kill("SIGKILL");
         killWaitTimer = setTimeout(finishUnresolved, this.killWaitMs);
         return;
       }
