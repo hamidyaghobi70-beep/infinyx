@@ -364,6 +364,22 @@ describe("ProtectedOperationExecutor", () => {
   });
 
 
+  it("assigns distinct invocation IDs to repeated executions of one registration", async () => {
+    const { engine, operation, handler } = makeEngine();
+    await ensureStarted(engine);
+    await engine.protectedOperations.execute(operation, { actorId: "first" }, { value: "one" });
+    await engine.protectedOperations.execute(operation, { actorId: "second" }, { value: "two" });
+    const firstContext = handler.mock.calls[0]?.[1];
+    const secondContext = handler.mock.calls[1]?.[1];
+    expect(firstContext?.operationId).toMatch(
+      /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
+    );
+    expect(secondContext?.operationId).toMatch(
+      /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
+    );
+    expect(firstContext?.operationId).not.toBe(secondContext?.operationId);
+  });
+
   it("keeps an already-admitted handler in flight during shutdown without claiming cancellation", async () => {
     let release!: (value: string) => void;
     let signalHandlerStarted!: () => void;
