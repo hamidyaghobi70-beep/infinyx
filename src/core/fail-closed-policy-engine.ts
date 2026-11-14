@@ -55,7 +55,12 @@ export function isValidPolicyDecision(value: unknown): value is PolicyDecision {
 export function snapshotPolicyDecision(value: unknown): PolicyDecision | undefined {
   try {
     if (!isValidPolicyDecision(value)) return undefined;
-    return Object.freeze({ effect: value.effect, reason: value.reason });
+    return Object.freeze({
+      effect: value.effect,
+      reason: value.effect === "allow"
+        ? "Policy evaluator allowed the operation."
+        : "Policy evaluator denied the operation."
+    });
   } catch {
     return undefined;
   }
