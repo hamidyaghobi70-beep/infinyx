@@ -385,7 +385,8 @@ export class ProcessIsolatedPolicyEngine implements PolicyEngine {
     const requestOutputStop = (reason: PolicyOutputFailureReason): void => {
       // A previously accepted cancellation/timeout veto is primary. If this
       // output failure is accepted first, its reason remains primary at close;
-      // later cancellation is provenance-only and cannot replace the outcome.
+      // later cancellation cannot replace the primary outcome. Secondary
+      // cause recording is intentionally deferred to the P32-02 change.
       if (outputFailureReason !== undefined || resolved || closed || terminalVeto !== undefined) return;
       outputFailureReason = reason;
       stopReason = reason;
