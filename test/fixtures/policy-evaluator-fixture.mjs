@@ -32,7 +32,13 @@ export default {
       return { effect: "allow", reason: "Aggregate flood attempted." };
     }
     if (request.action === "late-stdout-flood") {
-      setTimeout(() => process.stdout.write(Buffer.alloc(16 * 1024, 0x43)), 0);
+      // The child runner's earlier message listener disconnects IPC on this
+      // acknowledgement; this listener then emits output after parent freeze.
+      process.once("message", (message) => {
+        if (message?.type === "finalize") {
+          process.stdout.write(Buffer.alloc(16 * 1024, 0x43));
+        }
+      });
       return { effect: "allow", reason: "Late flood attempted." };
     }
     if (request.action === "stdout-flood") {
