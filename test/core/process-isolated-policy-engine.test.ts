@@ -47,6 +47,22 @@ describe("ProcessIsolatedPolicyEngine", () => {
     expect(engine.activeExecutionCount).toBe(0);
   });
 
+  it("emits AUTHORIZED only after close-time terminal commitment", async () => {
+    const observer = stateObserver("TERMINAL");
+    const engine = new ProcessIsolatedPolicyEngine({
+      moduleUrl: fixtureUrl,
+      onStateChange: observer.onStateChange
+    });
+    const result = await engine.evaluateDetailed(request());
+    expect(result.outcome).toBe("COMPLETED");
+    expect(observer.states.indexOf("FINALIZING")).toBeLessThan(
+      observer.states.indexOf("AUTHORIZED")
+    );
+    expect(observer.states.indexOf("AUTHORIZED")).toBeLessThan(
+      observer.states.indexOf("TERMINAL")
+    );
+  });
+
   it("fails closed when stdout exceeds its byte budget", async () => {
     const engine = new ProcessIsolatedPolicyEngine({
       moduleUrl: fixtureUrl,
@@ -95,14 +111,17 @@ describe("ProcessIsolatedPolicyEngine", () => {
     expect(engine.activeExecutionCount).toBe(0);
   });
 
-  it("does not commit an allow result when output exceeds budget before close", async () => {
+  it("does not commit or announce allow when output exceeds budget before close", async () => {
+    const observer = stateObserver("TERMINAL");
     const engine = new ProcessIsolatedPolicyEngine({
       moduleUrl: fixtureUrl,
       maxStdoutBytes: 1024,
       maxStderrBytes: 1024,
-      maxTotalOutputBytes: 2048
+      maxTotalOutputBytes: 2048,
+      onStateChange: observer.onStateChange
     });
     const result = await engine.evaluateDetailed(request("late-stdout-flood"));
+    expect(observer.states).not.toContain("AUTHORIZED");
     expect(result.outcome).toBe("FAILED");
     expect(result.stopReason).toBe("OUTPUT_LIMIT_EXCEEDED");
     expect(result.decision).toEqual({
