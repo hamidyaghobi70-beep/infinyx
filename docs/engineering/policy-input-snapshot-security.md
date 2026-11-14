@@ -20,7 +20,7 @@ UTF-8 byte length is measured with Node.js `Buffer.byteLength(value, "utf8")`; t
 
 This function is a bounded data snapshot, not a sandbox or a hostile-object isolation boundary.
 
-JavaScript reflection on a Proxy can execute user-defined traps. In particular, prototype inspection, own-key enumeration, and property-descriptor inspection may invoke `getPrototypeOf`, `ownKeys`, and `getOwnPropertyDescriptor` traps. The trap may run before the routine can inspect the returned key count or reject the object. An `ownKeys` trap can also construct a large key list before the caller applies its entry limit.
+JavaScript reflection on a Proxy can execute user-defined traps. In particular, prototype inspection, own-key enumeration, and property-descriptor inspection may invoke `getPrototypeOf`, `ownKeys`, and `getOwnPropertyDescriptor` traps. For arrays, reading `length` after own-key enumeration also performs an ordinary property get and can invoke a Proxy `get` trap. These traps may run before the routine can inspect the returned key count or reject the object. An `ownKeys` trap can also construct a large key list before the caller applies its entry limit.
 
 The function catches thrown errors and fails closed, but catching an exception does not undo side effects or prevent work performed by a trap. There is no reliable in-process test that can distinguish every Proxy from an ordinary object without invoking reflective behavior that may itself trigger traps.
 
@@ -34,4 +34,4 @@ The function catches thrown errors and fails closed, but catching an exception d
 
 ## Required regression evidence
 
-Tests verify exact UTF-8 boundaries, rejection limits, getter avoidance for ordinary objects, and the observable fact that Proxy traps execute during reflective inspection. These tests document the boundary; they do not claim to neutralize Proxy traps.
+Tests verify exact UTF-8 boundaries, rejection limits, getter avoidance for ordinary objects, and the observable fact that Proxy traps execute during reflective inspection, including the array `length` property get. These tests document the boundary; they do not claim to neutralize Proxy traps.
