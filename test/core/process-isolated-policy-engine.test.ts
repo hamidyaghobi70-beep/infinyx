@@ -144,6 +144,26 @@ describe("ProcessIsolatedPolicyEngine", () => {
     expect(engine.activeExecutionCount).toBe(0);
   });
 
+  it.each([
+    ["NaN", Number.NaN],
+    ["positive infinity", Number.POSITIVE_INFINITY],
+    ["negative infinity", Number.NEGATIVE_INFINITY]
+  ])("rejects a non-finite parent deadline (%s) without starting a process", async (_label, deadlineAt) => {
+    const engine = new ProcessIsolatedPolicyEngine({ moduleUrl: fixtureUrl });
+    const result = await engine.evaluateDetailed(request(), { deadlineAt });
+    expect(result).toMatchObject({
+      lifecycle: "TERMINAL",
+      outcome: "DENIED",
+      runtimeStatus: "NOT_STARTED",
+      cleanupStatus: "NOT_REQUIRED",
+      decision: {
+        effect: "deny",
+        reason: "Policy deadline is invalid; access denied."
+      }
+    });
+    expect(engine.activeExecutionCount).toBe(0);
+  });
+
   it("passes the bounded deadline to the child evaluator", async () => {
     const engine = new ProcessIsolatedPolicyEngine({
       moduleUrl: fixtureUrl,
