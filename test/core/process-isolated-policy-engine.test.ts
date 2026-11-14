@@ -47,6 +47,73 @@ describe("ProcessIsolatedPolicyEngine", () => {
     expect(engine.activeExecutionCount).toBe(0);
   });
 
+  it("emits AUTHORIZED only after close-time terminal commitment", async () => {
+    const observer = stateObserver("TERMINAL");
+    const engine = new ProcessIsolatedPolicyEngine({
+      moduleUrl: fixtureUrl,
+      onStateChange: observer.onStateChange
+    });
+    const result = await engine.evaluateDetailed(request());
+    expect(result.outcome).toBe("COMPLETED");
+    expect(observer.states.indexOf("FINALIZING")).toBeLessThan(
+      observer.states.indexOf("AUTHORIZED")
+    );
+    expect(observer.states.indexOf("AUTHORIZED")).toBeLessThan(
+      observer.states.indexOf("TERMINAL")
+    );
+  });
+
+  it("never emits AUTHORIZED for an explicit deny candidate", async () => {
+    const observer = stateObserver("TERMINAL");
+    const engine = new ProcessIsolatedPolicyEngine({
+      moduleUrl: fixtureUrl,
+      onStateChange: observer.onStateChange
+    });
+    const result = await engine.evaluateDetailed(request("deny"));
+    expect(result.outcome).toBe("DENIED");
+    expect(observer.states).not.toContain("AUTHORIZED");
+  });
+
+  it("accepts output exactly at the per-stream byte boundary across chunks", async () => {
+    const engine = new ProcessIsolatedPolicyEngine({
+      moduleUrl: fixtureUrl,
+      maxStdoutBytes: 1024,
+      maxStderrBytes: 1024,
+      maxTotalOutputBytes: 2048
+    });
+    const result = await engine.evaluateDetailed(request("stdout-boundary"));
+    expect(result.outcome).toBe("COMPLETED");
+    expect(result.decision.effect).toBe("allow");
+    expect(engine.activeExecutionCount).toBe(0);
+  });
+
+  it("accepts stderr output exactly at its per-stream byte boundary", async () => {
+    const engine = new ProcessIsolatedPolicyEngine({
+      moduleUrl: fixtureUrl,
+      maxStdoutBytes: 1024,
+      maxStderrBytes: 1024,
+      maxTotalOutputBytes: 2048
+    });
+    const result = await engine.evaluateDetailed(request("stderr-boundary"));
+    expect(result.outcome).toBe("COMPLETED");
+    expect(result.decision.effect).toBe("allow");
+    expect(engine.activeExecutionCount).toBe(0);
+  });
+
+  it("fails closed when stdout and stderr cross their limits concurrently", async () => {
+    const engine = new ProcessIsolatedPolicyEngine({
+      moduleUrl: fixtureUrl,
+      maxStdoutBytes: 1024,
+      maxStderrBytes: 1024,
+      maxTotalOutputBytes: 2048
+    });
+    const result = await engine.evaluateDetailed(request("simultaneous-flood"));
+    expect(result.outcome).toBe("FAILED");
+    expect(result.decision.effect).toBe("deny");
+    expect(result.stopReason).toBe("OUTPUT_LIMIT_EXCEEDED");
+    expect(engine.activeExecutionCount).toBe(0);
+  });
+
   it("fails closed when stdout exceeds its byte budget", async () => {
     const engine = new ProcessIsolatedPolicyEngine({
       moduleUrl: fixtureUrl,
@@ -95,14 +162,17 @@ describe("ProcessIsolatedPolicyEngine", () => {
     expect(engine.activeExecutionCount).toBe(0);
   });
 
-  it("does not commit an allow result when output exceeds budget before close", async () => {
+  it("does not commit or announce allow when output exceeds budget before close", async () => {
+    const observer = stateObserver("TERMINAL");
     const engine = new ProcessIsolatedPolicyEngine({
       moduleUrl: fixtureUrl,
       maxStdoutBytes: 1024,
       maxStderrBytes: 1024,
-      maxTotalOutputBytes: 2048
+      maxTotalOutputBytes: 2048,
+      onStateChange: observer.onStateChange
     });
     const result = await engine.evaluateDetailed(request("late-stdout-flood"));
+    expect(observer.states).not.toContain("AUTHORIZED");
     expect(result.outcome).toBe("FAILED");
     expect(result.stopReason).toBe("OUTPUT_LIMIT_EXCEEDED");
     expect(result.decision).toEqual({
@@ -140,11 +210,16 @@ describe("ProcessIsolatedPolicyEngine", () => {
     expect(engine.activeExecutionCount).toBe(0);
   });
 
-  it("fails closed when the evaluator returns an invalid decision", async () => {
-    const engine = new ProcessIsolatedPolicyEngine({ moduleUrl: fixtureUrl });
+  it("fails closed without authorization when the evaluator returns an invalid decision", async () => {
+    const observer = stateObserver("TERMINAL");
+    const engine = new ProcessIsolatedPolicyEngine({
+      moduleUrl: fixtureUrl,
+      onStateChange: observer.onStateChange
+    });
     const result = await engine.evaluateDetailed(request("invalid"));
     expect(result.outcome).toBe("DENIED");
     expect(result.decision.effect).toBe("deny");
+    expect(observer.states).not.toContain("AUTHORIZED");
   });
 
   it("does not start work when the caller signal is already aborted", async () => {
@@ -189,6 +264,43 @@ describe("ProcessIsolatedPolicyEngine", () => {
     expect(result.stopReason).toBe("POLICY_TIMEOUT");
     expect(result.runtimeStatus).toBe("STOPPED");
     expect(result.cleanupStatus).toBe("COMPLETED");
+    expect(engine.activeExecutionCount).toBe(0);
+  });
+
+  it("retains process capacity until an unresolved child actually closes", async () => {
+    const observer = stateObserver("RUNNING");
+    const controller = new AbortController();
+    const engine = new ProcessIsolatedPolicyEngine({
+      moduleUrl: fixtureUrl,
+      timeoutMs: 5_000,
+      terminationGraceMs: 10,
+      killWaitMs: 80,
+      maxConcurrent: 1,
+      onStateChange: observer.onStateChange
+    });
+    const evaluation = engine.evaluateDetailed(request("ignore-sigterm"), {
+      signal: controller.signal
+    });
+    await observer.reached;
+    controller.abort();
+
+    const result = await evaluation;
+    if (process.platform === "win32") {
+      // Windows child termination is forceful for this signal path; close is
+      // observed before the unresolved deadline, so capacity can be released.
+      expect(result.outcome).toBe("CANCELLED");
+      expect(result.runtimeStatus).toBe("STOPPED");
+      expect(result.cleanupStatus).toBe("COMPLETED");
+      expect(engine.activeExecutionCount).toBe(0);
+      return;
+    }
+
+    expect(result.outcome).toBe("UNRESOLVED");
+    expect(result.runtimeStatus).toBe("UNRESOLVED");
+    expect(result.cleanupStatus).toBe("UNRESOLVED");
+    expect(engine.activeExecutionCount).toBe(1);
+
+    await new Promise((resolve) => setTimeout(resolve, 950));
     expect(engine.activeExecutionCount).toBe(0);
   });
 
@@ -267,11 +379,16 @@ describe("ProcessIsolatedPolicyEngine", () => {
   });
 
   it("reports child crashes as failures and never grants access", async () => {
-    const engine = new ProcessIsolatedPolicyEngine({ moduleUrl: fixtureUrl });
+    const observer = stateObserver("TERMINAL");
+    const engine = new ProcessIsolatedPolicyEngine({
+      moduleUrl: fixtureUrl,
+      onStateChange: observer.onStateChange
+    });
     const result = await engine.evaluateDetailed(request("crash"));
     expect(result.outcome).toBe("FAILED");
     expect(result.decision.effect).toBe("deny");
     expect(result.runtimeStatus).toBe("STOPPED");
+    expect(observer.states).not.toContain("AUTHORIZED");
     expect(engine.activeExecutionCount).toBe(0);
   });
 

@@ -4,6 +4,12 @@ export default {
       return new Promise(() => undefined);
     }
 
+    if (request.action === "ignore-sigterm") {
+      process.on("SIGTERM", () => undefined);
+      setTimeout(() => process.exit(0), 1_000);
+      return new Promise(() => undefined);
+    }
+
     if (request.action === "cooperative") {
       return new Promise((resolve) => {
         if (options.signal.aborted) {
@@ -16,13 +22,34 @@ export default {
       });
     }
 
+    if (request.action === "stdout-boundary") {
+      process.stdout.write(Buffer.alloc(512, 0x41));
+      process.stdout.write(Buffer.alloc(512, 0x42));
+      return { effect: "allow", reason: "Exact output boundary." };
+    }
+    if (request.action === "stderr-boundary") {
+      process.stderr.write(Buffer.alloc(512, 0x41));
+      process.stderr.write(Buffer.alloc(512, 0x42));
+      return { effect: "allow", reason: "Exact stderr output boundary." };
+    }
+    if (request.action === "simultaneous-flood") {
+      process.stdout.write(Buffer.alloc(1100, 0x41));
+      process.stderr.write(Buffer.alloc(1100, 0x42));
+      return { effect: "allow", reason: "Simultaneous output flood." };
+    }
     if (request.action === "aggregate-flood") {
       process.stdout.write(Buffer.alloc(700, 0x41));
       process.stderr.write(Buffer.alloc(700, 0x42));
       return { effect: "allow", reason: "Aggregate flood attempted." };
     }
     if (request.action === "late-stdout-flood") {
-      setTimeout(() => process.stdout.write(Buffer.alloc(16 * 1024, 0x43)), 0);
+      // The child runner's earlier message listener disconnects IPC on this
+      // acknowledgement; this listener then emits output after parent freeze.
+      process.once("message", (message) => {
+        if (message?.type === "finalize") {
+          process.stdout.write(Buffer.alloc(16 * 1024, 0x43));
+        }
+      });
       return { effect: "allow", reason: "Late flood attempted." };
     }
     if (request.action === "stdout-flood") {

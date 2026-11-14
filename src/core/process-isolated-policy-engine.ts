@@ -1,6 +1,7 @@
 import { existsSync } from "node:fs";
 import { fork } from "node:child_process";
 import { randomUUID } from "node:crypto";
+import { observePolicyOutputStream, type PolicyOutputFailureReason } from "./policy-output-stream.js";
 import { dirname, isAbsolute, join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import type {
@@ -263,7 +264,7 @@ export class ProcessIsolatedPolicyEngine implements PolicyEngine {
     let stdoutBytes = 0;
     let stderrBytes = 0;
     let totalOutputBytes = 0;
-    let outputFailureReason: "OUTPUT_LIMIT_EXCEEDED" | "OUTPUT_STREAM_FAILED" | undefined;
+    let outputFailureReason: PolicyOutputFailureReason | undefined;
     let timeout: ReturnType<typeof setTimeout> | undefined;
     let graceTimer: ReturnType<typeof setTimeout> | undefined;
     let killWaitTimer: ReturnType<typeof setTimeout> | undefined;
@@ -275,6 +276,15 @@ export class ProcessIsolatedPolicyEngine implements PolicyEngine {
         this.onStateChange?.({ executionId, state });
       } catch {
         // Observability callbacks must never alter policy execution.
+      }
+    };
+
+    const acknowledgeFinalMessage = (): void => {
+      if (!child.connected) return;
+      try {
+        child.send({ type: "finalize" });
+      } catch {
+        // Process close/termination remains the finalization authority.
       }
     };
 
@@ -339,7 +349,7 @@ export class ProcessIsolatedPolicyEngine implements PolicyEngine {
       scheduleHardTermination();
     };
 
-    const requestOutputStop = (reason: "OUTPUT_LIMIT_EXCEEDED" | "OUTPUT_STREAM_FAILED"): void => {
+    const requestOutputStop = (reason: PolicyOutputFailureReason): void => {
       if (outputFailureReason !== undefined || resolved || closed) return;
       outputFailureReason = reason;
       stopReason = reason;
@@ -388,16 +398,23 @@ export class ProcessIsolatedPolicyEngine implements PolicyEngine {
       totalOutputBytes += bytes;
     };
 
-    child.stdout?.on("data", (chunk: Buffer | string) => observeOutput("stdout", chunk));
-    child.stderr?.on("data", (chunk: Buffer | string) => observeOutput("stderr", chunk));
-    child.stdout?.on("error", () => requestOutputStop("OUTPUT_STREAM_FAILED"));
-    child.stderr?.on("error", () => requestOutputStop("OUTPUT_STREAM_FAILED"));
+    observePolicyOutputStream(
+      child.stdout,
+      (chunk) => observeOutput("stdout", chunk),
+      requestOutputStop
+    );
+    observePolicyOutputStream(
+      child.stderr,
+      (chunk) => observeOutput("stderr", chunk),
+      requestOutputStop
+    );
 
     const freezeCandidate = (next: Candidate): void => {
       if (candidateFrozen || resolved || closed) return;
       candidateFrozen = true;
       candidate = next;
-      if (next.outcome === "COMPLETED") notify("AUTHORIZED");
+      // Candidate selection is provisional. Authorization is emitted only
+      // after process close and all output/exit checks have committed an allow.
       notify("FINALIZING");
       scheduleHardTermination();
     };
@@ -449,12 +466,14 @@ export class ProcessIsolatedPolicyEngine implements PolicyEngine {
             outcome: "DENIED",
             decision: deny("Policy evaluator returned an invalid decision; access denied.")
           });
+          acknowledgeFinalMessage();
           return;
         }
         freezeCandidate({
           outcome: decision.effect === "allow" ? "COMPLETED" : "DENIED",
           decision
         });
+        acknowledgeFinalMessage();
         return;
       }
       if (message.type === "error" && typeof message.message === "string") {
@@ -462,6 +481,11 @@ export class ProcessIsolatedPolicyEngine implements PolicyEngine {
           outcome: "FAILED",
           decision: deny("Policy evaluator process failed; access denied.")
         });
+        acknowledgeFinalMessage();
+        return;
+      }
+      if (message.type === "cancelled") {
+        acknowledgeFinalMessage();
       }
     });
 
@@ -499,6 +523,9 @@ export class ProcessIsolatedPolicyEngine implements PolicyEngine {
         decision = deny("Policy evaluator process exited abnormally; access denied.");
       }
 
+      // ChildProcess "close" fires after the child has ended and its stdio
+      // streams have closed. Only this point can publish a committed allow.
+      if (outcome === "COMPLETED") notify("AUTHORIZED");
       notify("TERMINAL");
       resolved = true;
       resolveCompletion(makeRecord(
