@@ -1,7 +1,20 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { snapshotBoundedPolicyData } from "../../src/core/policy-input-snapshot.js";
 
 describe("snapshotBoundedPolicyData", () => {
+  it("measures UTF-8 limits without invoking TextEncoder", () => {
+    vi.stubGlobal("TextEncoder", class {
+      constructor() { throw new Error("TextEncoder allocation must not occur."); }
+    });
+    try {
+      expect(snapshotBoundedPolicyData({ value: "é".repeat(8_192) })).toBeDefined();
+      expect(snapshotBoundedPolicyData({ value: "é".repeat(8_193) })).toBeUndefined();
+      expect(snapshotBoundedPolicyData({ value: "a".repeat(16_384) })).toBeDefined();
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
   it("accepts a string at the per-string byte limit and rejects one byte over", () => {
     expect(snapshotBoundedPolicyData({ value: "a".repeat(16_384) })).toBeDefined();
     expect(snapshotBoundedPolicyData({ value: "a".repeat(16_385) })).toBeUndefined();
