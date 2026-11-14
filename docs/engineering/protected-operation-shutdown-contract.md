@@ -124,7 +124,7 @@ Requirements:
 3. A handler's own rejected promise is an operation outcome, not by itself a shutdown failure. Once it has settled and terminal bookkeeping is complete, it may be removed from the active registry and safe cleanup may proceed.
 4. A deadline rejection does not settle, discard, or replay the underlying handler/evaluator. It only ends that caller's bounded wait. The underlying work remains tracked.
 5. Concurrent callers during one shutdown attempt share the same in-progress `stop()` promise. After a bounded attempt rejects, a later explicit `stop()` call may wait again on the same unresolved invocations; it must not re-invoke handlers or create duplicate invocation IDs.
-6. The executor and policy wrapper shutdown boundaries must be idempotent. Repeated calls may request/observe the same cancellation and tracked work, but may not duplicate terminal bookkeeping or restart work.
+6. Repeated `stop()` calls must observe the same tracked invocation/evaluation work and must not duplicate terminal bookkeeping or restart work. Whether they may re-invoke either executor or policy shutdown initiation after that initiation throws or rejects is an explicit architecture decision, not an assumed idempotency guarantee; follow the accepted recovery rule in section 11 before permitting such re-invocation.
 7. Do not introduce a new successful return union in this compatibility stage. If a future API returns a structured shutdown report, that is a separately versioned compatibility decision.
 
 ### 6.4 Retryable shutdown-attempt lifecycle
@@ -138,7 +138,7 @@ Requirements:
 3. If the previous attempt has settled by rejection and its shared promise has been cleared, a later explicit `stop()` call while lifecycle is `stopping` must be allowed to start a new bounded observation attempt. It must not reopen admission.
 4. A new attempt must reuse the same executor invocation records and underlying policy-evaluation records. It must not invoke a handler again, create a new `operationId`, or reset a prior cancellation cause.
 5. If all tracked handlers and policy evaluations have since settled successfully (and policy shutdown is confirmed complete), the later attempt may proceed to module cleanup. If work remains unresolved, it may wait until its configured deadline and reject again.
-6. Policy shutdown must be idempotent and observable across attempts: an earlier rejected caller wait is not proof that the delegate shutdown or evaluator work has settled.
+6. Policy shutdown state and underlying evaluator work must remain observable across attempts: an earlier rejected caller wait is not proof that delegate shutdown or evaluator work has settled. Re-invoking delegate shutdown after initiation failure/rejection is permitted only if the architecture-approved recovery contract in section 11 explicitly establishes its safety; otherwise a later attempt only observes tracked state and reports the unresolved failure.
 7. Only successful completion of all required drains and module cleanup may transition lifecycle to `stopped`. A failed module cleanup retains the existing explicit cleanup-retry rules and dependency protection.
 
 This is a continuation of the same shutdown, not a second shutdown or operation replay.
