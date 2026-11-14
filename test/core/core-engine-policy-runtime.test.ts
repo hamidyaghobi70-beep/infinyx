@@ -76,10 +76,12 @@ describe("CoreEngine policy runtime shutdown", () => {
     expect(cleanupCalls).toBe(0);
     expect(engine.state).toBe("stopping");
 
-    await engine.stop();
-    expect(shutdownAttempts).toBe(2);
-    expect(cleanupCalls).toBe(1);
-    expect(engine.state).toBe("stopped");
+    await expect(engine.stop()).rejects.toMatchObject({
+      code: "POLICY_SHUTDOWN_FAILED"
+    });
+    expect(shutdownAttempts).toBe(1);
+    expect(cleanupCalls).toBe(0);
+    expect(engine.state).toBe("stopping");
   });
 
   it("shuts down a policy runtime even when CoreEngine was never initialized", async () => {
