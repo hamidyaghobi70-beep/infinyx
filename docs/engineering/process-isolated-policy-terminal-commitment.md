@@ -119,3 +119,10 @@ Cancellation/timeout and output-stop handlers now delegate cause acceptance to o
 Only a `PRIMARY` disposition may freeze/veto a candidate or initiate cancellation/termination. A `SECONDARY` disposition updates provenance only; it cannot change the candidate, primary reason, outcome, decision, or trigger duplicate termination bookkeeping. Both stop paths therefore use the same acceptance rule, while retaining their specific outcome mapping (cancel/timeout versus output failure).
 
 The P32-01 race tests and P32-02 provenance tests are the behavioral regression coverage for both orderings and secondary-cause retention. This is a focused refactor; no retry or additional process lifecycle is introduced.
+
+
+## P32-07 — Epoch deadline clock-domain compatibility
+
+`PolicyEvaluationOptions.deadlineAt` remains an epoch-millisecond wall-clock value. The coordinator computes the remaining duration against `Date.now()` and enforces the actual process timeout with its own timer. The child runner forwards the effective epoch-millisecond deadline hint unchanged to the evaluator; it does not use that value as a monotonic timer or convert it to `performance.now()`.
+
+This preserves the existing public API clock domain and keeps the shutdown-drain monotonic deadline separate. The checked INFINYX-ENG-002 revision at commit `555facf859d044368af145cc621af810e72e03db` states this compatibility rule in its clock-domain contract (normative §11.2.9); that revision does not contain a §11.1.8 heading, so this record does not mislabel the reference. This is consistent with the requested §11.1.8 principle: do not silently reinterpret the existing epoch-based `deadlineAt`.
