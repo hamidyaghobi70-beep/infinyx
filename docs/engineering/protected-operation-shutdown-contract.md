@@ -96,12 +96,12 @@ The implementation must provide one lifecycle coordination boundary shared by `C
 2. In the same synchronous start-of-stop turn, it invokes an executor shutdown method that synchronously marks the executor as closing and aborts the controllers of all registered admitted invocations. It must not wait for policy shutdown before doing this. The abort must carry a structured shutdown cause; caller and parent cancellation provenance must not be silently overwritten.
 3. It also invokes `policy.shutdown()` synchronously in that start-of-stop turn. The returned promises are then observed concurrently; a rejection or deadline expiry is a shutdown failure/block, not permission to clean up.
 4. Policy shutdown must distinguish **cancelling the wrapper's wait** from **settlement of the underlying evaluator**. An `AbortSignal` request or a `Promise.race` returning Deny does not prove the delegate evaluator has stopped. The policy wrapper must retain and track each in-flight delegate evaluation until it settles, unless the delegate exposes a separately documented shutdown guarantee that establishes termination. If an evaluator remains unresolved and may still use resources, policy shutdown is unresolved and module cleanup remains blocked.
-4. The executor's active registry is populated before calling handler code and retains each invocation until its handler promise settles and terminal bookkeeping completes. Registering an invocation and calling the handler must not be separated by an `await`.
-5. Pending policy evaluations are not active handlers. They are stopped by the policy shutdown path; their late Allow results must fail the final lifecycle/admission check.
-6. The engine must use the same drain-and-block rules even if `initializedModules` is empty.
-7. The active registry must not expose mutable internal maps or controllers to modules. Diagnostics may expose immutable snapshots only.
+5. The executor's active registry is populated before calling handler code and retains each invocation until its handler promise settles and terminal bookkeeping completes. Registering an invocation and calling the handler must not be separated by an `await`.
+6. Pending policy evaluations are not active handlers. Their cancellation request and underlying evaluator settlement are tracked by the policy shutdown path; their late Allow results must fail the final lifecycle/admission check.
+7. The engine must use the same drain-and-block rules even if `initializedModules` is empty.
+8. The active registry must not expose mutable internal maps or controllers to modules. Diagnostics may expose immutable snapshots only.
 
-This coordination requirement is necessary because the current `FailClosedPolicyEngine.shutdown()` stops policy intake and requests cancellation of policy evaluations, while the current executor has no registry or shutdown method for handlers that have already been admitted.
+This coordination requirement is necessary because the current `FailClosedPolicyEngine.shutdown()` stops policy intake, requests cancellation, and awaits the delegate's optional `shutdown()` method. However, `evaluate()` races its delegate promise against cancellation and removes its active stop callback when that race settles; this alone does not prove a non-cooperative delegate evaluation has settled. The current executor also has no registry or shutdown method for handlers that have already been admitted.
 
 ## 7. Timeout and retry semantics
 
