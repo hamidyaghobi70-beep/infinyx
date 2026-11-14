@@ -123,8 +123,8 @@ Requirements:
 2. Keep the original underlying error as `cause` where one exists. Deadline errors must identify the failure category without exposing caller context, secrets, or mutable registry internals.
 3. A handler's own rejected promise is an operation outcome, not by itself a shutdown failure. Once it has settled and terminal bookkeeping is complete, it may be removed from the active registry and safe cleanup may proceed.
 4. A deadline rejection does not settle, discard, or replay the underlying handler/evaluator. It only ends that caller's bounded wait. The underlying work remains tracked.
-5. Concurrent callers during one shutdown attempt share the same in-progress `stop()` promise. After a bounded attempt rejects, a later explicit `stop()` call may wait again on the same unresolved invocations; it must not re-invoke handlers or create duplicate invocation IDs.
-6. Repeated `stop()` calls must observe the same tracked invocation/evaluation work and must not duplicate terminal bookkeeping or restart work. Whether they may re-invoke either executor or policy shutdown initiation after that initiation throws or rejects is an explicit architecture decision, not an assumed idempotency guarantee; follow the accepted recovery rule in section 11 before permitting such re-invocation.
+5. Concurrent callers during one shutdown attempt share the same in-progress `stop()` promise. After a drain-only attempt rejects with `DRAIN_PENDING` and no initiation failure has occurred, a later explicit `stop()` call may perform a new bounded observation wait over the same unresolved invocation/evaluation records. This observation must not repeat executor shutdown initiation, policy shutdown initiation, handler invocation, or evaluation start.
+6. If executor shutdown initiation, policy shutdown initiation, or delegate shutdown initiation throws, rejects, or is known to have partially performed side effects, the coordinator must enter sticky `RECOVERY_REQUIRED`. Every later `stop()` call may inspect and report retained records but must not re-invoke the failed initiation. Only a separately reviewed and approved Recovery Contract may authorize a recovery action; the rules in section 11.2.2 are controlling.
 7. Do not introduce a new successful return union in this compatibility stage. If a future API returns a structured shutdown report, that is a separately versioned compatibility decision.
 
 ### 6.4 Drain observation and sticky initiation failure
@@ -408,6 +408,34 @@ This section defines the required control boundary without overstating what same
 5. Evaluate the 30,000 ms candidate against the predeclared objectives and representative measurements. Retain it only if the evidence meets those objectives without unsafe cleanup, hidden untracked work, or excessive unresolved shutdowns; otherwise propose a revised value and rerun the same reproducible profiles.
 6. Preserve benchmark scripts/configuration, raw measurements, environment details, summary analysis, and reviewer disposition as evidence linked to the implementation proposal. Synthetic unit-test timings are not a substitute for representative load evidence.
 7. The deadline candidate may become a final default only after Haniyeh's architecture acceptance and independent security/quality review of the evidence. Until then, the numeric default remains provisional.
+
+### 11.2.11 ENG002-R11 — Unambiguous sticky recovery and observation-only stop calls
+
+1. Sections 6.3, 6.4, and 7 are active requirements and must be read consistently with the sticky recovery policy in section 11.2.2.
+2. A drain-only timeout with no initiation failure is `DRAIN_PENDING`. A later explicit `stop()` may start a new bounded observation wait over the same retained records. This is observation only: it must not repeat executor shutdown initiation, policy shutdown initiation, delegate shutdown, handler invocation, or evaluator start.
+3. Any executor shutdown initiation throw, policy shutdown initiation throw/rejection, delegate shutdown throw/rejection, or known partial initiation side effect sets sticky `RECOVERY_REQUIRED`. Later `stop()` calls may inspect and report retained state only; they must not retry the failed initiation.
+4. A sticky `RECOVERY_REQUIRED` blocker cannot be cleared by promise settlement alone. No cleanup is eligible while it remains. A recovery action or retry requires a separate explicit Recovery Contract approved through the project's architecture and security review gates.
+5. The terms “retry,” “later attempt,” and “subsequent stop” in active sections refer only to bounded observation of already-initiated work unless an approved Recovery Contract explicitly authorizes a distinct recovery action. They never imply implicit re-invocation.
+6. Acceptance cases 27–31 test sticky recovery and non-reinvocation; they remain specification criteria until separately authorized implementation and execution.
+
+### 11.2.12 ENG002-R12 — Deterministic deadline-configuration acceptance matrix
+
+1. The proposed acceptance suite independently covers: omitted setting/default selection; valid explicit overrides; minimum and maximum accepted integers; zero; negative; fractional; `NaN`; positive and negative `Infinity`; `null`; below-range and above-range numbers; non-number types; and distinction between omission and explicit invalid input.
+2. Every invalid value must be rejected before CoreEngine enters `running`, leave admission closed, return the stable configuration error, and never fall back to an unbounded wait or silently substitute the default.
+3. The effective validated duration and whether it came from the default or an explicit override must be visible in sanitized diagnostics.
+4. The expanded configuration cases are acceptance cases 32–47 in section 10. They are required design criteria, not evidence that tests have been implemented or executed.
+5. Tests must use deterministic typed inputs and must not rely on JSON serialization for values such as `NaN`, infinities, or `undefined`.
+
+### 11.2.13 ENG002-R13 — Evidence plan for the provisional drain-deadline default
+
+1. The 30,000 ms value remains a provisional candidate only. It is not an evidence-backed production default and must not be described as validated until the evidence below is collected and reviewed.
+2. Before implementation acceptance, the implementation proposal must define representative workload profiles, including at minimum: no active operations; typical concurrent handler load; high but supported concurrency; handlers with registered child activities; policy evaluations with realistic delegate latency; cooperative cancellation; and controlled slow/unresolved work.
+3. For each profile, record sample size, runtime and host configuration, concurrency, handler/evaluator/child settlement distributions, shutdown drain latency, timeout frequency, event-loop delay, and observed blocker/error codes. Record warm/cold conditions where they materially affect results.
+4. Before running the benchmark, the product/operations owner must document the shutdown-latency objective and acceptable timeout/error budget for each relevant profile. Do not invent target percentiles or claim that a percentile is acceptable without that prior decision.
+5. Evaluate the 30,000 ms candidate against the predeclared objectives and representative measurements. Retain it only if the evidence meets those objectives without unsafe cleanup, hidden untracked work, or excessive unresolved shutdowns; otherwise propose a revised value and rerun the same reproducible profiles.
+6. Preserve benchmark scripts/configuration, raw measurements, environment details, summary analysis, and reviewer disposition as evidence linked to the implementation proposal. Synthetic unit-test timings are not a substitute for representative load evidence.
+7. The deadline candidate may become a final default only after Haniyeh's architecture acceptance and independent security/quality review of the evidence. Until then, the numeric default remains provisional.
+
 
 ### 11.2.10 ENG002-R10 — Normative precedence and document authority
 
