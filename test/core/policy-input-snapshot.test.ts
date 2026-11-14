@@ -57,4 +57,22 @@ describe("snapshotBoundedPolicyData", () => {
     expect(Object.isFrozen(snapshot?.nested)).toBe(true);
     expect(Object.isFrozen(snapshot?.nested.values)).toBe(true);
   });
+
+  it("documents that Proxy traps execute during same-process inspection", () => {
+    const observed: string[] = [];
+    const keys = Array.from({ length: 1_001 }, (_, index) => `k${index}`);
+    const input = new Proxy({}, {
+      getPrototypeOf(target) {
+        observed.push("getPrototypeOf");
+        return Reflect.getPrototypeOf(target);
+      },
+      ownKeys() {
+        observed.push("ownKeys");
+        return keys;
+      }
+    });
+
+    expect(snapshotBoundedPolicyData(input)).toBeUndefined();
+    expect(observed).toEqual(["getPrototypeOf", "ownKeys"]);
+  });
 });
