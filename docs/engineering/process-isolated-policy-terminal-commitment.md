@@ -3,7 +3,7 @@
 **Document ID:** INFINYX-ENG-003  
 **Status:** Engineering contract for PR #32, Stage 1  
 **Applies to:** `ProcessIsolatedPolicyEngine` terminal arbitration  
-**Baseline:** PR #32 head `73971432ae9627178e195fefa670b41737b8e3be`
+**Baseline:** PR #32 audited head `9ee5303ae30eb14d5c425e203eae687779f16da0`
 
 ## 1. Purpose
 
@@ -38,7 +38,7 @@ The rules are:
 2. If an output failure is accepted first, it remains the primary stop condition. A later cancellation/timeout cannot replace its terminal outcome, decision, or primary `stopReason`.
 3. If a stop candidate with a `stopReason` was already frozen, a later cancellation/timeout cannot replace it.
 4. If a non-stop candidate (including an allow candidate) was frozen first, the first accepted stop condition may veto that candidate before Terminal Commitment.
-5. Later distinct causes must not cause a second terminal outcome or change the primary cause. Recording all later causes as additional provenance is tracked separately under P32-02; this Stage 1 contract does not claim that secondary provenance is already implemented.
+5. Later distinct causes must not cause a second terminal outcome or change the primary cause. P32-02 implements and tests immutable, deduplicated secondary-cause provenance for distinct causes observed before Terminal Commitment; this provenance does not change the primary cause or terminal result.
 
 This is a first-accepted-stop rule. It is deliberately **not** “output failure always wins” and **not** “cancellation always wins.”
 
@@ -78,7 +78,7 @@ Both tests must assert the exact outcome, decision, primary stop reason, and abs
 
 INFINYX-ENG-002 §11.2.4 requires the first accepted cancellation cause to remain the immutable primary cause and later distinct cancellation causes—including runtime shutdown—to be preserved as additional provenance events. This Stage 1 contract fixes the primary-cause arbitration for PR #32. P32-02 must implement and test the additional-provenance requirement without changing the primary terminal result defined here.
 
-INFINYX-ENG-002 §11.1.8 retains the epoch-based meaning of the existing public `PolicyEvaluationOptions.deadlineAt`. The monotonic shutdown-drain clock requirement does not silently redefine this policy-evaluation API.
+INFINYX-ENG-002 §11.2.9 retains the epoch-based meaning of the existing public `PolicyEvaluationOptions.deadlineAt`. The monotonic shutdown-drain clock requirement does not silently redefine this policy-evaluation API.
 
 ## 7. Non-goals and safeguards
 
