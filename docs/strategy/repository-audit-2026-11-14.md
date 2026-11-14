@@ -21,7 +21,7 @@ No branch was merged or deployed as part of this audit.
 | #13 | PostgreSQL memory audit adapter prototype | `integration/infinyx-core-runtime-v1` | `feat/stage4-postgres-audit-adapter` at `e94fe46d63bab12218fb7539a610bbcd878c2f45` | Draft; run `43500656793`: Linux, Windows, PostgreSQL integration and dependency audit jobs passed; macOS verification was cancelled before steps ran. Cross-platform evidence incomplete. Adapter is not integrated into GuardedMemoryPort. |
 | #14 | Informational landing-page shell | `integration/infinyx-core-runtime-v1` | `feat/infinyx-public-site-shell` at `3c04d4b6b2f83db51863a6bd6cb586c2eeacc381` | Draft; exact-head CI run `43503827509` success. Static informational shell only; not a production service. |
 | #15 | Bounded-deadline test stability | `fix/stage4-freeze-guarded-memory-prototype` | `fix/stage4-deadline-test-stability` at `18441d8908b2a3bd50a1f30d37f54b35f7b4c399` | Draft; no exact-head workflow run recorded. PR target branch is absent from the CI workflow's pull_request branch allowlist. Test-only change; no production behavior fix established. |
-| #16 | Global quality and product roadmap | `integration/infinyx-core-runtime-v1` | `docs/global-quality-roadmap` at `d17a46f5839576bfcf34eabc610a10531748c5b0` | Draft; documentation-only; no exact-head CI run recorded at this snapshot. |
+| #16 | Global quality and product roadmap | `integration/infinyx-core-runtime-v1` | `docs/global-quality-roadmap` at `12bd0c1869990f30c582fb8bf05b6d0b7511960b` | Draft; documentation-only; exact-head CI run `43556337477` completed successfully on Ubuntu, macOS, Windows, and Dependency Security Audit. |
 
 ## 3. Dependency and promotion interpretation
 
@@ -66,7 +66,17 @@ Review comment registered on PR #15:
 
 The exact-head CI run succeeded. The reviewed HTML, JavaScript, CSS and Express static-serving path are a static informational shell with a restrictive baseline CSP and basic browser security headers. This is not an accessibility certification or production deployment review. Before public launch, add verified project/contact links and appropriate privacy, security, support and contribution disclosures; do not add account or business flows until their security and privacy designs are accepted.
 
-## 5. Recommended order of work
+## 5. Verification refresh (2026-11-14, after initial audit)
+
+The following exact-head checks were re-queried after the initial snapshot:
+
+- PR #16 head `12bd0c1869990f30c582fb8bf05b6d0b7511960b`: CI run `43556337477` completed successfully. All four jobs succeeded: Ubuntu, macOS, Windows, and Dependency Security Audit. This verifies the documentation branch's workflow run; it does not constitute architecture acceptance.
+- PR #13 head `e94fe46d63bab12218fb7539a610bbcd878c2f45`: run `43500656793` completed with overall conclusion `failure` because `verify (macos-latest)` was cancelled before any steps ran. Dependency audit, PostgreSQL integration, Ubuntu verification, and Windows verification succeeded. Treat cross-platform verification as incomplete, not as a macOS test failure.
+- PR #15 head `18441d8908b2a3bd50a1f30d37f54b35f7b4c399`: no pull-request workflow run is associated with the exact commit. The workflow file on its base branch has no `fix/stage4-freeze-guarded-memory-prototype` entry in `pull_request.branches`; the `push.branches` list also omits the PR head branch. This remains a trigger/configuration gap. The workflow definition on the base branch governs the pull-request event, so editing only the PR head cannot fix this particular trigger. A controlled workflow-dispatch or base-branch change is needed before claiming exact-head CI.
+
+The PR #13 description still contains historical wording that its latest run is queued; the actual GitHub run is completed with the job outcomes stated above. Use the live run, not that stale description, as the verification source.
+
+## 6. Recommended order of work
 
 1. **Governance:** obtain architecture acceptance of the canonical integration branch and PR dependency map. Do not merge PR #7 or promote any branch by implication.
 2. **Core Runtime lifecycle:** resolve protected-operation shutdown/drain behavior and per-invocation correlation IDs; obtain independent review.
@@ -76,7 +86,7 @@ The exact-head CI run succeeded. The reviewed HTML, JavaScript, CSS and Express 
 6. **Public site:** retain informational-only scope until project claims, contact/support, privacy/security disclosures, and production operations are ready.
 7. **Release readiness:** require a complete evidence pack and separate Founder authorization.
 
-## 6. Non-authorizations
+## 7. Non-authorizations
 
 This audit does not authorize:
 - merging any PR or changing `main`;
@@ -84,4 +94,4 @@ This audit does not authorize:
 - enabling authentication, user accounts, agents, tools, financial operations, or external side effects;
 - treating any Draft PR as accepted or production-ready.
 
-**Audit status:** Findings are recorded for review. They are not a substitute for Haniyeh's architecture acceptance or an independent security review.
+**Audit status:** Findings and the verification refresh are recorded for review. They are not a substitute for Haniyeh's architecture acceptance or an independent security review.
