@@ -29,9 +29,9 @@ The existing project baseline remains authoritative unless changed through an ex
 The established project authority model remains in force:
 
 - Founder/Owner: final strategic and commercial decisions; separate authorization for release and deployment.
-- Project Leader / Chief Architect: architecture acceptance, readiness decision and explicit merge instruction.
-- GitHub execution lead: performs repository changes only within approved scope and reports exact commits, diffs and CI evidence.
-- Independent reviewers: challenge implementation, security assumptions and acceptance evidence.
+- Founder/Owner-designated technical lead: under the current owner delegation, ChatGPT performs technical leadership, architecture review, readiness analysis and repository execution within authorized scope, reporting exact commits, diffs and CI evidence.
+- Internal security/quality review: ChatGPT performs a separate review pass and records it transparently as an internal pass by the same reviewer, not independent assurance.
+- External independent reviewers: engaged only when a risk assessment, contractual obligation, or release gate requires third-party assurance; no internal review is represented as independent.
 
 No roadmap item grants permission to merge, release, deploy, change repository visibility, incur costs, register domains, create external accounts, or activate external side effects. PRs remain Draft until the required reviewers explicitly accept them. The `main` branch remains untouched by this roadmap change.
 
@@ -65,7 +65,7 @@ Work:
 - Produce threat models and security acceptance tests for trust boundaries.
 
 Exit gate:
-- Architecture and security reviewers accept the threat model and runtime boundaries.
+- The owner-designated technical lead records architecture acceptance; a separate security/quality pass is documented. External independent assurance is obtained where required by the risk or release gate.
 - Tests cover critical deny, timeout, cancellation, concurrency and failure paths.
 - No unresolved critical/high-risk issue is hidden by a green aggregate test result.
 
@@ -74,7 +74,7 @@ Exit gate:
 **Objective:** provide controlled, explainable and recoverable memory.
 
 Work:
-- Complete independent review of the GuardedMemoryPort prototype.
+- Complete documented architecture and security/quality review of the GuardedMemoryPort prototype; obtain external independent assurance if required by its risk or release gate.
 - Resolve the bounded-deadline test/behavior question with exact-head CI evidence.
 - Define operation identity, idempotency, outcome state transitions and unknown-commit reconciliation as one coherent contract.
 - Validate PostgreSQL permissions, append-only enforcement, crash recovery, sequence contention, migrations, backups and restore procedures.
@@ -157,7 +157,7 @@ Every change must have:
 4. Exact-head CI evidence; no extrapolation from a previous commit.
 5. Dependency and supply-chain review appropriate to the change.
 6. Documentation and operational impact updates.
-7. Independent review for security-sensitive or architecture-changing work.
+7. Separate architecture and security/quality review passes for security-sensitive or architecture-changing work; clearly record whether either pass is external and independent.
 8. A recorded decision: accept, revise, defer or reject.
 
 A green test suite is necessary but not sufficient for security or production readiness.
