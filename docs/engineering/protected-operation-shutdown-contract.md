@@ -130,6 +130,8 @@ Requirements:
 
 A bounded drain-observation attempt may reject while protected handlers or policy evaluators remain tracked. The coordinator must distinguish a drain-only timeout from a failed shutdown initiation; these states have different follow-up behavior.
 
+`DRAIN_PENDING` is an internal shutdown-coordinator state, not a public `CoreError.code`. A rejected `stop()` must expose the stable public error code corresponding to the observed blocker(s), selected using the precedence in section 11.2.10; the internal state must not be serialized or presented as the error code.
+
 Requirements:
 
 1. Keep the engine in `stopping` after any drain timeout or shutdown failure. Admission must never reopen.
@@ -224,7 +226,7 @@ Diagnostics are operational troubleshooting data, not the durable audit ledger. 
 For this contract, **deeply immutable diagnostic data** means a newly allocated, recursively immutable value tree containing only explicitly allowlisted scalar values, arrays, and plain data objects. A shallowly frozen wrapper is not sufficient.
 
 1. **Copy at the trust boundary:** construct each diagnostic snapshot from an explicit allowlist into fresh objects and arrays. Do not retain, return, or embed references to an internal registry, invocation record, evaluator record, child-activity record, handler, controller, signal, resource, error instance, or caller-owned object.
-2. **Allowed value types:** diagnostic leaves may be bounded strings from the allowlist, finite numbers, booleans, or null where the field schema explicitly permits null. Containers may be arrays and plain data objects with own data properties only. No functions, symbols, accessors, custom prototypes, class instances, Map, Set, Date, typed arrays, ArrayBuffer, proxies, weak collections, or other mutable host objects are permitted.
+2. **Allowed value types:** diagnostic leaves may be bounded strings from the allowlist, finite numbers, booleans, or null where the field schema explicitly permits null. Containers may be arrays and plain data objects with own data properties only. No functions, symbols, accessors, custom prototypes, class instances, Map, Set, Date, typed arrays, ArrayBuffer, weak collections, or other mutable host objects are permitted. Diagnostic construction must use coordinator-owned trusted records and schema-controlled primitive extraction; caller-controlled objects and arbitrary external object graphs must never be accepted as snapshot inputs. ECMAScript provides no general reliable operation for identifying every possible Proxy, so conformance must not depend on detecting arbitrary proxies.
 3. **Recursive immutability:** recursively freeze every newly created array and plain object, including every nested object and array, before publication. The resulting object graph must be acyclic. Every own property must be a non-writable, non-configurable data property; no getter or setter may run during construction or reading.
 4. **No aliasing:** for every object or array reachable from a published snapshot, object identity must differ from every internal mutable object and from every caller-supplied object. No nested collection or property may retain an internal reference. Repeated reads may return the same already-frozen snapshot or a fresh equivalent snapshot, but must never return a live internal object.
 5. **No mutation back-channel:** consumers must not be able to mutate the snapshot, mutate runtime state through the snapshot, or affect another consumer by mutating a shared nested value. If a consumer needs a mutable working copy, it must explicitly create its own copy outside the Runtime boundary.
@@ -347,20 +349,6 @@ This subsection is retained solely as a historical record of the recommendation 
 
 **Historical status:** this request was superseded by the later ACCEPT WITH CONDITIONS review and the normative amendments in section 11.2. The precedence rule is reaffirmed in section 11.2.10.
 
-## 12. Acceptance and promotion gates
-
-- Haniyeh's architecture acceptance is required before implementation.
-- Independent security/quality review is required for the shutdown race, cancellation, timeout, and audit-correlation design.
-- Exact-head CI must pass on the intended base and required platforms after implementation.
-- The PR remains Draft until the applicable review and evidence requirements are met.
-- This document does not authorize merging PR #7, modifying `main`, releasing, or deploying.
-
-## 13. Current evidence and disposition
-
-The baseline implementation currently passes the existing test that demonstrates an admitted handler may remain active after `CoreEngine.stop()` resolves. The executor currently sets handler context `operationId` to the registration ID. These are observed baseline behaviors, not accepted production guarantees.
-
-**Disposition:** Proposed contract for architecture and independent review. Implementation remains not authorized by this document.
-
 ## 11.2 Mandatory resolution of the 2026-11-14 architecture review
 
 This section records the mandatory amendments from the final INFINYX-ENG-002 architecture review. It is normative and supersedes any earlier wording in this document that leaves these points open or suggests a weaker guarantee. It remains a documentation proposal; it does not authorize implementation.
@@ -425,7 +413,7 @@ The original 31 cases remain proposed acceptance criteria and are not evidence o
 
 53. **Diagnostics allowlist, denylist, and error redaction:** exercise both `PROTECTED_OPERATION_DRAIN_TIMEOUT` and `PROTECTED_OPERATION_SHUTDOWN_CONFIG_INVALID` with synthetic sensitive payloads, caller identity, arbitrary error messages, stack traces, nested causes, and mutable registry objects. Assert that emitted logs, diagnostic snapshots, `CoreError.details`, and serialized errors contain only the section 9.2 allowlisted fields; prohibited values are completely absent (not hashed or masked); causes retain only an allowlisted `name` and stable `code`; snapshots are immutable and contain no live internal references; and an unknown field defaults to omission. Assert separately that application modules/handlers cannot read diagnostic registries and that diagnostics access is limited to the authorized operational roles defined in section 9.2.
 
-54. **Deep immutability and no-reference-escape:** construct a diagnostic snapshot containing nested allowlisted objects and arrays. Assert that the snapshot root and every reachable container are frozen; every own property is a non-writable, non-configurable data property; no accessor, proxy, custom prototype, Map, Set, typed array, controller, signal, resource, or live record is present; and the graph is acyclic. Assert by identity that no reachable object is an internal or caller-owned object. Attempt mutation at every nesting level and prove that it throws or has no effect, does not change Runtime state, and cannot affect another consumer. Verify unsupported values are omitted or snapshot construction fails closed without returning the original value.
+54. **Deep immutability and no-reference-escape:** construct a diagnostic snapshot containing nested allowlisted objects and arrays. Assert that the snapshot root and every reachable container are frozen; every own property is a non-writable, non-configurable data property; no accessor, caller-controlled object, custom prototype, Map, Set, typed array, controller, signal, resource, or live record is present; construction uses only trusted coordinator-owned records and does not rely on generic Proxy detection; and the graph is acyclic. Assert by identity that no reachable object is an internal or caller-owned object. Attempt mutation at every nesting level and prove that it throws or has no effect, does not change Runtime state, and cannot affect another consumer. Verify unsupported values are omitted or snapshot construction fails closed without returning the original value.
 55. **Deny-by-default authorization:** attempt diagnostics access with an unauthenticated principal, unknown role, missing grant, ambiguous grant, malformed scope, expired grant, revoked grant, stale cached grant, and simulated authorization-service failure. Assert every case is denied before protected data is read or serialized; no fallback role is selected; no invocation existence, identifier, blocker, or protected value is disclosed; and the denial result is generic and sanitized. Assert an explicitly granted, valid, in-scope read-only request succeeds only for its allowed fields.
 56. **Least-privilege role matrix:** test each principal class in section 9.4 against each permission column. Assert authorized Runtime operators and designated security/quality reviewers receive only explicitly granted diagnostics within scope; the coordinator's internal access cannot be used as an external identity; modules, handlers, evaluators, ordinary callers, and public interfaces cannot read diagnostics or internal registries; no diagnostics role can mutate runtime state; and no role gains durable audit access through diagnostics permission. Verify revocation takes effect within the defined grant-validity boundary and that unconfigured roles have no access.
 57. **Stable policy drain error-code consistency:** assert that the exact literal POLICY_EVALUATION_DRAIN_TIMEOUT is used consistently in the shutdown error-code table, policy-evaluation drain acceptance case, simultaneous-blocker precedence, and serialized stable error output. Assert that POLICY_SHUTDOWN_FAILED remains a distinct code for policy/delegate shutdown initiation or execution failure and is never substituted for an unresolved evaluator-drain timeout. A repository/document scan must report no undocumented spelling variant for either code.
@@ -469,7 +457,7 @@ This section defines the required control boundary without overstating what same
 ### 11.2.10 ENG002-R10 — Normative precedence and document authority
 
 1. Section 11 and section 11.1 are historical decision records only. They preserve earlier proposals and review questions; they are not active decision gates.
-2. Section 11.2, including sections 11.2.1 through 11.2.13, is the current normative proposal. Where historical wording conflicts with it, section 11.2 controls.
+2. Section 11.2, including sections 11.2.1 through 11.2.14, is the current normative proposal. Where historical wording conflicts with it, section 11.2 controls.
 3. The primary shutdown error precedence is: `POLICY_SHUTDOWN_FAILED`, then `PROTECTED_OPERATION_SHUTDOWN_FAILED`, then `POLICY_EVALUATION_DRAIN_TIMEOUT`, then `PROTECTED_OPERATION_DRAIN_TIMEOUT`. Every concurrently observed blocker must still be retained in sanitized immutable error details.
 4. The Recovery policy is sticky `RECOVERY_REQUIRED`; no implicit re-invocation is permitted. A retry can be authorized only by a separately reviewed and approved Recovery Contract.
 5. The 57 acceptance cases are proposed specification criteria, not evidence of implementation or executed tests. Cases 27–31 cover sticky recovery; cases 32–48 cover deadline configuration (including absent versus explicitly present `undefined`); cases 49–52 cover capability, deadline scheduling, cancellation competition, and partial initiation failure; case 53 covers diagnostics allowlisting, redaction, and initial access boundaries; cases 54–57 cover deep immutability, reference isolation, deny-by-default authorization, least-privilege role enforcement, and stable policy error-code consistency.
@@ -515,3 +503,17 @@ This section defines the required control boundary without overstating what same
 3. **H-03 — Least-privilege roles and permissions:** the role/permission matrix in section 9.4 separates Runtime operator, security/quality reviewer, internal Runtime coordinator, application modules/handlers/evaluators/callers, and unknown principals. Diagnostics are read-only; durable audit access remains separately governed. Acceptance case 56 tests the permission matrix and revocation boundary.
 4. **Policy drain error-code audit:** the current document uses POLICY_EVALUATION_DRAIN_TIMEOUT consistently in section 6.3's error table, section 10 case 19, section 11.1's precedence proposal, and section 11.2.10's normative precedence. POLICY_SHUTDOWN_FAILED is separately defined for shutdown initiation/delegate-shutdown failure. No alternate spelling of the policy evaluation drain code was found in the current document revision. Acceptance case 57 makes this distinction and exact spelling a regression criterion. This is a document-level consistency finding; it does not assert that either proposed code is already present in the runtime CoreErrorCode union.
 5. These additions are specification-only. They do not authorize implementation, source-code changes, executable-test changes, merge, release, deployment, or changes to main.
+
+## 12. Acceptance and promotion gates
+
+- Haniyeh's architecture acceptance is required before implementation.
+- Independent security/quality review is required for the shutdown race, cancellation, timeout, and audit-correlation design.
+- Exact-head CI must pass on the intended base and required platforms after implementation.
+- The PR remains Draft until the applicable review and evidence requirements are met.
+- This document does not authorize merging PR #17, modifying `main`, releasing, or deploying.
+
+## 13. Current evidence and disposition
+
+The baseline implementation currently passes the existing test that demonstrates an admitted handler may remain active after `CoreEngine.stop()` resolves. The executor currently sets handler context `operationId` to the registration ID. These are observed baseline behaviors, not accepted production guarantees.
+
+**Disposition:** Proposed contract for architecture and independent review. Implementation remains not authorized by this document.
