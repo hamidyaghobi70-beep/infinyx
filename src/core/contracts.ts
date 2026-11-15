@@ -155,6 +155,11 @@ export interface ProtectedOperationContext {
   readonly signal: AbortSignal;
 }
 
+/**
+ * Protected operation inputs are snapshotted before validation and authorization.
+ * Inputs must therefore be composed of finite primitives, undefined, plain records,
+ * and arrays; cycles, accessors, symbols, and exotic objects are rejected.
+ */
 export interface ProtectedOperationDefinition<TInput, TOutput> {
   readonly id: string;
   readonly action: string;
