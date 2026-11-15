@@ -154,6 +154,7 @@ export class AgentRuntime {
     this.active.set(taskId, { controller, record });
     this.remember(record);
 
+    let providerStarted = false;
     let providerSettled = false;
     let timeout: ReturnType<typeof setTimeout> | undefined;
     let callerAbort: (() => void) | undefined;
@@ -170,6 +171,9 @@ export class AgentRuntime {
     };
 
     const controllerAbort = (): void => {
+      // If cancellation wins before the provider microtask starts, no external
+      // execution exists to remain unresolved.
+      if (!providerStarted) providerSettled = true;
       if (controller.signal.reason === "deadline_exceeded") {
         settleEarly("timed_out", "Task deadline elapsed.");
       } else {
@@ -196,6 +200,7 @@ export class AgentRuntime {
       if (controller.signal.aborted) {
         throw new Error("Task was cancelled before ModelPort invocation.");
       }
+      providerStarted = true;
       return this.orchestrator.run(prompt, controller.signal, deadlineAt);
     });
     const observedProvider = providerPromise.then(
