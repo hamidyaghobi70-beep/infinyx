@@ -436,7 +436,7 @@ describe("ProtectedOperationExecutor", () => {
     let handlerStarted!: () => void;
     const started = new Promise<void>((resolve) => { handlerStarted = resolve; });
     const evaluator = vi.fn(async () => allow);
-    const handler = vi.fn(() => new Promise<string>((resolve) => { release = resolve; }));
+    const handler = vi.fn((_input: string, _context: { operationId: string; operationDefinitionId: string; signal: AbortSignal }) => new Promise<string>((resolve) => { release = resolve; }));
     const engine = new CoreEngine({ policy: { evaluate: evaluator } });
     const operation = engine.registerProtectedOperation({
       id: "records.admission",
