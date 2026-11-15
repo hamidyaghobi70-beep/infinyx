@@ -53,6 +53,22 @@ describe("AgentRuntime", () => {
     await runtime.shutdown();
   });
 
+  it("reports provider errors without leaking exception details", async () => {
+    const runtime = new AgentRuntime({ complete: async () => { throw new Error("secret endpoint"); } });
+    runtime.start();
+    await expect(runtime.execute({ taskId: "provider-error", prompt: "hello" }))
+      .resolves.toEqual({ status: "error", taskId: "provider-error", code: "MODEL_PROVIDER_ERROR" });
+    await runtime.shutdown();
+  });
+
+  it("rejects oversized model output", async () => {
+    const runtime = new AgentRuntime({ complete: async () => "x".repeat(20) }, { maxOutputLength: 10 });
+    runtime.start();
+    await expect(runtime.execute({ taskId: "large-output", prompt: "hello" }))
+      .resolves.toMatchObject({ status: "error", code: "INVALID_MODEL_RESPONSE" });
+    await runtime.shutdown();
+  });
+
   it("rejects tasks when the active task capacity is exhausted", async () => {
     let release!: (value: string) => void;
     const gate = new Promise<string>((resolve) => { release = resolve; });
