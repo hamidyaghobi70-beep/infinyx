@@ -17,6 +17,13 @@ export default {
     }
 
     if (request.action === "crash") process.exit(23);
+    if (request.action === "crash-with-stderr") {
+      process.stderr.write("POLICY_STDERR_SECRET_MARKER_24680");
+      process.exit(23);
+    }
+    if (request.action === "throw-secret") {
+      throw new Error("POLICY_EXCEPTION_SECRET_MARKER_13579");
+    }
     if (request.action === "invalid") return { effect: "allow" };
     if (request.action === "deny") {
       return { effect: "deny", reason: "Explicit fixture denial." };
