@@ -60,4 +60,29 @@ describe("Agent cancellation and deadlines", () => {
       status: "cancelled", executionState: "settled"
     });
   });
+  it("does not invoke ModelPort when shutdown wins before the provider microtask", async () => {
+    let calls = 0;
+    const runtime = new AgentRuntime({
+      complete: async () => {
+        calls += 1;
+        return "unexpected";
+      }
+    });
+    runtime.start();
+    const pending = runtime.execute({ taskId: "shutdown-before-provider", prompt: "hello" });
+
+    // Intentionally do not yield: shutdown occurs before the queued provider microtask.
+    runtime.shutdown();
+
+    await expect(pending).resolves.toMatchObject({
+      status: "cancelled",
+      executionState: "settled"
+    });
+    expect(calls).toBe(0);
+    expect(runtime.getTaskStatus("shutdown-before-provider")).toMatchObject({
+      status: "cancelled",
+      executionState: "settled"
+    });
+  });
+
 });
