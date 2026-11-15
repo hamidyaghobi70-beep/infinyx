@@ -44,3 +44,5 @@ export const MAX_AGENT_TIMEOUT_MS = 120_000;
 export const MAX_AGENT_PROMPT_LENGTH = 8_000;
 export const MAX_AGENT_OUTPUT_LENGTH = 16_000;
 export const MAX_TRACKED_TASKS = 256;
+/** Maximum number of tasks admitted concurrently, including unresolved cancellations. */
+export const MAX_ACTIVE_TASKS = 32;
