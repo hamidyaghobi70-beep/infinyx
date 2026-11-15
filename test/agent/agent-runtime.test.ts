@@ -117,7 +117,7 @@ describe("AgentRuntime", () => {
     expect(providerCalls).toBe(MAX_ACTIVE_TASKS);
 
     runtime.shutdown();
-    await Promise.all(pending);
+    await expect(Promise.all(pending)).resolves.toHaveLength(MAX_ACTIVE_TASKS);
   });
 
   it("releases all capacity slots after successful provider settlement", async () => {
