@@ -1,33 +1,33 @@
 # INFINYX Agent V1 — Independent Audit Evidence Package
 
-**Status: draft / evidence incomplete.** This directory is an evidence index, not a claim that all checks have passed. Replace every `PENDING` entry with an attached artifact or an explicit `NOT AVAILABLE` / `OUT OF SCOPE` statement before submitting the package to an independent auditor.
+**Status: draft / evidence partially complete.** This index records verifiable evidence and open items. It is not a claim of independent security approval, production readiness, or complete audit coverage.
 
 ## Target identity
 
 - Target branch: `integration/infinyx-agent-v1-audit-hardening`
-- Target SHA: record the final branch head in the external audit cover note (this README is itself part of the target commit, so it cannot contain its own final SHA).
-- Starting SHA: `7c3ea806c8541966a9bf13e2743060117c2402b6`
-- Diff base SHA: `7c3ea806c8541966a9bf13e2743060117c2402b6`.
-- `main` SHA at comparison time: `6eb55bd5b22aabd148b1fcb846c083752c49a8cc`.
+- Snapshot head for the ledger below: `3a583859a64fc61a2d4b899a905cf0f93ad3f3e6`
+- Starting SHA and diff base: `7c3ea806c8541966a9bf13e2743060117c2402b6`
+- `main` SHA used for comparison: `6eb55bd5b22aabd148b1fcb846c083752c49a8cc`
+- The final README-refresh commit and final target SHA are recorded in the external cover note / final response, because a commit cannot contain its own SHA.
 
-## Required evidence
+## Evidence status
 
-| # | Evidence | Status / required artifact |
+| # | Evidence | Status |
 |---:|---|---|
-| 1 | Target SHA (not a temporary PR merge commit) | Record exact final head in external audit cover note; this README cannot contain its own commit SHA |
-| 2 | Exact diff-base SHA | `7c3ea806c8541966a9bf13e2743060117c2402b6` |
-| 3 | Full `git log --oneline BASE..TARGET` output | Ten commits through parent SHA `ec1cc9bb3d6010851ee563b668459fce1ea5cdac` are listed below; the ledger-refresh commit is in the external cover note |
-| 4 | `git diff BASE..TARGET --stat` output | PENDING |
-| 5 | Complete `git diff BASE..TARGET` | PENDING |
-| 6 | Raw CI logs run directly against TARGET: macOS, Windows, Ubuntu, security audit | Direct-SHA run `43711220007` passed on parent SHA `ec1cc9bb3d6010851ee563b668459fce1ea5cdac`; attach the final-head run linked in the external cover note |
-| 7 | `npm audit --json` output from TARGET | Artifact `dependency-security-audit` exists for run `43711220007`; attach the artifact from the final-head run as well |
-| 8 | Comparison against `main`: ahead/behind, merge-base, current main SHA, and exact behind commit | Current comparison recorded below; behind commit decision remains OPEN |
-| 9 | Decision on commit `6eb55bd5b22aabd148b1fcb846c083752c49a8cc` (reported documentation commit) | OPEN — it is the one commit on `main` not contained in this branch; do not cherry-pick without an explicit decision |
-| 10 | Capacity contract at the exact target SHA | `docs/agent-runtime-capacity.md`; verify using the target SHA in the external cover note |
-| 11 | Requirement-to-test traceability table | INCLUDED ABOVE |
-| 12 | V1 limitation statement: non-cooperative provider and no forced termination | INCLUDED IN `docs/agent-runtime-capacity.md`; verify at target SHA |
-| 13 | Explicit audit exclusions / non-claims | INCLUDED BELOW |
-| 14 | Statement distinguishing prior PR merge-commit CI from direct-SHA CI | INCLUDED BELOW; direct-SHA run on parent SHA passed, final-head run must be linked in external cover note |
+| 1 | Exact target SHA | Snapshot SHA above; final README-refresh SHA must be recorded externally |
+| 2 | Exact diff base | Recorded above |
+| 3 | Commit ledger | 13 commits through snapshot SHA listed below; final README-refresh commit recorded externally |
+| 4 | Diff summary | 8 files changed, 228 insertions, 8 deletions at snapshot SHA; see [GitHub compare](https://github.com/hamidyaghobi70-beep/infinyx/compare/7c3ea806c8541966a9bf13e2743060117c2402b6...3a583859a64fc61a2d4b899a905cf0f93ad3f3e6) |
+| 5 | Complete diff | Available as [GitHub unified diff](https://github.com/hamidyaghobi70-beep/infinyx/compare/7c3ea806c8541966a9bf13e2743060117c2402b6...3a583859a64fc61a2d4b899a905cf0f93ad3f3e6.diff) and [patch](https://github.com/hamidyaghobi70-beep/infinyx/compare/7c3ea806c8541966a9bf13e2743060117c2402b6...3a583859a64fc61a2d4b899a905cf0f93ad3f3e6.patch) |
+| 6 | Direct-SHA CI on final target | PENDING — prior run `43711326212` passed on prior target `6a98cff...`; a new run must be checked for the final README-refresh SHA |
+| 7 | Dependency audit artifact for final target | PENDING — prior artifact belongs to run `43711326212`, not the new final SHA |
+| 8 | Comparison against `main` | At snapshot SHA: 178 ahead / 1 behind; merge base `8500c4098372abb1c29f46ad518e7b87202bd403` |
+| 9 | Decision on behind commit | OPEN — `6eb55bd5b22aabd148b1fcb846c083752c49a8cc`, `docs(strategy): add INFINYX master vision and architecture v3.0`; do not cherry-pick without an explicit decision |
+| 10 | Capacity contract | `docs/agent-runtime-capacity.md` |
+| 11 | Requirement-to-test traceability | Included below |
+| 12 | Non-cooperative provider limitation | Included below |
+| 13 | Audit exclusions / non-claims | Included below |
+| 14 | DeepSeek independent review | NOT PERFORMED |
 
 ## Requirement-to-test traceability
 
@@ -38,16 +38,16 @@
 | Release after provider error | `releases all capacity slots after provider errors settle` in `test/agent/agent-runtime.test.ts` |
 | Caller AbortSignal propagation | `propagates caller AbortSignal to ModelPort` in `test/agent/agent-cancellation.test.ts` |
 | Cancellation before provider invocation | `does not invoke ModelPort when shutdown wins before the provider microtask` in `test/agent/agent-cancellation.test.ts` |
-| Capacity remains occupied after cancellation when provider ignores signal | `does not release capacity for a cancelled non-cooperative provider` in `test/agent/agent-cancellation.test.ts` |
+| Capacity retention for non-cooperative provider | `does not release capacity for a cancelled non-cooperative provider` in `test/agent/agent-cancellation.test.ts` |
 | Capacity release after late settlement | `releases capacity after timed-out providers eventually settle` and `keeps unresolved tasks in the active capacity until their providers settle` in `test/agent/agent-cancellation.test.ts` |
 
-## Explicit V1 operational limitation
+## Type contract refinement
+
+`AgentTaskResult` now uses `AgentCancellationExecutionState` for `cancelled` and `timed_out` results. This excludes `running` at the type level; those results can only be `unresolved` or `settled`. `AgentTaskRecord` continues to use the full `AgentExecutionState`, because a tracked task can legitimately be running.
+
+## V1 operational limitation
 
 A provider may ignore AbortSignal and return a Promise that never settles. Such a task continues to hold its runtime capacity slot indefinitely. If 32 such tasks are active/unresolved, new valid tasks are rejected with `CAPACITY_EXCEEDED`. V1 has no forced termination or independent hard cap for unresolved provider operations. AbortSignal is cooperative only.
-
-## Prior CI qualification
-
-The previously reported successful workflow run `43709839485` checked out a temporary PR merge commit (`f67de10`), not the target commit directly. It must not be described as direct-target-SHA CI. A later push-triggered run `43711220007` checked out parent SHA `ec1cc9bb3d6010851ee563b668459fce1ea5cdac` directly and passed on macOS, Windows, Ubuntu, and dependency audit. The final branch-head run after this ledger refresh must be recorded in the external audit cover note.
 
 ## Audit scope and exclusions
 
@@ -59,7 +59,7 @@ Unless separate evidence is added, this package does **not** claim to provide:
 - load, soak, fault-injection, or production-scale testing;
 - distributed/global concurrency enforcement across processes or runtime instances;
 - verification of deployment, release, or production configuration;
-- an independent DeepSeek audit (that review has not yet been performed).
+- an independent DeepSeek audit (not performed).
 
 ## Branch and release guardrails
 
@@ -68,17 +68,17 @@ Unless separate evidence is added, this package does **not** claim to provide:
 - Do not modify `main`.
 - Keep unresolved evidence items visibly marked as pending.
 
+## Exact commits after the starting SHA (snapshot through `3a583859...`)
 
-## Exact commits added after the starting SHA
-
-Base: `7c3ea806c8541966a9bf13e2743060117c2402b6`
-
-The following ten commits are the complete sequence from that base through parent SHA `ec1cc9bb3d6010851ee563b668459fce1ea5cdac` (newest first). The commit that refreshes this ledger is intentionally recorded in the external audit cover note to avoid a self-referential SHA.
+Newest first:
 
 | SHA | Commit message |
 |---|---|
-| `1094d24301c192f0e61c7fb56b98d514ecabad8e` | test(agent): preserve provider error and output validation cases |
+| `3a583859a64fc61a2d4b899a905cf0f93ad3f3e6` | fix(agent): align cancellation result state with runtime |
+| `a02dced57feb7fbdb9dd8731f87407865e634487` | types(agent): narrow cancellation execution states |
+| `6a98cffde48492c52f88413c0c3a592e8186eed0` | docs(agent): update audit evidence status for direct CI |
 | `ec1cc9bb3d6010851ee563b668459fce1ea5cdac` | docs(agent): finalize audit index and commit ledger |
+| `1094d24301c192f0e61c7fb56b98d514ecabad8e` | test(agent): preserve provider error and output validation cases |
 | `6095a1155b4c4526d79789ddc0751c309dd30f39` | docs(agent): record commit history and main comparison evidence |
 | `8e8db5ed92fa350541d769f9ff90dd4695fbe364` | ci: run direct verification on agent audit branch |
 | `864a5dc8b15b7c808df683168ef6e203c006417e` | docs(agent): add independent audit evidence checklist |
@@ -88,16 +88,15 @@ The following ten commits are the complete sequence from that base through paren
 | `a1993d2da5472802192106f13ad4103b309e1ee3` | docs(agent): clarify execution state semantics |
 | `93535c26e213ba5ef75f597cf96578b76973e943` | docs(agent): document cooperative ModelPort cancellation |
 
-## Current comparison against main
+The README refresh commit is intentionally excluded from its own ledger; record its exact SHA in the external audit cover note.
 
-At the comparison immediately before this ledger refresh:
+## Comparison against current `main` (snapshot SHA)
 
 - `main` SHA: `6eb55bd5b22aabd148b1fcb846c083752c49a8cc`
 - Merge base: `8500c4098372abb1c29f46ad518e7b87202bd403`
-- Branch head: `ec1cc9bb3d6010851ee563b668459fce1ea5cdac`
-- Branch ahead: 175 commits
+- Branch head: `3a583859a64fc61a2d4b899a905cf0f93ad3f3e6`
+- Branch ahead: 178 commits
 - Branch behind: 1 commit
 - The one commit on `main` not contained in the branch is `6eb55bd5b22aabd148b1fcb846c083752c49a8cc`, titled `docs(strategy): add INFINYX master vision and architecture v3.0`.
 
-For historical context, the same current `main` SHA compares to the earlier base `9302339b1e78bbc0220297644945f871571bd84f` as 160 ahead / 1 behind, and to the prior target `7c3ea806c8541966a9bf13e2743060117c2402b6` as 165 ahead / 1 behind. The ten commits listed above account for 165 → 175. The older reported value 154 cannot be reconstructed from the available historical main SHA; against the current main SHA, the same `9302339...` base is 160 ahead. The old 154 figure therefore remains historically unexplained rather than being attributed to these five or nine commits.
-
+Historical comparison against the same `main` SHA: base `9302339b1e78bbc0220297644945f871571bd84f` was 160 ahead / 1 behind; prior target `7c3ea806c8541966a9bf13e2743060117c2402b6` was 165 ahead / 1 behind. The earlier reported value 154 cannot be reconstructed from the available historical main SHA and is not attributed to these commits.
