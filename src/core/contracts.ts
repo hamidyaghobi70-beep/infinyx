@@ -184,6 +184,8 @@ export interface ProtectedOperationPort {
 
 export interface ModuleContext {
   readonly moduleId: string;
+  /** Aborted synchronously when CoreEngine shutdown begins. */
+  readonly shutdownSignal?: AbortSignal;
   readonly events: EventBusPort;
   readonly protectedOperations: ProtectedOperationPort;
   readonly memory?: MemoryPort;
