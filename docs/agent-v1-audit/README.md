@@ -6,8 +6,8 @@
 
 - Target branch: `integration/infinyx-agent-v1-audit-hardening`
 - Historical audited snapshot: `8b3fc777f322cfbe40c4a90caa9377ee26ac5e96` (the 22-commit ledger below describes this snapshot only).
-- Current PR branch head at this evidence refresh: `ba269ee0064c94c2074f884b6bb0f9f6c96a7d17`.
-- Current-head status: documentation and audit evidence are committed at `ba269ee0064c94c2074f884b6bb0f9f6c96a7d17`; CI run `43737155154` passed all four jobs (Ubuntu, macOS, Windows, and Dependency Security Audit).
+- Branch head immediately before this evidence-index refresh: `0184e385536a0977ab192157da01b155d6a6ffbc`.
+- CI evidence: run `43737155154` passed all four jobs on parent code/documentation head `ba269ee0064c94c2074f884b6bb0f9f6c96a7d17` (Ubuntu, macOS, Windows, and Dependency Security Audit). The evidence-index-only follow-up commit is not represented as having its own CI run.
 - Starting SHA and diff base: `7c3ea806c8541966a9bf13e2743060117c2402b6`
 - `main` SHA used for comparison: `6eb55bd5b22aabd148b1fcb846c083752c49a8cc`
 
@@ -20,9 +20,9 @@
 | 3 | Historical commit ledger | 22 commits from the recorded starting SHA through historical snapshot `8b3fc777...`; two subsequent F-01 remediation commits are listed in the current-head addendum below |
 | 4 | Current PR diff summary | 75 files changed, 11,857 insertions, 1 deletion (PR #38 at head `ba269ee...`); see [GitHub compare](https://github.com/hamidyaghobi70-beep/infinyx/compare/7c3ea806c8541966a9bf13e2743060117c2402b6...integration/infinyx-agent-v1-audit-hardening) |
 | 5 | Complete diff | Available as [GitHub unified diff](https://github.com/hamidyaghobi70-beep/infinyx/compare/7c3ea806c8541966a9bf13e2743060117c2402b6...integration/infinyx-agent-v1-audit-hardening.diff) and [patch](https://github.com/hamidyaghobi70-beep/infinyx/compare/7c3ea806c8541966a9bf13e2743060117c2402b6...integration/infinyx-agent-v1-audit-hardening.patch) |
-| 6 | CI on current code head before this docs refresh | PASS — run `43736818076` on `c870dea7...`; Windows, macOS, Ubuntu, and Dependency Security Audit all completed successfully: [workflow run](https://github.com/hamidyaghobi70-beep/infinyx/actions/runs/43736818076). A new run is expected for the documentation commits in this refresh. |
+| 6 | CI on latest verified parent head | PASS — run `43737155154` on `ba269ee0064c94c2074f884b6bb0f9f6c96a7d17`; Windows, macOS, Ubuntu, and Dependency Security Audit all completed successfully: [workflow run](https://github.com/hamidyaghobi70-beep/infinyx/actions/runs/43737155154). The subsequent evidence-index-only commit has no associated workflow run in the available run records. |
 | 7 | Dependency audit artifact on audited head | PRESENT — `dependency-security-audit`, artifact ID `14168508299`, attached to run `43732757337` |
-| 8 | Comparison against `main` | Current head `c870dea7...`: 192 ahead / 1 behind; merge base `8500c4098372abb1c29f46ad518e7b87202bd403` |
+| 8 | Comparison against `main` | Last verified comparison before evidence-index-only commits: 193 ahead / 1 behind; merge base `8500c4098372abb1c29f46ad518e7b87202bd403` |
 | 9 | Decision on behind commit | DEFERRED — `6eb55bd5b22aabd148b1fcb846c083752c49a8cc` adds only the independent strategy document; it is intentionally excluded from this Agent V1 PR |
 | 10 | Capacity contract | `docs/agent-runtime-capacity.md` |
 | 11 | Requirement-to-test traceability | Included below |
