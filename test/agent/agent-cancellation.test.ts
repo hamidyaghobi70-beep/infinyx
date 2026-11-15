@@ -85,4 +85,79 @@ describe("Agent cancellation and deadlines", () => {
     });
   });
 
+  it("releases capacity after timed-out providers eventually settle", async () => {
+    let release!: (value: string) => void;
+    const gate = new Promise<string>((resolve) => { release = resolve; });
+    let calls = 0;
+    const runtime = new AgentRuntime({
+      complete: () => (++calls <= 32 ? gate : Promise.resolve("capacity restored"))
+    });
+    runtime.start();
+    const pending = Array.from({ length: 32 }, (_, index) =>
+      runtime.execute({ taskId: `timeout-capacity-${index}`, prompt: "hold", timeoutMs: 5 })
+    );
+    const timedOut = await Promise.all(pending);
+    expect(timedOut.every((result) => result.status === "timed_out")).toBe(true);
+
+    await expect(runtime.execute({ taskId: "timeout-capacity-overflow", prompt: "extra" }))
+      .resolves.toMatchObject({ status: "rejected", code: "CAPACITY_EXCEEDED" });
+
+    release("late settlement");
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    await expect(runtime.execute({ taskId: "timeout-capacity-restored", prompt: "next" }))
+      .resolves.toMatchObject({ status: "completed", output: "capacity restored" });
+    await runtime.shutdown();
+  });
+
+  it("releases capacity after cancellation before provider invocation", async () => {
+    let providerCalls = 0;
+    const runtime = new AgentRuntime({
+      complete: async () => {
+        providerCalls += 1;
+        return "capacity restored";
+      }
+    });
+    runtime.start();
+    const pending = Array.from({ length: 32 }, (_, index) =>
+      runtime.execute({ taskId: `prestart-cancel-${index}`, prompt: "cancel before microtask" })
+    );
+
+    // Do not yield between admission and shutdown: no ModelPort call may start.
+    runtime.shutdown();
+    const results = await Promise.all(pending);
+    expect(results.every((result) =>
+      result.status === "cancelled" && result.executionState === "settled"
+    )).toBe(true);
+    expect(providerCalls).toBe(0);
+
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    runtime.start();
+    await expect(runtime.execute({ taskId: "prestart-capacity-restored", prompt: "next" }))
+      .resolves.toMatchObject({ status: "completed", output: "capacity restored" });
+    await runtime.shutdown();
+  });
+
+  it("keeps unresolved tasks in the active capacity until their providers settle", async () => {
+    let release!: (value: string) => void;
+    const gate = new Promise<string>((resolve) => { release = resolve; });
+    const runtime = new AgentRuntime({ complete: () => gate });
+    runtime.start();
+    const pending = Array.from({ length: 32 }, (_, index) =>
+      runtime.execute({ taskId: `unresolved-capacity-${index}`, prompt: "hold", timeoutMs: 5 })
+    );
+    const results = await Promise.all(pending);
+    expect(results.every((result) =>
+      result.status === "timed_out" && result.executionState === "unresolved"
+    )).toBe(true);
+
+    await expect(runtime.execute({ taskId: "unresolved-capacity-overflow", prompt: "extra" }))
+      .resolves.toMatchObject({ status: "rejected", code: "CAPACITY_EXCEEDED" });
+
+    release("providers settled");
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    await expect(runtime.execute({ taskId: "unresolved-capacity-restored", prompt: "next" }))
+      .resolves.toMatchObject({ status: "completed" });
+    await runtime.shutdown();
+  });
+
 });
