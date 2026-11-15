@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { AgentRuntime } from "../../src/agent/agent-runtime.js";
+import { MAX_ACTIVE_TASKS } from "../../src/agent/agent-contracts.js";
 import { DisabledModelPort, type ModelPort } from "../../src/agent/model-port.js";
 
 describe("AgentRuntime", () => {
@@ -67,4 +68,26 @@ describe("AgentRuntime", () => {
       .resolves.toMatchObject({ status: "error", code: "INVALID_MODEL_RESPONSE" });
     await runtime.shutdown();
   });
+  it("rejects tasks when the active task capacity is exhausted", async () => {
+    let release!: (value: string) => void;
+    const gate = new Promise<string>((resolve) => { release = resolve; });
+    const runtime = new AgentRuntime({ complete: () => gate });
+    runtime.start();
+
+    const active = Array.from({ length: MAX_ACTIVE_TASKS }, (_, index) =>
+      runtime.execute({ taskId: `capacity-${index}`, prompt: "hold" })
+    );
+    await Promise.resolve();
+
+    await expect(runtime.execute({ taskId: "capacity-overflow", prompt: "extra" }))
+      .resolves.toMatchObject({
+        status: "rejected",
+        reason: expect.stringContaining("active task limit")
+      });
+
+    release("released");
+    await expect(Promise.all(active)).resolves.toHaveLength(MAX_ACTIVE_TASKS);
+    await runtime.shutdown();
+  });
+
 });
