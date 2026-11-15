@@ -22,6 +22,32 @@ describe("Agent cancellation and deadlines", () => {
     await runtime.shutdown();
   });
 
+  it("returns settled cancellation without invoking ModelPort for a pre-aborted signal", async () => {
+    let providerCalls = 0;
+    const runtime = new AgentRuntime({
+      complete: async () => {
+        providerCalls += 1;
+        return "unexpected";
+      }
+    });
+    runtime.start();
+    const controller = new AbortController();
+    controller.abort();
+
+    await expect(runtime.execute({
+      taskId: "pre-aborted",
+      prompt: "must not invoke provider",
+      signal: controller.signal
+    })).resolves.toEqual({
+      status: "cancelled",
+      taskId: "pre-aborted",
+      executionState: "settled"
+    });
+    expect(providerCalls).toBe(0);
+    expect(runtime.getTaskStatus("pre-aborted")).toBeUndefined();
+    await runtime.shutdown();
+  });
+
   it("keeps a non-cooperative provider visibly unresolved after timeout", async () => {
     let release!: (value: string) => void;
     const gate = new Promise<string>((resolve) => { release = resolve; });
@@ -122,7 +148,7 @@ describe("Agent cancellation and deadlines", () => {
       });
 
     runtime.shutdown();
-    await Promise.all(rest);
+    await expect(Promise.all(rest)).resolves.toHaveLength(31);
   });
 
   it("releases capacity after timed-out providers eventually settle", async () => {
