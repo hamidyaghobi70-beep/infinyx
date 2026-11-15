@@ -5,10 +5,10 @@
 ## Target identity
 
 - Target branch: `integration/infinyx-agent-v1-audit-hardening`
-- Target SHA: `PENDING — record the resulting commit SHA after all changes are committed`
+- Target SHA: record the final branch head in the external audit cover note (this README is itself part of the target commit, so it cannot contain its own final SHA).
 - Starting SHA: `7c3ea806c8541966a9bf13e2743060117c2402b6`
 - Diff base SHA: `PENDING — select and record the exact base`
-- `main` SHA at comparison time: `PENDING — capture at audit time`
+- `main` SHA at comparison time: `6eb55bd5b22aabd148b1fcb846c083752c49a8cc`.
 
 ## Required evidence
 
@@ -16,13 +16,13 @@
 |---:|---|---|
 | 1 | Target SHA (not a temporary PR merge commit) | PENDING |
 | 2 | Exact diff-base SHA | PENDING |
-| 3 | Full `git log --oneline BASE..TARGET` output | PENDING — include every commit, not an assumed count |
+| 3 | Full `git log --oneline BASE..TARGET` output | The seven commits from the stated starting SHA are listed below; attach native `git log` output if required by auditor |
 | 4 | `git diff BASE..TARGET --stat` output | PENDING |
 | 5 | Complete `git diff BASE..TARGET` | PENDING |
 | 6 | Raw CI logs run directly against TARGET: macOS, Windows, Ubuntu, security audit | PENDING |
 | 7 | `npm audit --json` output from TARGET | PENDING |
-| 8 | Comparison against `main`: ahead/behind, merge-base, current main SHA, and exact behind commit | PENDING |
-| 9 | Decision on commit `6eb55bd5b22aabd148b1fcb846c083752c49a8cc` (reported documentation commit) | OPEN — do not assume it is included or required |
+| 8 | Comparison against `main`: ahead/behind, merge-base, current main SHA, and exact behind commit | Current comparison recorded below; behind commit decision remains OPEN |
+| 9 | Decision on commit `6eb55bd5b22aabd148b1fcb846c083752c49a8cc` (reported documentation commit) | OPEN — it is the one commit on `main` not contained in this branch; do not cherry-pick without an explicit decision |
 | 10 | Capacity contract at the exact target SHA | PENDING |
 | 11 | Requirement-to-test traceability table | PENDING |
 | 12 | V1 limitation statement: non-cooperative provider and no forced termination | INCLUDED IN `docs/agent-runtime-capacity.md`; verify at target SHA |
@@ -67,3 +67,33 @@ Unless separate evidence is added, this package does **not** claim to provide:
 - Do not release or deploy.
 - Do not modify `main`.
 - Keep unresolved evidence items visibly marked as pending.
+
+
+## Exact commits added after the starting SHA
+
+Base: `7c3ea806c8541966a9bf13e2743060117c2402b6`
+
+The following seven commits are the complete sequence from that base to the branch head at the time this section was prepared (newest first):
+
+| SHA | Commit message |
+|---|---|
+| `93535c26e213ba5ef75f597cf96578b76973e943` | docs(agent): document cooperative ModelPort cancellation |
+| `a1993d2da5472802192106f13ad4103b309e1ee3` | docs(agent): clarify execution state semantics |
+| `e6cf64fef79e2c545bc745c2b985a4c9c3593952` | test(agent): verify synchronous capacity reservation |
+| `e7300388ee8b8e6d3de55cc83a01adf1baf2e51c` | test(agent): retain capacity for non-cooperative providers |
+| `966ba9f2f453ea7b1dddff2782f4f46729c0cf80` | docs(agent): clarify execution state and capacity contract |
+| `864a5dc8b15b7c808df683168ef6e203c006417e` | docs(agent): add independent audit evidence checklist |
+| `8e8db5ed92fa350541d769f9ff90dd4695fbe364` | ci: run direct verification on agent audit branch |
+
+## Current comparison against main
+
+At comparison time:
+
+- `main` SHA: `6eb55bd5b22aabd148b1fcb846c083752c49a8cc`
+- Merge base: `8500c4098372abb1c29f46ad518e7b87202bd403`
+- Branch head used for this comparison: `8e8db5ed92fa350541d769f9ff90dd4695fbe364`
+- Branch ahead: 172 commits
+- Branch behind: 1 commit
+- The one commit on `main` not contained in the branch is `6eb55bd5b22aabd148b1fcb846c083752c49a8cc`, titled `docs(strategy): add INFINYX master vision and architecture v3.0`.
+
+For historical context, the same current `main` SHA compares to the earlier base `9302339b1e78bbc0220297644945f871571bd84f` as 160 ahead / 1 behind, and to the prior target `7c3ea806c8541966a9bf13e2743060117c2402b6` as 165 ahead / 1 behind. The seven commits listed above account for 165 → 172. The older reported value 154 cannot be reconstructed from the available historical main SHA; against the current main SHA, the same `9302339...` base is 160 ahead. The old 154 figure therefore remains historically unexplained rather than being attributed to these five or seven commits.
