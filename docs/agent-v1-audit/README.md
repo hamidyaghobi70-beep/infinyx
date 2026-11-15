@@ -73,27 +73,30 @@ Unless separate evidence is added, this package does **not** claim to provide:
 
 Base: `7c3ea806c8541966a9bf13e2743060117c2402b6`
 
-The following seven commits are the complete sequence from that base to the branch head at the time this section was prepared (newest first):
+The following nine commits are the complete sequence from that base through parent SHA `1094d24301c192f0e61c7fb56b98d514ecabad8e` (newest first). The commit that updates this ledger is intentionally recorded in the external audit cover note to avoid a self-referential SHA.
 
 | SHA | Commit message |
 |---|---|
-| `93535c26e213ba5ef75f597cf96578b76973e943` | docs(agent): document cooperative ModelPort cancellation |
-| `a1993d2da5472802192106f13ad4103b309e1ee3` | docs(agent): clarify execution state semantics |
-| `e6cf64fef79e2c545bc745c2b985a4c9c3593952` | test(agent): verify synchronous capacity reservation |
-| `e7300388ee8b8e6d3de55cc83a01adf1baf2e51c` | test(agent): retain capacity for non-cooperative providers |
-| `966ba9f2f453ea7b1dddff2782f4f46729c0cf80` | docs(agent): clarify execution state and capacity contract |
-| `864a5dc8b15b7c808df683168ef6e203c006417e` | docs(agent): add independent audit evidence checklist |
+| `1094d24301c192f0e61c7fb56b98d514ecabad8e` | test(agent): preserve provider error and output validation cases |
+| `6095a1155b4c4526d79789ddc0751c309dd30f39` | docs(agent): record commit history and main comparison evidence |
 | `8e8db5ed92fa350541d769f9ff90dd4695fbe364` | ci: run direct verification on agent audit branch |
+| `864a5dc8b15b7c808df683168ef6e203c006417e` | docs(agent): add independent audit evidence checklist |
+| `966ba9f2f453ea7b1dddff2782f4f46729c0cf80` | docs(agent): clarify execution state and capacity contract |
+| `e7300388ee8b8e6d3de55cc83a01adf1baf2e51c` | test(agent): retain capacity for non-cooperative providers |
+| `e6cf64fef79e2c545bc745c2b985a4c9c3593952` | test(agent): verify synchronous capacity reservation |
+| `a1993d2da5472802192106f13ad4103b309e1ee3` | docs(agent): clarify execution state semantics |
+| `93535c26e213ba5ef75f597cf96578b76973e943` | docs(agent): document cooperative ModelPort cancellation |
 
 ## Current comparison against main
 
-At comparison time:
+At the comparison immediately before this ledger refresh:
 
 - `main` SHA: `6eb55bd5b22aabd148b1fcb846c083752c49a8cc`
 - Merge base: `8500c4098372abb1c29f46ad518e7b87202bd403`
-- Branch head used for this comparison: `8e8db5ed92fa350541d769f9ff90dd4695fbe364`
-- Branch ahead: 172 commits
+- Branch head: `1094d24301c192f0e61c7fb56b98d514ecabad8e`
+- Branch ahead: 174 commits
 - Branch behind: 1 commit
 - The one commit on `main` not contained in the branch is `6eb55bd5b22aabd148b1fcb846c083752c49a8cc`, titled `docs(strategy): add INFINYX master vision and architecture v3.0`.
 
-For historical context, the same current `main` SHA compares to the earlier base `9302339b1e78bbc0220297644945f871571bd84f` as 160 ahead / 1 behind, and to the prior target `7c3ea806c8541966a9bf13e2743060117c2402b6` as 165 ahead / 1 behind. The seven commits listed above account for 165 → 172. The older reported value 154 cannot be reconstructed from the available historical main SHA; against the current main SHA, the same `9302339...` base is 160 ahead. The old 154 figure therefore remains historically unexplained rather than being attributed to these five or seven commits.
+For historical context, the same current `main` SHA compares to the earlier base `9302339b1e78bbc0220297644945f871571bd84f` as 160 ahead / 1 behind, and to the prior target `7c3ea806c8541966a9bf13e2743060117c2402b6` as 165 ahead / 1 behind. The nine commits listed above account for 165 → 174. The older reported value 154 cannot be reconstructed from the available historical main SHA; against the current main SHA, the same `9302339...` base is 160 ahead. The old 154 figure therefore remains historically unexplained rather than being attributed to these five or nine commits.
+
