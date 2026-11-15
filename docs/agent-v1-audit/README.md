@@ -17,8 +17,8 @@
 | 1 | Exact target SHA | Snapshot SHA above; final README-refresh SHA must be recorded externally |
 | 2 | Exact diff base | Recorded above |
 | 3 | Commit ledger | 15 commits through snapshot SHA listed below; final README-refresh commit recorded externally |
-| 4 | Diff summary | 8 files changed, 231 insertions, 8 deletions at snapshot SHA; see [GitHub compare](https://github.com/hamidyaghobi70-beep/infinyx/compare/7c3ea806c8541966a9bf13e2743060117c2402b6...3a583859a64fc61a2d4b899a905cf0f93ad3f3e6) |
-| 5 | Complete diff | Available as [GitHub unified diff](https://github.com/hamidyaghobi70-beep/infinyx/compare/7c3ea806c8541966a9bf13e2743060117c2402b6...3a583859a64fc61a2d4b899a905cf0f93ad3f3e6.diff) and [patch](https://github.com/hamidyaghobi70-beep/infinyx/compare/7c3ea806c8541966a9bf13e2743060117c2402b6...3a583859a64fc61a2d4b899a905cf0f93ad3f3e6.patch) |
+| 4 | Diff summary | 8 files changed, 231 insertions, 8 deletions at snapshot SHA; see [GitHub compare](https://github.com/hamidyaghobi70-beep/infinyx/compare/7c3ea806c8541966a9bf13e2743060117c2402b6...ed0af30110e3e5c9ec25f26b14b4f4b69e5b0b51) |
+| 5 | Complete diff | Available as [GitHub unified diff](https://github.com/hamidyaghobi70-beep/infinyx/compare/7c3ea806c8541966a9bf13e2743060117c2402b6...ed0af30110e3e5c9ec25f26b14b4f4b69e5b0b51.diff) and [patch](https://github.com/hamidyaghobi70-beep/infinyx/compare/7c3ea806c8541966a9bf13e2743060117c2402b6...ed0af30110e3e5c9ec25f26b14b4f4b69e5b0b51.patch) |
 | 6 | Direct-SHA CI on final target | PENDING — prior run `43711326212` passed on prior target `6a98cff...`; a new run must be checked for the final README-refresh SHA |
 | 7 | Dependency audit artifact for final target | PENDING — prior artifact belongs to run `43711326212`, not the new final SHA |
 | 8 | Comparison against `main` | At snapshot SHA: 180 ahead / 1 behind; merge base `8500c4098372abb1c29f46ad518e7b87202bd403` |
