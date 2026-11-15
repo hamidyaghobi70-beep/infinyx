@@ -54,6 +54,7 @@ export class AgentModule implements CoreModule {
 
   async stop(context: ModuleContext): Promise<void> {
     if (context.moduleId !== this.id) throw new Error("Agent module received an invalid Core context.");
+    this.shutdownSignal?.removeEventListener("abort", this.onCoreShutdown);
     this.runtime.shutdown();
     this.started = false;
   }
