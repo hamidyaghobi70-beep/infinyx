@@ -24,6 +24,12 @@ export class AgentModule implements CoreModule {
   private readonly runtime: AgentRuntime;
   private initialized = false;
   private started = false;
+  private shutdownSignal: AbortSignal | undefined;
+  private readonly onCoreShutdown = (): void => {
+    this.shutdownSignal?.removeEventListener("abort", this.onCoreShutdown);
+    this.runtime.shutdown();
+    this.started = false;
+  };
 
   constructor(options: AgentModuleOptions = {}) {
     this.runtime = new AgentRuntime(options.modelPort ?? new DisabledModelPort(), options.runtime);
@@ -33,10 +39,13 @@ export class AgentModule implements CoreModule {
     if (context.moduleId !== this.id) throw new Error("Agent module received an invalid Core context.");
     if (this.initialized) throw new Error("Agent module is already initialized.");
     this.initialized = true;
+    this.shutdownSignal = context.shutdownSignal;
+    if (this.shutdownSignal?.aborted) this.onCoreShutdown();
+    else this.shutdownSignal?.addEventListener("abort", this.onCoreShutdown, { once: true });
   }
 
   async start(context: ModuleContext): Promise<void> {
-    if (context.moduleId !== this.id || !this.initialized || this.started) {
+    if (context.moduleId !== this.id || !this.initialized || this.started || context.shutdownSignal?.aborted) {
       throw new Error("Agent module lifecycle is invalid.");
     }
     this.runtime.start();
