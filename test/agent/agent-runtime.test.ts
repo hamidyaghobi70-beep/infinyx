@@ -82,11 +82,50 @@ describe("AgentRuntime", () => {
     await expect(runtime.execute({ taskId: "capacity-overflow", prompt: "extra" }))
       .resolves.toMatchObject({
         status: "rejected",
-        reason: expect.stringContaining("active task limit")
+        reason: expect.stringContaining("active task limit"),
+        code: "CAPACITY_EXCEEDED"
       });
 
     release("released");
     await expect(Promise.all(active)).resolves.toHaveLength(MAX_ACTIVE_TASKS);
+    await runtime.shutdown();
+  });
+
+  it("releases all capacity slots after successful provider settlement", async () => {
+    let release!: (value: string) => void;
+    const gate = new Promise<string>((resolve) => { release = resolve; });
+    let calls = 0;
+    const runtime = new AgentRuntime({
+      complete: () => (++calls <= MAX_ACTIVE_TASKS ? gate : Promise.resolve("capacity restored"))
+    });
+    runtime.start();
+    const active = Array.from({ length: MAX_ACTIVE_TASKS }, (_, index) =>
+      runtime.execute({ taskId: `success-release-${index}`, prompt: "hold" })
+    );
+    await Promise.resolve();
+    release("done");
+    await Promise.all(active);
+    await expect(runtime.execute({ taskId: "success-after-release", prompt: "next" }))
+      .resolves.toMatchObject({ status: "completed", output: "capacity restored" });
+    await runtime.shutdown();
+  });
+
+  it("releases all capacity slots after provider errors settle", async () => {
+    let fail!: (reason: Error) => void;
+    const gate = new Promise<string>((_resolve, reject) => { fail = reject; });
+    let calls = 0;
+    const runtime = new AgentRuntime({
+      complete: () => (++calls <= MAX_ACTIVE_TASKS ? gate : Promise.resolve("capacity restored"))
+    });
+    runtime.start();
+    const active = Array.from({ length: MAX_ACTIVE_TASKS }, (_, index) =>
+      runtime.execute({ taskId: `error-release-${index}`, prompt: "hold" })
+    );
+    await Promise.resolve();
+    fail(new Error("provider failure"));
+    await Promise.all(active);
+    await expect(runtime.execute({ taskId: "error-after-release", prompt: "next" }))
+      .resolves.toMatchObject({ status: "completed", output: "capacity restored" });
     await runtime.shutdown();
   });
 
