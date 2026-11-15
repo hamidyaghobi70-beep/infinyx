@@ -6,6 +6,18 @@ export type AgentTaskStatus =
   | "rejected"
   | "error";
 
+/**
+ * Describes the runtime's tracking state, not merely the caller-visible result.
+ *
+ * - "running": the provider promise is pending and no early cancellation or
+ *   timeout result has been returned.
+ * - "unresolved": cancellation or timeout has been returned to the caller,
+ *   but the provider promise is still pending and continues to hold capacity.
+ * - "settled": the provider promise has settled, or provider invocation was
+ *   skipped because cancellation/shutdown won before the provider microtask.
+ *
+ * "settled" therefore does not by itself prove that a provider call began.
+ */
 export type AgentExecutionState = "running" | "unresolved" | "settled";
 
 export interface AgentTaskRequest {
