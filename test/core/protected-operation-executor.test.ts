@@ -439,4 +439,127 @@ describe("ProtectedOperationExecutor", () => {
   });
 
 
+
+
+  it("passes the exact input snapshot that was validated before asynchronous policy evaluation", async () => {
+    let release!: (decision: PolicyDecision) => void;
+    let observedInput: { readonly value: string } | undefined;
+    let validatedInput: unknown;
+    const engine = new CoreEngine({
+      policy: {
+        evaluate: () => new Promise<PolicyDecision>((resolve) => { release = resolve; })
+      }
+    });
+    const handler = vi.fn(async (input: { readonly value: string }) => {
+      observedInput = input;
+      return input.value;
+    });
+    const operation = engine.registerProtectedOperation({
+      id: "records.input-snapshot",
+      action: "record.read",
+      resource: "record:input-snapshot",
+      validateInput: (value: unknown): value is { readonly value: string } => {
+        validatedInput = value;
+        return isRecordInput(value);
+      },
+      handler
+    });
+    await ensureStarted(engine);
+
+    const callerInput = { value: "validated-value" };
+    const pending = engine.protectedOperations.execute(operation, { actorId: "input-snapshot" }, callerInput);
+    await Promise.resolve();
+    callerInput.value = "mutated-after-validation";
+    release(allow);
+
+    expect(await pending).toEqual({ status: "executed", value: "validated-value" });
+    expect(observedInput).toEqual({ value: "validated-value" });
+    expect(observedInput).not.toBe(callerInput);
+    expect(observedInput).toBe(validatedInput);
+    expect(handler).toHaveBeenCalledTimes(1);
+  });
+
+  it("snapshots ordinary arrays with multiple indices", async () => {
+    const engine = new CoreEngine({ policy: { evaluate: async () => allow } });
+    const handler = vi.fn(async (input: unknown[]) => input.join(","));
+    const operation = engine.registerProtectedOperation({
+      id: "records.array-snapshot",
+      action: "record.read",
+      resource: "record:array",
+      validateInput: (value: unknown): value is unknown[] => Array.isArray(value),
+      handler
+    });
+    await ensureStarted(engine);
+    const result = await engine.protectedOperations.execute(operation, { actorId: "array" }, ["a", "b"]);
+    expect(result).toEqual({ status: "executed", value: "a,b" });
+    expect(handler).toHaveBeenCalledTimes(1);
+  });
+
+  it("rejects sparse protected-operation input arrays before policy evaluation", async () => {
+    const evaluator = vi.fn(async () => allow);
+    const engine = new CoreEngine({ policy: { evaluate: evaluator } });
+    const handler = vi.fn(async (input: unknown[]) => input.length);
+    const operation = engine.registerProtectedOperation({
+      id: "records.sparse-array",
+      action: "record.read",
+      resource: "record:sparse-array",
+      validateInput: (value: unknown): value is unknown[] => Array.isArray(value),
+      handler
+    });
+    await ensureStarted(engine);
+    const sparse = new Array(2);
+    sparse[1] = "present";
+    const result = await engine.protectedOperations.execute(operation, { actorId: "sparse" }, sparse);
+    expect(result).toMatchObject({ status: "denied" });
+    expect(evaluator).not.toHaveBeenCalled();
+    expect(handler).not.toHaveBeenCalled();
+  });
+
+  it("preserves an own __proto__ data property without changing the snapshot prototype", async () => {
+    const engine = new CoreEngine({ policy: { evaluate: async () => allow } });
+    let observed: Record<string, unknown> | undefined;
+    const operation = engine.registerProtectedOperation({
+      id: "records.proto-key",
+      action: "record.read",
+      resource: "record:proto-key",
+      validateInput: (value: unknown): value is Record<string, unknown> =>
+        typeof value === "object" && value !== null && Object.hasOwn(value, "__proto__"),
+      handler: (input) => { observed = input; return "ok"; }
+    });
+    await ensureStarted(engine);
+    const input = Object.defineProperty({}, "__proto__", {
+      value: { polluted: true }, enumerable: true, configurable: true, writable: true
+    });
+    const result = await engine.protectedOperations.execute(operation, { actorId: "proto-key" }, input);
+    expect(result).toEqual({ status: "executed", value: "ok" });
+    expect(observed).not.toBe(input);
+    expect(Object.getPrototypeOf(observed)).toBe(Object.prototype);
+    expect(Object.hasOwn(observed, "__proto__")).toBe(true);
+    expect((observed?.["__proto__"] as { polluted: boolean }).polluted).toBe(true);
+  });
+
+  it("rejects accessor input properties without invoking their getter", async () => {
+    const evaluator = vi.fn(async () => allow);
+    const engine = new CoreEngine({ policy: { evaluate: evaluator } });
+    const handler = vi.fn(async () => "should-not-run");
+    const operation = engine.registerProtectedOperation({
+      id: "records.accessor",
+      action: "record.read",
+      resource: "record:accessor",
+      validateInput: (_value: unknown): _value is object => true,
+      handler
+    });
+    await ensureStarted(engine);
+    let getterCalls = 0;
+    const input = Object.defineProperty({}, "value", {
+      enumerable: true,
+      get() { getterCalls += 1; return "unsafe"; }
+    });
+    const result = await engine.protectedOperations.execute(operation, { actorId: "accessor" }, input);
+    expect(result).toMatchObject({ status: "denied" });
+    expect(getterCalls).toBe(0);
+    expect(evaluator).not.toHaveBeenCalled();
+    expect(handler).not.toHaveBeenCalled();
+  });
+
 });
