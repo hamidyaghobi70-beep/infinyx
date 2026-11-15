@@ -53,13 +53,42 @@ describe("AgentRuntime", () => {
     await runtime.shutdown();
   });
 
-  it("reports provider errors without leaking exception details", async () => {
-    const runtime = new AgentRuntime({ complete: async () => { throw new Error("secret endpoint"); } });
+  it("redacts a unique provider error marker from task status", async () => {
+    const secret = "SENTINEL_LEAK_MARKER_12345";
+    const runtime = new AgentRuntime({ complete: async () => { throw new Error(secret); } });
     runtime.start();
     await expect(runtime.execute({ taskId: "provider-error", prompt: "hello" }))
       .resolves.toEqual({ status: "error", taskId: "provider-error", code: "MODEL_PROVIDER_ERROR" });
-    expect(runtime.getTaskStatus("provider-error")?.reason).toBe("Model provider failed.");
-    expect(runtime.getTaskStatus("provider-error")?.reason).not.toContain("secret endpoint");
+    const status = runtime.getTaskStatus("provider-error");
+    expect(status?.reason).toBe("Model provider failed.");
+    expect(JSON.stringify(status)).not.toContain(secret);
+    await runtime.shutdown();
+  });
+
+  it("keeps provider error details redacted when the provider rejects after timeout", async () => {
+    const secret = "LATE_PROVIDER_SECRET_MARKER_67890";
+    let rejectProvider!: (reason: Error) => void;
+    let providerStarted!: () => void;
+    const started = new Promise<void>((resolve) => { providerStarted = resolve; });
+    const runtime = new AgentRuntime({
+      complete: () => {
+        providerStarted();
+        return new Promise<string>((_resolve, reject) => { rejectProvider = reject; });
+      }
+    });
+    runtime.start();
+    const execution = runtime.execute({ taskId: "late-provider-error", prompt: "hello", timeoutMs: 10 });
+    await started;
+    await expect(execution).resolves.toMatchObject({
+      status: "timed_out", taskId: "late-provider-error", executionState: "unresolved"
+    });
+    rejectProvider(new Error(secret));
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    const status = runtime.getTaskStatus("late-provider-error");
+    expect(status?.status).toBe("timed_out");
+    expect(status?.executionState).toBe("settled");
+    expect(status?.reason).toBe("Task deadline elapsed.");
+    expect(JSON.stringify(status)).not.toContain(secret);
     await runtime.shutdown();
   });
 
