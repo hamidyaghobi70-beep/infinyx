@@ -58,6 +58,8 @@ describe("AgentRuntime", () => {
     runtime.start();
     await expect(runtime.execute({ taskId: "provider-error", prompt: "hello" }))
       .resolves.toEqual({ status: "error", taskId: "provider-error", code: "MODEL_PROVIDER_ERROR" });
+    expect(runtime.getTaskStatus("provider-error")?.reason).toBe("Model provider failed.");
+    expect(runtime.getTaskStatus("provider-error")?.reason).not.toContain("secret endpoint");
     await runtime.shutdown();
   });
 
