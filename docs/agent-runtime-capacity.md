@@ -29,7 +29,7 @@ The runtime removes a task from its active map when its provider promise settles
 
 ## Operational limitation
 
-There is no separate hard cap or forced termination mechanism for unresolved provider work. `AbortSignal` is cooperative. A non-cooperative provider can keep slots occupied indefinitely; at 32 unresolved tasks, the runtime applies backpressure by rejecting all additional tasks. Agent V1 does not enable a real provider by default: `DisabledModelPort` remains the default implementation. This capacity contract is process-local and per runtime instance; it is not a distributed/global concurrency limit.
+There is no separate hard cap or forced termination mechanism for unresolved provider work. `AbortSignal` is cooperative. A non-cooperative provider can keep slots occupied indefinitely; at 32 unresolved tasks, the runtime applies backpressure by rejecting all additional tasks. Agent V1 does not enable a real provider by default: `DisabledModelPort` remains the default implementation. This capacity contract is process-local and per runtime instance; it is not a distributed/global concurrency limit. During `shutdown()`, admission stops and active tasks are aborted, but a non-cooperative provider promise is not forcibly terminated. If such a promise remains unsettled, its task remains in the active map after shutdown. A subsequent `start()` on the same runtime instance fails while unresolved tasks remain; it can succeed only after those provider promises settle and the active entries are removed, or after the process/runtime instance is replaced. Forced termination and automatic reclamation of non-cooperative provider work are outside the V1 contract.
 
 ## Regression coverage
 
