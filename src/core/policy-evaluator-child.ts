@@ -73,10 +73,8 @@ async function execute(message: EvaluateMessage): Promise<void> {
     );
     sendFinal({ type: "result", decision });
   } catch (error) {
-    sendFinal({
-      type: "error",
-      message: error instanceof Error ? error.message : "Policy evaluator failed."
-    });
+    // Do not forward evaluator exception details across the process boundary.
+    sendFinal({ type: "error" });
   }
 }
 
