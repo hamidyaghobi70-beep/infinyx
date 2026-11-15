@@ -439,4 +439,39 @@ describe("ProtectedOperationExecutor", () => {
   });
 
 
+
+
+  it("passes the exact input snapshot that was validated before asynchronous policy evaluation", async () => {
+    let release!: (decision: PolicyDecision) => void;
+    let observedInput: { readonly value: string } | undefined;
+    const engine = new CoreEngine({
+      policy: {
+        evaluate: () => new Promise<PolicyDecision>((resolve) => { release = resolve; })
+      }
+    });
+    const handler = vi.fn(async (input: { readonly value: string }) => {
+      observedInput = input;
+      return input.value;
+    });
+    const operation = engine.registerProtectedOperation({
+      id: "records.input-snapshot",
+      action: "record.read",
+      resource: "record:input-snapshot",
+      validateInput: isRecordInput,
+      handler
+    });
+    await ensureStarted(engine);
+
+    const callerInput = { value: "validated-value" };
+    const pending = engine.protectedOperations.execute(operation, { actorId: "input-snapshot" }, callerInput);
+    await Promise.resolve();
+    callerInput.value = "mutated-after-validation";
+    release(allow);
+
+    expect(await pending).toEqual({ status: "executed", value: "validated-value" });
+    expect(observedInput).toEqual({ value: "validated-value" });
+    expect(observedInput).not.toBe(callerInput);
+    expect(handler).toHaveBeenCalledTimes(1);
+  });
+
 });
