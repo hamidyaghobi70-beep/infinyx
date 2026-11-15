@@ -36,4 +36,30 @@ describe("Agent CoreModule lifecycle", () => {
     await expect(agent.execute({ taskId: "after-shutdown", prompt: "hello" }))
       .resolves.toMatchObject({ status: "rejected" });
   });
+
+  it("requests cooperative cancellation of in-flight work when Core shutdown begins", async () => {
+    let release!: (value: string) => void;
+    const gate = new Promise<string>((resolve) => { release = resolve; });
+    const core = new CoreEngine();
+    const agent = new AgentModule({ modelPort: { complete: () => gate } });
+    core.register(agent);
+    await core.initialize();
+    await core.start();
+
+    const pending = agent.execute({ taskId: "in-flight", prompt: "hello" });
+    await Promise.resolve();
+    const stopping = core.stop();
+    await expect(pending).resolves.toMatchObject({ status: "cancelled", executionState: "unresolved" });
+    await stopping;
+    expect(agent.getTaskStatus("in-flight")).toMatchObject({
+      status: "cancelled", executionState: "unresolved"
+    });
+
+    release("late provider response");
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(agent.getTaskStatus("in-flight")).toMatchObject({
+      status: "cancelled", executionState: "settled"
+    });
+  });
 });
