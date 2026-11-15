@@ -59,6 +59,50 @@ function cloneContextValue(value: unknown, ancestors: WeakSet<object>): unknown 
   }
 }
 
+/** Snapshot supported operation input data without invoking accessors. */
+function cloneProtectedInputValue(value: unknown, ancestors: WeakSet<object>): unknown {
+  if (value === undefined || value === null ||
+    typeof value === "string" || typeof value === "boolean") return value;
+  if (typeof value === "number" && Number.isFinite(value)) return value;
+  if (typeof value !== "object") throw new TypeError("Protected operation input is not cloneable.");
+  if (ancestors.has(value)) throw new TypeError("Protected operation input cycles are not supported.");
+  ancestors.add(value);
+  try {
+    if (Array.isArray(value)) {
+      if (Object.getOwnPropertySymbols(value).length) throw new TypeError("Protected operation input symbol keys are not supported.");
+      const result: unknown[] = new Array(value.length);
+      for (const key of Object.keys(value)) {
+        if (!/^(0|[1-9]\\d*)$/.test(key) || Number(key) >= value.length) {
+          throw new TypeError("Protected operation input arrays cannot have custom properties.");
+        }
+        const descriptor = Object.getOwnPropertyDescriptor(value, key);
+        if (!descriptor || !("value" in descriptor) || !descriptor.enumerable) {
+          throw new TypeError("Protected operation input accessors are not supported.");
+        }
+        result[Number(key)] = cloneProtectedInputValue(descriptor.value, ancestors);
+      }
+      return result;
+    }
+    if (!isPlainRecord(value)) throw new TypeError("Protected operation input must contain only plain records and arrays.");
+    if (Object.getOwnPropertySymbols(value).length) throw new TypeError("Protected operation input symbol keys are not supported.");
+    const result: Record<string, unknown> = Object.create(Object.getPrototypeOf(value)) as Record<string, unknown>;
+    for (const key of Object.keys(value)) {
+      const descriptor = Object.getOwnPropertyDescriptor(value, key);
+      if (!descriptor || !("value" in descriptor) || !descriptor.enumerable) {
+        throw new TypeError("Protected operation input accessors and hidden properties are not supported.");
+      }
+      result[key] = cloneProtectedInputValue(descriptor.value, ancestors);
+    }
+    return result;
+  } finally {
+    ancestors.delete(value);
+  }
+}
+
+function snapshotProtectedInput(value: unknown): unknown {
+  return cloneProtectedInputValue(value, new WeakSet<object>());
+}
+
 function deepFreeze<T>(value: T): T {
   if (typeof value !== "object" || value === null || Object.isFrozen(value)) return value;
   for (const key of Reflect.ownKeys(value)) {
@@ -144,8 +188,14 @@ export class ProtectedOperationExecutor implements ProtectedOperationPort {
     };
     if (!isValidPolicyRequest(policyRequestCandidate)) return this.denied("Protected operation caller request is invalid.");
 
+    let inputSnapshot: TInput;
     try {
-      if (!registration.validateInput(input)) return this.denied("Protected operation input is invalid.");
+      inputSnapshot = snapshotProtectedInput(input) as TInput;
+    } catch {
+      return this.denied("Protected operation input is invalid or non-cloneable.");
+    }
+    try {
+      if (!registration.validateInput(inputSnapshot)) return this.denied("Protected operation input is invalid.");
     } catch {
       return this.denied("Protected operation input validation failed.");
     }
@@ -198,7 +248,7 @@ export class ProtectedOperationExecutor implements ProtectedOperationPort {
       if (decision.effect !== "allow") return this.denied(decision.reason);
       if (!this.isCoreReady()) return this.denied("Core Engine is stopping; protected operation denied.");
 
-      const value = await registration.handler(input, Object.freeze({
+      const value = await registration.handler(inputSnapshot, Object.freeze({
         operationId: registration.id, signal: operationController.signal
       }));
       return { status: "executed", value };
