@@ -70,9 +70,11 @@ function cloneProtectedInputValue(value: unknown, ancestors: WeakSet<object>): u
   try {
     if (Array.isArray(value)) {
       const result: unknown[] = new Array(value.length);
+      let indexCount = 0;
       for (const key of Reflect.ownKeys(value)) {
         if (key === "length") continue;
-        if (typeof key !== "string" || !/^(0|[1-9]\\d*)$/.test(key) || Number(key) >= value.length) {
+        if (typeof key !== "string" || !/^(0|[1-9]\d*)$/.test(key) ||
+          !Number.isSafeInteger(Number(key)) || Number(key) >= value.length) {
           throw new TypeError("Protected operation input arrays cannot have custom properties.");
         }
         const descriptor = Object.getOwnPropertyDescriptor(value, key);
@@ -80,6 +82,10 @@ function cloneProtectedInputValue(value: unknown, ancestors: WeakSet<object>): u
           throw new TypeError("Protected operation input accessors and hidden properties are not supported.");
         }
         result[Number(key)] = cloneProtectedInputValue(descriptor.value, ancestors);
+        indexCount += 1;
+      }
+      if (indexCount !== value.length) {
+        throw new TypeError("Sparse protected operation input arrays are not supported.");
       }
       return result;
     }
@@ -91,7 +97,12 @@ function cloneProtectedInputValue(value: unknown, ancestors: WeakSet<object>): u
       if (!descriptor || !("value" in descriptor) || !descriptor.enumerable) {
         throw new TypeError("Protected operation input accessors and hidden properties are not supported.");
       }
-      result[key] = cloneProtectedInputValue(descriptor.value, ancestors);
+      Object.defineProperty(result, key, {
+        value: cloneProtectedInputValue(descriptor.value, ancestors),
+        enumerable: true,
+        configurable: true,
+        writable: true
+      });
     }
     return result;
   } finally {
