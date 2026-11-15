@@ -1,5 +1,6 @@
 import type {
   PolicyEngine,
+  PolicyEvaluationOptions,
   PolicyRequest,
   ProtectedOperationCaller,
   ProtectedOperationContext,
@@ -113,7 +114,7 @@ export class ProtectedOperationExecutor implements ProtectedOperationPort {
     operation: ProtectedOperationHandle<TInput, TOutput>,
     caller: ProtectedOperationCaller,
     input: TInput,
-    options?: { readonly signal?: AbortSignal }
+    options?: PolicyEvaluationOptions
   ): Promise<ProtectedOperationResult<TOutput>> {
     if (!this.isCoreReady()) return this.denied("Core Engine is not running; protected operation denied.");
     const registration = operation && typeof operation === "object"
@@ -150,7 +151,10 @@ export class ProtectedOperationExecutor implements ProtectedOperationPort {
     }
 
     const callerSignal = options?.signal;
-    if (callerSignal?.aborted) return this.denied("Protected operation was cancelled before authorization.");
+    const parentSignal = options?.parentSignal;
+    if (callerSignal?.aborted || parentSignal?.aborted) {
+      return this.denied("Protected operation was cancelled before authorization.");
+    }
 
     let used = this.usedRequests.get(operation as object);
     if (!used) { used = new WeakSet<object>(); this.usedRequests.set(operation as object, used); }
@@ -160,10 +164,16 @@ export class ProtectedOperationExecutor implements ProtectedOperationPort {
 
     const operationController = new AbortController();
     let callerAbortListener: (() => void) | undefined;
+    let parentAbortListener: (() => void) | undefined;
     if (callerSignal) {
       callerAbortListener = () => operationController.abort();
       callerSignal.addEventListener("abort", callerAbortListener, { once: true });
       if (callerSignal.aborted) operationController.abort();
+    }
+    if (parentSignal) {
+      parentAbortListener = () => operationController.abort();
+      parentSignal.addEventListener("abort", parentAbortListener, { once: true });
+      if (parentSignal.aborted) operationController.abort();
     }
 
     try {
@@ -172,7 +182,10 @@ export class ProtectedOperationExecutor implements ProtectedOperationPort {
 
       let decision: unknown;
       try {
-        decision = await this.policy.evaluate(policyRequestCandidate, { signal: operationController.signal });
+        decision = await this.policy.evaluate(policyRequestCandidate, {
+          signal: operationController.signal,
+          ...(options?.deadlineAt === undefined ? {} : { deadlineAt: options.deadlineAt })
+        });
       } catch {
         return this.denied("Policy evaluation failed; protected operation denied.");
       }
@@ -193,6 +206,7 @@ export class ProtectedOperationExecutor implements ProtectedOperationPort {
       return { status: "failed", reason: "Protected operation handler failed." };
     } finally {
       if (callerSignal && callerAbortListener) callerSignal.removeEventListener("abort", callerAbortListener);
+      if (parentSignal && parentAbortListener) parentSignal.removeEventListener("abort", parentAbortListener);
     }
   }
 

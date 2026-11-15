@@ -240,3 +240,114 @@ describe("CoreEngine", () => {
       .toThrow(/only be registered before initialization/);
   });
 });
+
+
+describe("multi-level dependency cleanup retry", () => {
+  it("preserves dependencies after a leaf cleanup failure and retries in dependent-first order", async () => {
+    const engine = new CoreEngine();
+    const calls: string[] = [];
+    let leafAttempts = 0;
+
+    engine.register({
+      id: "foundation",
+      version: "1.0.0",
+      stop: () => { calls.push("foundation"); }
+    });
+    engine.register({
+      id: "service",
+      version: "1.0.0",
+      dependencies: ["foundation"],
+      stop: () => { calls.push("service"); }
+    });
+    engine.register({
+      id: "worker",
+      version: "1.0.0",
+      dependencies: ["service"],
+      stop: () => {
+        leafAttempts += 1;
+        calls.push("worker:" + leafAttempts);
+        if (leafAttempts === 1) throw new Error("temporary leaf cleanup failure");
+      }
+    });
+
+    await engine.initialize();
+    await expect(engine.stop()).rejects.toThrow(/failed to stop/i);
+
+    // A failed dependent blocks cleanup of every dependency below it.
+    expect(calls).toEqual(["worker:1"]);
+    expect(engine.getModuleStates().get("foundation")).toBe("initialized");
+    expect(engine.getModuleStates().get("service")).toBe("initialized");
+    expect(engine.getModuleStates().get("worker")).toBe("failed");
+
+    // Retry starts at the failed leaf, then proceeds toward its dependencies.
+    await engine.stop();
+    expect(calls).toEqual(["worker:1", "worker:2", "service", "foundation"]);
+    expect(engine.getModuleStates().get("worker")).toBe("stopped");
+    expect(engine.getModuleStates().get("service")).toBe("stopped");
+    expect(engine.getModuleStates().get("foundation")).toBe("stopped");
+    expect(engine.state).toBe("stopped");
+
+    // A further stop is idempotent; successful cleanup hooks never rerun.
+    await engine.stop();
+    expect(calls).toEqual(["worker:1", "worker:2", "service", "foundation"]);
+  });
+});
+
+
+describe("CoreEngine guarded memory composition", () => {
+  it("rejects a raw MemoryPort supplied as a module memory capability", async () => {
+    const { InMemoryMemoryStore } = await import("../../src/core/in-memory-memory-store.js");
+    const raw = new InMemoryMemoryStore();
+    const engine = new CoreEngine({
+      memory: (() => raw) as unknown as (moduleId: string) => import("../../src/core/guarded-memory-port.js").GuardedMemoryPort
+    });
+    engine.register({
+      id: "worker",
+      version: "1.0.0",
+      initialize: () => undefined
+    });
+
+    await expect(engine.initialize()).rejects.toMatchObject({
+      code: "MODULE_INITIALIZATION_FAILED",
+      cause: expect.objectContaining({ code: "INVALID_MEMORY_CAPABILITY" })
+    });
+  });
+
+  it("creates and reuses a guarded memory capability bound to each module", async () => {
+    const { GuardedMemoryPort } = await import("../../src/core/guarded-memory-port.js");
+    const { InMemoryMemoryStore } = await import("../../src/core/in-memory-memory-store.js");
+    const { DefaultDenyPolicyEngine } = await import("../../src/core/default-policy-engine.js");
+    const store = new InMemoryMemoryStore();
+    const audit = { publishDecision: async () => true, publishFailure: async () => undefined };
+    const issued: string[] = [];
+    const engine = new CoreEngine({
+      memory: (moduleId) => {
+        issued.push(moduleId);
+        return new GuardedMemoryPort({
+          store,
+          policy: new DefaultDenyPolicyEngine(),
+          audit,
+          scope: { tenantId: "tenant", actorId: "actor", moduleId }
+        });
+      }
+    });
+    let first: unknown;
+    let second: unknown;
+    engine.register({
+      id: "alpha",
+      version: "1.0.0",
+      initialize: (context) => { first = context.memory; }
+    });
+    engine.register({
+      id: "beta",
+      version: "1.0.0",
+      initialize: (context) => { second = context.memory; }
+    });
+
+    await engine.initialize();
+    expect(issued).toEqual(["alpha", "beta"]);
+    expect(first).toBeInstanceOf(GuardedMemoryPort);
+    expect(second).toBeInstanceOf(GuardedMemoryPort);
+    expect(first).not.toBe(second);
+  });
+});
