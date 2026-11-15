@@ -169,7 +169,11 @@ export class AgentRuntime {
       record.executionState = executionState;
       record.reason = reason;
       if (providerSettled) record.finishedAt = Date.now();
-      resolveEarly({ status, taskId, executionState });
+      if (status === "cancelled") {
+        resolveEarly({ status: "cancelled", taskId, executionState });
+      } else {
+        resolveEarly({ status: "timed_out", taskId, executionState });
+      }
     };
 
     const controllerAbort = (): void => {
