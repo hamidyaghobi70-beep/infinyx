@@ -5,6 +5,7 @@ import {
   MAX_AGENT_TIMEOUT_MS,
   MAX_ACTIVE_TASKS,
   MAX_TRACKED_TASKS,
+  type AgentCancellationExecutionState,
   type AgentExecutionState,
   type AgentRuntimeOptions,
   type AgentTaskRecord,
@@ -164,10 +165,11 @@ export class AgentRuntime {
     const settleEarly = (status: "cancelled" | "timed_out", reason: string): void => {
       if (record.status !== "running") return;
       record.status = status;
-      record.executionState = providerSettled ? "settled" : "unresolved";
+      const executionState: AgentCancellationExecutionState = providerSettled ? "settled" : "unresolved";
+      record.executionState = executionState;
       record.reason = reason;
       if (providerSettled) record.finishedAt = Date.now();
-      resolveEarly({ status, taskId, executionState: record.executionState });
+      resolveEarly({ status, taskId, executionState });
     };
 
     const controllerAbort = (): void => {
