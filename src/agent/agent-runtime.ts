@@ -3,6 +3,7 @@ import {
   MAX_AGENT_OUTPUT_LENGTH,
   MAX_AGENT_PROMPT_LENGTH,
   MAX_AGENT_TIMEOUT_MS,
+  MAX_ACTIVE_TASKS,
   MAX_TRACKED_TASKS,
   type AgentExecutionState,
   type AgentRuntimeOptions,
@@ -141,6 +142,9 @@ export class AgentRuntime {
     if (signal?.aborted) {
       return { status: "cancelled", taskId, executionState: "settled" };
     }
+    if (this.active.size >= MAX_ACTIVE_TASKS) {
+      return { status: "rejected", taskId, reason: "Agent runtime has reached its active task limit." };
+    }
 
     const controller = new AbortController();
     const startedAt = Date.now();
@@ -186,9 +190,14 @@ export class AgentRuntime {
     }, timeoutMs);
 
     const deadlineAt = startedAt + timeoutMs;
-    const providerPromise = Promise.resolve().then(() =>
-      this.orchestrator.run(prompt, controller.signal, deadlineAt)
-    );
+    const providerPromise = Promise.resolve().then(() => {
+      // Shutdown/cancellation may happen before this microtask executes.
+      // Do not start ModelPort work after the task has already been aborted.
+      if (controller.signal.aborted) {
+        throw new Error("Task was cancelled before ModelPort invocation.");
+      }
+      return this.orchestrator.run(prompt, controller.signal, deadlineAt);
+    });
     const observedProvider = providerPromise.then(
       (output): AgentTaskResult => {
         providerSettled = true;
