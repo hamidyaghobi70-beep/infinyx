@@ -69,24 +69,24 @@ function cloneProtectedInputValue(value: unknown, ancestors: WeakSet<object>): u
   ancestors.add(value);
   try {
     if (Array.isArray(value)) {
-      if (Object.getOwnPropertySymbols(value).length) throw new TypeError("Protected operation input symbol keys are not supported.");
       const result: unknown[] = new Array(value.length);
-      for (const key of Object.keys(value)) {
-        if (!/^(0|[1-9]\\d*)$/.test(key) || Number(key) >= value.length) {
+      for (const key of Reflect.ownKeys(value)) {
+        if (key === "length") continue;
+        if (typeof key !== "string" || !/^(0|[1-9]\\d*)$/.test(key) || Number(key) >= value.length) {
           throw new TypeError("Protected operation input arrays cannot have custom properties.");
         }
         const descriptor = Object.getOwnPropertyDescriptor(value, key);
         if (!descriptor || !("value" in descriptor) || !descriptor.enumerable) {
-          throw new TypeError("Protected operation input accessors are not supported.");
+          throw new TypeError("Protected operation input accessors and hidden properties are not supported.");
         }
         result[Number(key)] = cloneProtectedInputValue(descriptor.value, ancestors);
       }
       return result;
     }
     if (!isPlainRecord(value)) throw new TypeError("Protected operation input must contain only plain records and arrays.");
-    if (Object.getOwnPropertySymbols(value).length) throw new TypeError("Protected operation input symbol keys are not supported.");
     const result: Record<string, unknown> = Object.create(Object.getPrototypeOf(value)) as Record<string, unknown>;
-    for (const key of Object.keys(value)) {
+    for (const key of Reflect.ownKeys(value)) {
+      if (typeof key !== "string") throw new TypeError("Protected operation input symbol keys are not supported.");
       const descriptor = Object.getOwnPropertyDescriptor(value, key);
       if (!descriptor || !("value" in descriptor) || !descriptor.enumerable) {
         throw new TypeError("Protected operation input accessors and hidden properties are not supported.");
