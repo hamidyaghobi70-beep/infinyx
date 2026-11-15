@@ -6,8 +6,8 @@
 
 - Target branch: `integration/infinyx-agent-v1-audit-hardening`
 - Historical audited snapshot: `8b3fc777f322cfbe40c4a90caa9377ee26ac5e96` (the 22-commit ledger below describes this snapshot only).
-- Current PR branch head at this evidence refresh: `596af0bec723132118e532d0c171ce382210a91c`.
-- Current-head status: documentation updates are committed at `596af0bec723132118e532d0c171ce382210a91c`; CI run `43737129124` is queued. The prior code head passed run `43736818076`.
+- Current PR branch head at this evidence refresh: `ba269ee0064c94c2074f884b6bb0f9f6c96a7d17`.
+- Current-head status: documentation and audit evidence are committed at `ba269ee0064c94c2074f884b6bb0f9f6c96a7d17`; CI run `43737155154` passed all four jobs (Ubuntu, macOS, Windows, and Dependency Security Audit).
 - Starting SHA and diff base: `7c3ea806c8541966a9bf13e2743060117c2402b6`
 - `main` SHA used for comparison: `6eb55bd5b22aabd148b1fcb846c083752c49a8cc`
 
@@ -18,7 +18,7 @@
 | 1 | Historical audited snapshot | `8b3fc777f322cfbe40c4a90caa9377ee26ac5e96`; current PR head is recorded separately above |
 | 2 | Exact diff base | Recorded above |
 | 3 | Historical commit ledger | 22 commits from the recorded starting SHA through historical snapshot `8b3fc777...`; two subsequent F-01 remediation commits are listed in the current-head addendum below |
-| 4 | Current PR diff summary | 75 files changed, 11,854 insertions, 1 deletion (PR #38 snapshot at head `c870dea7...`); see [GitHub compare](https://github.com/hamidyaghobi70-beep/infinyx/compare/7c3ea806c8541966a9bf13e2743060117c2402b6...integration/infinyx-agent-v1-audit-hardening) |
+| 4 | Current PR diff summary | 75 files changed, 11,857 insertions, 1 deletion (PR #38 at head `ba269ee...`); see [GitHub compare](https://github.com/hamidyaghobi70-beep/infinyx/compare/7c3ea806c8541966a9bf13e2743060117c2402b6...integration/infinyx-agent-v1-audit-hardening) |
 | 5 | Complete diff | Available as [GitHub unified diff](https://github.com/hamidyaghobi70-beep/infinyx/compare/7c3ea806c8541966a9bf13e2743060117c2402b6...integration/infinyx-agent-v1-audit-hardening.diff) and [patch](https://github.com/hamidyaghobi70-beep/infinyx/compare/7c3ea806c8541966a9bf13e2743060117c2402b6...integration/infinyx-agent-v1-audit-hardening.patch) |
 | 6 | CI on current code head before this docs refresh | PASS — run `43736818076` on `c870dea7...`; Windows, macOS, Ubuntu, and Dependency Security Audit all completed successfully: [workflow run](https://github.com/hamidyaghobi70-beep/infinyx/actions/runs/43736818076). A new run is expected for the documentation commits in this refresh. |
 | 7 | Dependency audit artifact on audited head | PRESENT — `dependency-security-audit`, artifact ID `14168508299`, attached to run `43732757337` |
@@ -104,14 +104,14 @@ The ledger includes the final evidence-alignment commit; the target SHA and CI e
 
 - `main` SHA used: `6eb55bd5b22aabd148b1fcb846c083752c49a8cc`
 - Merge base: `8500c4098372abb1c29f46ad518e7b87202bd403`
-- Current PR head at this refresh: `596af0bec723132118e532d0c171ce382210a91c`
-- Current comparison: 192 commits ahead / 1 behind.
+- Current PR head at this refresh: `ba269ee0064c94c2074f884b6bb0f9f6c96a7d17`
+- Current comparison: 193 commits ahead / 1 behind.
 - The one commit on `main` not contained in this branch is `6eb55bd5b22aabd148b1fcb846c083752c49a8cc`, titled `docs(strategy): add INFINYX master vision and architecture v3.0`; it remains intentionally excluded from this Agent V1 PR.
 - The two F-01 remediation commits after the historical audited snapshot are:
   - `2c3f6d83bc6d7ba7b5fbc4fbfe2d6a2b087c6546` — `fix(agent): redact provider errors from task status`
-  - `596af0bec723132118e532d0c171ce382210a91c` — `test(agent): cover provider error status redaction`
+  - `c870dea7be6c18a7b1088902ff55bc01f1231663` — `test(agent): cover provider error status redaction`
 - F-01 now stores the generic reason `Model provider failed.` in task status records, and the regression test asserts that provider endpoint details are not exposed through `getTaskStatus()`.
-- CI run `43736818076` passed all four jobs on the exact pre-documentation head `c870dea7...`. This does not certify the subsequent documentation commits; their CI result must be recorded separately when available.
+- CI run `43736818076` passed all four jobs on code head `c870dea7...`. The final PR head `ba269ee0064c94c2074f884b6bb0f9f6c96a7d17` also passed all four jobs in run `43737155154`.
 
 ## Current-head operational clarification
 
