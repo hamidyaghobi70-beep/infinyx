@@ -143,7 +143,7 @@ export class AgentRuntime {
       return { status: "cancelled", taskId, executionState: "settled" };
     }
     if (this.active.size >= MAX_ACTIVE_TASKS) {
-      return { status: "rejected", taskId, reason: "Agent runtime has reached its active task limit." };
+      return { status: "rejected", taskId, reason: "Agent runtime has reached its active task limit.", code: "CAPACITY_EXCEEDED" };
     }
 
     const controller = new AbortController();
