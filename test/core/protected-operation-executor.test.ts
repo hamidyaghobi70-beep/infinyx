@@ -398,6 +398,118 @@ describe("ProtectedOperationExecutor", () => {
     expect(stopSettled).toBe(true);
   });
 
+  it("T-01 assigns distinct invocation IDs to concurrent executions of one definition", async () => {
+    const contexts: Array<{ operationId: string; operationDefinitionId: string }> = [];
+    const releases: Array<(value: string) => void> = [];
+    const engine = new CoreEngine({ policy: { evaluate: async () => allow } });
+    const operation = engine.registerProtectedOperation({
+      id: "records.concurrent",
+      action: "record.write",
+      resource: "record:concurrent",
+      validateInput: (value: unknown): value is string => typeof value === "string",
+      handler: (_input, context) => {
+        contexts.push(context);
+        return new Promise<string>((resolve) => { releases.push(resolve); });
+      }
+    });
+    await ensureStarted(engine);
+    const first = engine.protectedOperations.execute(operation, { actorId: "parallel-1" }, "one");
+    const second = engine.protectedOperations.execute(operation, { actorId: "parallel-2" }, "two");
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(contexts).toHaveLength(2);
+    expect(contexts[0]?.operationId).not.toBe(contexts[1]?.operationId);
+    expect(contexts.map((context) => context.operationDefinitionId)).toEqual([
+      "records.concurrent", "records.concurrent"
+    ]);
+    releases[0]?.("ONE");
+    releases[1]?.("TWO");
+    await expect(Promise.all([first, second])).resolves.toEqual([
+      { status: "executed", value: "ONE" },
+      { status: "executed", value: "TWO" }
+    ]);
+    await engine.stop();
+  });
+
+  it("T-02 closes admission synchronously when shutdown starts while a handler is active", async () => {
+    let release!: (value: string) => void;
+    let handlerStarted!: () => void;
+    const started = new Promise<void>((resolve) => { handlerStarted = resolve; });
+    const evaluator = vi.fn(async () => allow);
+    const handler = vi.fn(() => new Promise<string>((resolve) => { release = resolve; }));
+    const engine = new CoreEngine({ policy: { evaluate: evaluator } });
+    const operation = engine.registerProtectedOperation({
+      id: "records.admission",
+      action: "record.write",
+      resource: "record:admission",
+      validateInput: (value: unknown): value is string => typeof value === "string",
+      handler: (...args) => {
+        handlerStarted();
+        return handler(...args);
+      }
+    });
+    await ensureStarted(engine);
+    const admitted = engine.protectedOperations.execute(operation, { actorId: "admitted" }, "first");
+    await started;
+    const stopping = engine.stop();
+    const denied = await engine.protectedOperations.execute(
+      operation, { actorId: "late-arrival" }, "second"
+    );
+    expect(denied).toMatchObject({ status: "denied" });
+    expect(evaluator).toHaveBeenCalledTimes(1);
+    expect(handler).toHaveBeenCalledTimes(1);
+    release("finished");
+    await expect(admitted).resolves.toEqual({ status: "executed", value: "finished" });
+    await stopping;
+  });
+
+  it("T-03 does not finish shutdown or clean modules before handler drain and policy shutdown", async () => {
+    let releaseHandler!: (value: string) => void;
+    let handlerStarted!: () => void;
+    let releasePolicy!: () => void;
+    const started = new Promise<void>((resolve) => { handlerStarted = resolve; });
+    const policyShutdown = new Promise<void>((resolve) => { releasePolicy = resolve; });
+    let cleaned = false;
+    const engine = new CoreEngine({
+      policy: {
+        evaluate: async () => allow,
+        shutdown: () => policyShutdown
+      }
+    });
+    const operation = engine.registerProtectedOperation({
+      id: "records.cleanup-order",
+      action: "record.write",
+      resource: "record:cleanup-order",
+      validateInput: (value: unknown): value is string => typeof value === "string",
+      handler: () => {
+        handlerStarted();
+        return new Promise<string>((resolve) => { releaseHandler = resolve; });
+      }
+    });
+    engine.register({
+      id: "cleanup-observer",
+      version: "1.0.0",
+      cleanup: () => { cleaned = true; }
+    });
+    await ensureStarted(engine);
+    const admitted = engine.protectedOperations.execute(operation, { actorId: "cleanup-order" }, "work");
+    await started;
+    const stopping = engine.stop();
+    await Promise.resolve();
+    expect(cleaned).toBe(false);
+    let stopSettled = false;
+    void stopping.then(() => { stopSettled = true; });
+    releaseHandler("done");
+    await admitted;
+    await Promise.resolve();
+    expect(cleaned).toBe(false);
+    expect(stopSettled).toBe(false);
+    releasePolicy();
+    await stopping;
+    expect(cleaned).toBe(true);
+    expect(stopSettled).toBe(true);
+  });
+
   it("fails closed for non-cloneable context values before PolicyEngine", async () => {
     const evaluator = vi.fn(async () => allow);
     const { engine, operation, handler } = makeEngine(evaluator);
