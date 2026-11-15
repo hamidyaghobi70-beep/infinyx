@@ -29,7 +29,9 @@ describe("Agent CoreModule lifecycle", () => {
     await core.initialize();
     await core.start();
     const stopping = core.stop();
-    expect(agent.isAccepting).toBe(false);
     await stopping;
+    expect(agent.isAccepting).toBe(false);
+    await expect(agent.execute({ taskId: "after-shutdown", prompt: "hello" }))
+      .resolves.toMatchObject({ status: "rejected" });
   });
 });
