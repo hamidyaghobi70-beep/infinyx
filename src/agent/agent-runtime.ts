@@ -242,14 +242,14 @@ export class AgentRuntime {
             ? { status: "cancelled", taskId, executionState: "settled" }
             : { status: "timed_out", taskId, executionState: "settled" };
       },
-      (error: unknown): AgentTaskResult => {
+      (_error: unknown): AgentTaskResult => {
         providerSettled = true;
         record.executionState = "settled";
         record.finishedAt = Date.now();
         this.active.delete(taskId);
         if (record.status === "running") {
           record.status = "error";
-          record.reason = error instanceof Error ? error.message : "Model provider failed.";
+          record.reason = "Model provider failed.";
           return { status: "error", taskId, code: "MODEL_PROVIDER_ERROR" };
         }
         return record.status === "cancelled"
