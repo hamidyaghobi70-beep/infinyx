@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import type {
   PolicyEngine,
   PolicyEvaluationOptions,
@@ -86,6 +87,12 @@ export class ProtectedOperationExecutor implements ProtectedOperationPort {
   // This is in-memory, per-process object-identity duplicate suppression only.
   // It is not durable replay protection and does not provide exactly-once semantics.
   private readonly usedRequests = new WeakMap<object, WeakSet<object>>();
+  private readonly activeOperations = new Set<Promise<unknown>>();
+
+  /** Waits for every admitted protected-operation invocation to settle. */
+  drain(): Promise<void> {
+    return Promise.all([...this.activeOperations]).then(() => undefined);
+  }
 
   constructor(
     private readonly policy: PolicyEngine,
@@ -110,7 +117,19 @@ export class ProtectedOperationExecutor implements ProtectedOperationPort {
     return handle;
   }
 
-  async execute<TInput, TOutput>(
+  execute<TInput, TOutput>(
+    operation: ProtectedOperationHandle<TInput, TOutput>,
+    caller: ProtectedOperationCaller,
+    input: TInput,
+    options?: PolicyEvaluationOptions
+  ): Promise<ProtectedOperationResult<TOutput>> {
+    const task = this.executeInternal(operation, caller, input, options);
+    this.activeOperations.add(task);
+    void task.then(() => this.activeOperations.delete(task), () => this.activeOperations.delete(task));
+    return task;
+  }
+
+  private async executeInternal<TInput, TOutput>(
     operation: ProtectedOperationHandle<TInput, TOutput>,
     caller: ProtectedOperationCaller,
     input: TInput,
@@ -199,7 +218,7 @@ export class ProtectedOperationExecutor implements ProtectedOperationPort {
       if (!this.isCoreReady()) return this.denied("Core Engine is stopping; protected operation denied.");
 
       const value = await registration.handler(input, Object.freeze({
-        operationId: registration.id, signal: operationController.signal
+        operationId: randomUUID(), operationDefinitionId: registration.id, signal: operationController.signal
       }));
       return { status: "executed", value };
     } catch {
