@@ -60,6 +60,7 @@ describe("Agent cancellation and deadlines", () => {
       status: "cancelled", executionState: "settled"
     });
   });
+
   it("does not invoke ModelPort when shutdown wins before the provider microtask", async () => {
     let calls = 0;
     const runtime = new AgentRuntime({
@@ -83,6 +84,45 @@ describe("Agent cancellation and deadlines", () => {
       status: "cancelled",
       executionState: "settled"
     });
+  });
+
+  it("does not release capacity for a cancelled non-cooperative provider", async () => {
+    let markStarted!: () => void;
+    const started = new Promise<void>((resolve) => { markStarted = resolve; });
+    const controller = new AbortController();
+    const runtime = new AgentRuntime({
+      complete: () => {
+        markStarted();
+        return new Promise<string>(() => {
+          // Deliberately ignore AbortSignal and never settle.
+        });
+      }
+    });
+    runtime.start();
+
+    const first = runtime.execute({
+      taskId: "non-cooperative-cancelled",
+      prompt: "hold",
+      signal: controller.signal
+    });
+    await started;
+    controller.abort();
+    await expect(first).resolves.toMatchObject({
+      status: "cancelled",
+      executionState: "unresolved"
+    });
+
+    const rest = Array.from({ length: 31 }, (_, index) =>
+      runtime.execute({ taskId: `non-cooperative-fill-${index}`, prompt: "hold" })
+    );
+    await expect(runtime.execute({ taskId: "non-cooperative-overflow", prompt: "extra" }))
+      .resolves.toMatchObject({
+        status: "rejected",
+        code: "CAPACITY_EXCEEDED"
+      });
+
+    runtime.shutdown();
+    await Promise.all(rest);
   });
 
   it("releases capacity after timed-out providers eventually settle", async () => {
@@ -159,5 +199,4 @@ describe("Agent cancellation and deadlines", () => {
       .resolves.toMatchObject({ status: "completed" });
     await runtime.shutdown();
   });
-
 });
