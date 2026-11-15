@@ -41,6 +41,7 @@ export class CoreEngine {
 
   private readonly protectedOperationExecutor: ProtectedOperationExecutor;
   private readonly moduleRegistry = new ModuleRegistry();
+  private readonly shutdownController = new AbortController();
   private lifecycle: CoreLifecycleState = "created";
   private readonly moduleStates = new Map<string, ModuleLifecycleState>();
   private initializedModules: CoreModule[] = [];
@@ -186,6 +187,8 @@ export class CoreEngine {
     }
 
     this.lifecycle = "stopping";
+    // Notify modules synchronously before awaiting policy shutdown or cleanup.
+    this.shutdownController.abort("core_shutdown");
     // Install the shared promise before invoking shutdown hooks. The policy
     // runtime stops accepting new work synchronously before module cleanup.
     const stopPromise = this.installStopPromise(() => {
@@ -269,6 +272,7 @@ export class CoreEngine {
   private createContext(moduleId: string): ModuleContext {
     const base = {
       moduleId,
+      shutdownSignal: this.shutdownController.signal,
       events: this.events,
       protectedOperations: this.protectedOperations
     };
