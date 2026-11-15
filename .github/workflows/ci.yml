@@ -180,3 +180,48 @@ jobs:
             npm-audit-report.md
           if-no-files-found: error
           retention-days: 30
+
+
+  stage4-postgres-integration:
+    name: Stage 4 PostgreSQL integration
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: infinyx_test
+          POSTGRES_PASSWORD: infinyx_test_only
+          POSTGRES_DB: infinyx_stage4_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U infinyx_test -d infinyx_stage4_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - name: Install project dependencies
+        run: npm ci
+      - name: Build adapter
+        run: npm run build
+      - name: Install pinned CI-only PostgreSQL driver
+        run: |
+          driver_dir="$RUNNER_TEMP/stage4-pg-driver"
+          mkdir -p "$driver_dir"
+          npm install --prefix "$driver_dir" --ignore-scripts --no-audit --no-fund pg@8.16.3
+          ln -s "$driver_dir/node_modules/pg" node_modules/pg
+      - name: Install PostgreSQL client
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes postgresql-client
+      - name: Run Stage 4 PostgreSQL schema integration checks
+        env:
+          DATABASE_URL: postgresql://infinyx_test:infinyx_test_only@127.0.0.1:5432/infinyx_stage4_test
+        run: bash scripts/test-stage4-postgres-integration.sh
