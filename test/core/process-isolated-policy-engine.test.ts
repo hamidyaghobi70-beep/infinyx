@@ -172,6 +172,22 @@ describe("ProcessIsolatedPolicyEngine", () => {
     expect(result.candidateFrozen).toBe(true);
   });
 
+  it("does not expose evaluator exception details in policy decisions", async () => {
+    const engine = new ProcessIsolatedPolicyEngine({ moduleUrl: fixtureUrl });
+    const result = await engine.evaluateDetailed(request("throw-secret"));
+    expect(result.outcome).toBe("FAILED");
+    expect(result.decision.reason).toBe("Policy evaluator process failed; access denied.");
+    expect(result.decision.reason).not.toContain("POLICY_EXCEPTION_SECRET_MARKER_13579");
+  });
+
+  it("does not expose child stderr when the evaluator exits without a result", async () => {
+    const engine = new ProcessIsolatedPolicyEngine({ moduleUrl: fixtureUrl });
+    const result = await engine.evaluateDetailed(request("crash-with-stderr"));
+    expect(result.outcome).toBe("FAILED");
+    expect(result.decision.reason).toBe("Policy evaluator process exited without a valid result; access denied.");
+    expect(result.decision.reason).not.toContain("POLICY_STDERR_SECRET_MARKER_24680");
+  });
+
   it("reports child crashes as failures and never grants access", async () => {
     const engine = new ProcessIsolatedPolicyEngine({ moduleUrl: fixtureUrl });
     const result = await engine.evaluateDetailed(request("crash"));
