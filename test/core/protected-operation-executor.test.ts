@@ -387,10 +387,15 @@ describe("ProtectedOperationExecutor", () => {
     await handlerStarted;
     expect(handler).toHaveBeenCalledTimes(1);
     const stopping = engine.stop();
-    await stopping;
+    let stopSettled = false;
+    void stopping.then(() => { stopSettled = true; });
+    await Promise.resolve();
+    expect(stopSettled).toBe(false);
     expect(handlerSignal?.aborted).toBe(false);
     release("completed");
     expect(await pending).toEqual({ status: "executed", value: "completed" });
+    await stopping;
+    expect(stopSettled).toBe(true);
   });
 
   it("fails closed for non-cloneable context values before PolicyEngine", async () => {
