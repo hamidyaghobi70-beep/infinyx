@@ -5,25 +5,23 @@
 ## Target identity
 
 - Target branch: `integration/infinyx-agent-v1-audit-hardening`
-- Pre-refresh head for the 21-commit ledger below: `4773d2876fb2c7746783b3e034b36e72e710b8f4`
-- Final README-refresh target SHA: recorded in the external cover note / final response, because a commit cannot contain its own SHA.
+- Final audited branch head: `8b3fc777f322cfbe40c4a90caa9377ee26ac5e96`.
 - Starting SHA and diff base: `7c3ea806c8541966a9bf13e2743060117c2402b6`
 - `main` SHA used for comparison: `6eb55bd5b22aabd148b1fcb846c083752c49a8cc`
-- The final README-refresh commit and final target SHA are recorded in the external cover note / final response, because a commit cannot contain its own SHA.
 
 ## Evidence status
 
 | # | Evidence | Status |
 |---:|---|---|
-| 1 | Exact target SHA | Final README-refresh target SHA is recorded in the external cover note / final response (self-reference is impossible) |
+| 1 | Exact target SHA | `8b3fc777f322cfbe40c4a90caa9377ee26ac5e96` |
 | 2 | Exact diff base | Recorded above |
-| 3 | Commit ledger | 21 commits through pre-refresh head `4773d2876fb2c7746783b3e034b36e72e710b8f4` listed below; final README refresh is recorded externally |
-| 4 | Diff summary | 8 files changed, 254 insertions, 8 deletions at pre-refresh head; see [GitHub compare](https://github.com/hamidyaghobi70-beep/infinyx/compare/7c3ea806c8541966a9bf13e2743060117c2402b6...integration/infinyx-agent-v1-audit-hardening) |
+| 3 | Commit ledger | 22 commits from the recorded starting SHA through the audited head; newest-first ledger below |
+| 4 | Diff summary | 75 files changed, 11,853 insertions, 1 deletion at audited head; see [GitHub compare](https://github.com/hamidyaghobi70-beep/infinyx/compare/7c3ea806c8541966a9bf13e2743060117c2402b6...integration/infinyx-agent-v1-audit-hardening) |
 | 5 | Complete diff | Available as [GitHub unified diff](https://github.com/hamidyaghobi70-beep/infinyx/compare/7c3ea806c8541966a9bf13e2743060117c2402b6...integration/infinyx-agent-v1-audit-hardening.diff) and [patch](https://github.com/hamidyaghobi70-beep/infinyx/compare/7c3ea806c8541966a9bf13e2743060117c2402b6...integration/infinyx-agent-v1-audit-hardening.patch) |
-| 6 | Direct-SHA CI on final target | PENDING — previous verified push run `43712304502` is recorded for pre-test head `73340d1759c13599f9a1595e3fe0f6350241acd0`; verify CI for the final README-refresh SHA |
-| 7 | Dependency audit artifact for previous verified head | PRESENT — `dependency-security-audit`, artifact ID `14161475690`, attached to run `43712304502`; final SHA artifact remains pending |
-| 8 | Comparison against `main` | At pre-refresh test head `4773d2876fb2c7746783b3e034b36e72e710b8f4`: 186 ahead / 1 behind; merge base `8500c4098372abb1c29f46ad518e7b87202bd403`. Final target comparison is recorded externally. |
-| 9 | Decision on behind commit | OPEN — `6eb55bd5b22aabd148b1fcb846c083752c49a8cc`, `docs(strategy): add INFINYX master vision and architecture v3.0`; do not cherry-pick without an explicit decision |
+| 6 | PR CI on audited head | PASS — run `43732757337`; Windows, macOS, Ubuntu, and Dependency Security Audit all completed successfully: [workflow run](https://github.com/hamidyaghobi70-beep/infinyx/actions/runs/43732757337) |
+| 7 | Dependency audit artifact on audited head | PRESENT — `dependency-security-audit`, artifact ID `14168508299`, attached to run `43732757337` |
+| 8 | Comparison against `main` | Audited head: 187 ahead / 1 behind; merge base `8500c4098372abb1c29f46ad518e7b87202bd403` |
+| 9 | Decision on behind commit | DEFERRED — `6eb55bd5b22aabd148b1fcb846c083752c49a8cc` adds only the independent strategy document; it is intentionally excluded from this Agent V1 PR |
 | 10 | Capacity contract | `docs/agent-runtime-capacity.md` |
 | 11 | Requirement-to-test traceability | Included below |
 | 12 | Non-cooperative provider limitation | Included below |
@@ -69,12 +67,13 @@ Unless separate evidence is added, this package does **not** claim to provide:
 - Do not modify `main`.
 - Keep unresolved evidence items visibly marked as pending.
 
-## Exact commits after the starting SHA (21-commit ledger through `4773d287...`)
+## Exact commits after the starting SHA (22-commit ledger through `8b3fc777...`)
 
 Newest first:
 
 | SHA | Commit message |
 |---|---|
+| `8b3fc777f322cfbe40c4a90caa9377ee26ac5e96` | docs(agent): align audit evidence with current branch head |
 | `4773d2876fb2c7746783b3e034b36e72e710b8f4` | test(agent): assert shutdown resolves admitted callers |
 | `dfad11711f8b16197df88e60f9295101057d19b2` | test(agent): cover pre-aborted signals and shutdown settlement |
 | `73340d1759c13599f9a1595e3fe0f6350241acd0` | docs(agent): record final push CI evidence |
@@ -97,14 +96,14 @@ Newest first:
 | `a1993d2da5472802192106f13ad4103b309e1ee3` | docs(agent): clarify execution state semantics |
 | `93535c26e213ba5ef75f597cf96578b76973e943` | docs(agent): document cooperative ModelPort cancellation |
 
-The final README-refresh commit for this updated evidence package is intentionally excluded from its own ledger to avoid self-reference; record its exact SHA and direct-SHA CI result in the external cover note / PR description.
+The ledger includes the final evidence-alignment commit; the target SHA and CI evidence are recorded above.
 
-## Comparison against current `main` (pre-refresh test head)
+## Comparison against current `main` (audited head)
 
 - `main` SHA: `6eb55bd5b22aabd148b1fcb846c083752c49a8cc`
 - Merge base: `8500c4098372abb1c29f46ad518e7b87202bd403`
-- Branch head: `4773d2876fb2c7746783b3e034b36e72e710b8f4`
-- Branch ahead: 186 commits
+- Branch head: `8b3fc777f322cfbe40c4a90caa9377ee26ac5e96`
+- Branch ahead: 187 commits
 - Branch behind: 1 commit
 - The one commit on `main` not contained in the branch is `6eb55bd5b22aabd148b1fcb846c083752c49a8cc`, titled `docs(strategy): add INFINYX master vision and architecture v3.0`.
 
