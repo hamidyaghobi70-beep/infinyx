@@ -6,7 +6,7 @@
 
 - Target branch: `integration/infinyx-agent-v1-audit-hardening`
 - Historical audited snapshot: `8b3fc777f322cfbe40c4a90caa9377ee26ac5e96` (the 22-commit ledger below describes this snapshot only).
-- Branch head immediately before this evidence-index refresh: `0184e385536a0977ab192157da01b155d6a6ffbc`.
+- Branch head immediately before this findings-disposition refresh: `6b71e48e9b106baa6e56420ac800590c7e64cba9`.
 - CI evidence: run `43737155154` passed all four jobs on parent code/documentation head `ba269ee0064c94c2074f884b6bb0f9f6c96a7d17` (Ubuntu, macOS, Windows, and Dependency Security Audit). The evidence-index-only follow-up commit is not represented as having its own CI run.
 - Starting SHA and diff base: `7c3ea806c8541966a9bf13e2743060117c2402b6`
 - `main` SHA used for comparison: `6eb55bd5b22aabd148b1fcb846c083752c49a8cc`
@@ -18,7 +18,7 @@
 | 1 | Historical audited snapshot | `8b3fc777f322cfbe40c4a90caa9377ee26ac5e96`; current PR head is recorded separately above |
 | 2 | Exact diff base | Recorded above |
 | 3 | Historical commit ledger | 22 commits from the recorded starting SHA through historical snapshot `8b3fc777...`; two subsequent F-01 remediation commits are listed in the current-head addendum below |
-| 4 | Current PR diff summary | 75 files changed, 11,857 insertions, 1 deletion (PR #38 at head `ba269ee...`); see [GitHub compare](https://github.com/hamidyaghobi70-beep/infinyx/compare/7c3ea806c8541966a9bf13e2743060117c2402b6...integration/infinyx-agent-v1-audit-hardening) |
+| 4 | Current PR diff summary | 75 files changed, 11,863 insertions, 1 deletion (PR #38 at head `6b71e48...`); see [GitHub compare](https://github.com/hamidyaghobi70-beep/infinyx/compare/7c3ea806c8541966a9bf13e2743060117c2402b6...integration/infinyx-agent-v1-audit-hardening) |
 | 5 | Complete diff | Available as [GitHub unified diff](https://github.com/hamidyaghobi70-beep/infinyx/compare/7c3ea806c8541966a9bf13e2743060117c2402b6...integration/infinyx-agent-v1-audit-hardening.diff) and [patch](https://github.com/hamidyaghobi70-beep/infinyx/compare/7c3ea806c8541966a9bf13e2743060117c2402b6...integration/infinyx-agent-v1-audit-hardening.patch) |
 | 6 | CI on latest verified parent head | PASS — run `43737155154` on `ba269ee0064c94c2074f884b6bb0f9f6c96a7d17`; Windows, macOS, Ubuntu, and Dependency Security Audit all completed successfully: [workflow run](https://github.com/hamidyaghobi70-beep/infinyx/actions/runs/43737155154). The subsequent evidence-index-only commit has no associated workflow run in the available run records. |
 | 7 | Dependency audit artifact on audited head | PRESENT — `dependency-security-audit`, artifact ID `14168508299`, attached to run `43732757337` |
@@ -28,7 +28,21 @@
 | 11 | Requirement-to-test traceability | Included below |
 | 12 | Non-cooperative provider limitation | Included below |
 | 13 | Audit exclusions / non-claims | Included below |
-| 14 | DeepSeek independent review | NOT PERFORMED |
+| 14 | DeepSeek review report | PARTIAL REPORT RECEIVED; see findings disposition below. This is not a complete independent security certification. |
+
+## Independent review findings disposition
+
+A partial DeepSeek review report was supplied for this branch. Its findings are tracked as follows:
+
+| Finding | Severity | Disposition |
+|---|---|---|
+| F-01 provider error detail exposed through task status | High | FIXED — task status stores a generic provider failure reason; regression test verifies endpoint details are not exposed. |
+| F-02 restart blocked by unresolved non-cooperative provider after shutdown | Medium | DOCUMENTED — same-instance restart remains blocked until unresolved provider promises settle; forced termination is outside V1. |
+| F-03 pre-aborted request precedence over capacity rejection | Low | DOCUMENTED — intentional cancellation precedence; runtime behavior unchanged. |
+| F-04 GitHub Actions major-version tags not pinned to immutable SHAs | Low | ACCEPTED RISK — not changed in this scope. |
+| F-05 audit README head/evidence references stale | Informational | UPDATED — branch identity and CI evidence refreshed; see target identity above. |
+
+The report did not fully assess policy enforcement, process isolation, memory isolation, or the complete orchestrator/task-planner path. Those areas remain outside the confirmed coverage of this partial review.
 
 ## Requirement-to-test traceability
 
@@ -60,7 +74,7 @@ Unless separate evidence is added, this package does **not** claim to provide:
 - load, soak, fault-injection, or production-scale testing;
 - distributed/global concurrency enforcement across processes or runtime instances;
 - verification of deployment, release, or production configuration;
-- an independent DeepSeek audit (not performed).
+- a complete independent security audit; the supplied DeepSeek report was partial and did not assess all policy, process, memory, and orchestration boundaries.
 
 ## Branch and release guardrails
 
