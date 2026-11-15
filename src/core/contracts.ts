@@ -158,7 +158,8 @@ export interface ProtectedOperationContext {
 /**
  * Protected operation inputs are snapshotted before validation and authorization.
  * Inputs must therefore be composed of finite primitives, undefined, plain records,
- * and arrays; cycles, accessors, symbols, and exotic objects are rejected.
+ * and dense arrays; cycles, accessors, symbols, custom array properties, sparse arrays,
+ * and exotic objects are rejected. Own record keys are copied as data properties.
  */
 export interface ProtectedOperationDefinition<TInput, TOutput> {
   readonly id: string;
