@@ -29,6 +29,8 @@ describe("Agent CoreModule lifecycle", () => {
     await core.initialize();
     await core.start();
     const stopping = core.stop();
+    // CoreEngine aborts ModuleContext.shutdownSignal synchronously at stop initiation.
+    expect(agent.isAccepting).toBe(false);
     await stopping;
     expect(agent.isAccepting).toBe(false);
     await expect(agent.execute({ taskId: "after-shutdown", prompt: "hello" }))
