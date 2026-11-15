@@ -5,6 +5,16 @@ export interface ModelCompletionRequest {
 }
 
 export interface ModelPort {
+  /**
+   * Requests a completion from the underlying model provider.
+   *
+   * The supplied AbortSignal is a cooperative cancellation request, not a
+   * guarantee that provider work will terminate. A non-cooperative provider
+   * may ignore the signal and its returned Promise may never settle. In that
+   * case, AgentRuntime keeps this task's capacity slot reserved until the
+   * Promise actually settles, potentially indefinitely. See
+   * docs/agent-runtime-capacity.md.
+   */
   complete(request: ModelCompletionRequest): Promise<string>;
 }
 
