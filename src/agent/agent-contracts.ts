@@ -20,6 +20,9 @@ export type AgentTaskStatus =
  */
 export type AgentExecutionState = "running" | "unresolved" | "settled";
 
+/** States possible after cancellation or timeout has been returned. */
+export type AgentCancellationExecutionState = Exclude<AgentExecutionState, "running">;
+
 export interface AgentTaskRequest {
   readonly taskId: string;
   readonly prompt: string;
@@ -38,8 +41,8 @@ export interface AgentTaskRecord {
 
 export type AgentTaskResult =
   | { readonly status: "completed"; readonly taskId: string; readonly output: string }
-  | { readonly status: "cancelled"; readonly taskId: string; readonly executionState: AgentExecutionState }
-  | { readonly status: "timed_out"; readonly taskId: string; readonly executionState: AgentExecutionState }
+  | { readonly status: "cancelled"; readonly taskId: string; readonly executionState: AgentCancellationExecutionState }
+  | { readonly status: "timed_out"; readonly taskId: string; readonly executionState: AgentCancellationExecutionState }
   | { readonly status: "rejected"; readonly taskId: string; readonly reason: string; readonly code?: "CAPACITY_EXCEEDED" }
   | { readonly status: "error"; readonly taskId: string; readonly code: string };
 
