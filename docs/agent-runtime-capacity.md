@@ -23,6 +23,12 @@ Returning an early `cancelled` or `timed_out` result does **not** imply that pro
 
 Therefore, `"settled"` does not by itself prove that a provider call began. In particular, cancellation before provider invocation is reported as settled because no external provider operation was started. This state is distinct from `"unresolved"`, where provider work may still be running despite the caller having received a result.
 
+## Pre-aborted request precedence
+
+After the runtime has confirmed that it is accepting work, validated the request, and checked for an active duplicate task ID, it checks whether the caller's signal is already aborted **before** checking the active-task capacity limit. Therefore, a valid pre-aborted request returns `status: "cancelled"` with `executionState: "settled"` even when all 32 active slots are occupied; it does not return `CAPACITY_EXCEEDED`, reserve a slot, or invoke `ModelPort`.
+
+This is intentional cancellation precedence: an already-cancelled request is settled without starting provider work, so capacity admission is not needed. It is distinct from a non-aborted request, which is subject to the normal capacity check.
+
 ## When a slot is released
 
 The runtime removes a task from its active map when its provider promise settles, including successful completion, provider error, late settlement after timeout/cancellation, or cancellation before provider invocation. The pre-invocation cancellation path does not start ModelPort work and does not leave an unresolved provider operation.
