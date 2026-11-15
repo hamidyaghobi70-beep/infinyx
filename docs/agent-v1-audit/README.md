@@ -1,11 +1,12 @@
 # INFINYX Agent V1 — Independent Audit Evidence Package
 
-**Status: draft / evidence partially complete.** This index records verifiable evidence and open items. It is not a claim of independent security approval, production readiness, or complete audit coverage.
+**Status: draft / independent review pending.** This index records verifiable evidence and open items. It is not a claim of independent security approval, production readiness, or complete audit coverage.
 
 ## Target identity
 
 - Target branch: `integration/infinyx-agent-v1-audit-hardening`
-- Snapshot head for the ledger below: `fcbd1877329cd02510f0aa1ea7a4330a9d204182`
+- Snapshot head for the 17-commit ledger below: `fcbd1877329cd02510f0aa1ea7a4330a9d204182`
+- Final documentation-refresh target SHA: `67041601d393a62e89263a9fb5e0d2b87f48daf3`
 - Starting SHA and diff base: `7c3ea806c8541966a9bf13e2743060117c2402b6`
 - `main` SHA used for comparison: `6eb55bd5b22aabd148b1fcb846c083752c49a8cc`
 - The final README-refresh commit and final target SHA are recorded in the external cover note / final response, because a commit cannot contain its own SHA.
@@ -14,14 +15,14 @@
 
 | # | Evidence | Status |
 |---:|---|---|
-| 1 | Exact target SHA | Snapshot SHA above; final README-refresh SHA must be recorded externally |
+| 1 | Exact target SHA | Final target: `67041601d393a62e89263a9fb5e0d2b87f48daf3` |
 | 2 | Exact diff base | Recorded above |
-| 3 | Commit ledger | 17 commits through snapshot SHA listed below; final README-refresh commit recorded externally |
+| 3 | Commit ledger | 17 commits through snapshot SHA listed below; final documentation refresh is recorded above |
 | 4 | Diff summary | 8 files changed, 225 insertions, 8 deletions at snapshot SHA; see [GitHub compare](https://github.com/hamidyaghobi70-beep/infinyx/compare/7c3ea806c8541966a9bf13e2743060117c2402b6...fcbd1877329cd02510f0aa1ea7a4330a9d204182) |
 | 5 | Complete diff | Available as [GitHub unified diff](https://github.com/hamidyaghobi70-beep/infinyx/compare/7c3ea806c8541966a9bf13e2743060117c2402b6...fcbd1877329cd02510f0aa1ea7a4330a9d204182.diff) and [patch](https://github.com/hamidyaghobi70-beep/infinyx/compare/7c3ea806c8541966a9bf13e2743060117c2402b6...fcbd1877329cd02510f0aa1ea7a4330a9d204182.patch) |
-| 6 | Direct-SHA CI on final target | PENDING — prior run `43711326212` passed on prior target `6a98cff...`; a new run must be checked for the final README-refresh SHA |
-| 7 | Dependency audit artifact for final target | PENDING — prior artifact belongs to run `43711326212`, not the new final SHA |
-| 8 | Comparison against `main` | At snapshot SHA: 182 ahead / 1 behind; merge base `8500c4098372abb1c29f46ad518e7b87202bd403` |
+| 6 | Direct-SHA CI on final target | PASS — push run `43712190856` on `67041601d393a62e89263a9fb5e0d2b87f48daf3`; Ubuntu, Windows, macOS, and dependency audit jobs all succeeded |
+| 7 | Dependency audit artifact for final target | PRESENT — `dependency-security-audit`, artifact ID `14161191148`, attached to run `43712190856` |
+| 8 | Comparison against `main` | At final target SHA: 183 ahead / 1 behind; merge base `8500c4098372abb1c29f46ad518e7b87202bd403` |
 | 9 | Decision on behind commit | OPEN — `6eb55bd5b22aabd148b1fcb846c083752c49a8cc`, `docs(strategy): add INFINYX master vision and architecture v3.0`; do not cherry-pick without an explicit decision |
 | 10 | Capacity contract | `docs/agent-runtime-capacity.md` |
 | 11 | Requirement-to-test traceability | Included below |
@@ -68,12 +69,14 @@ Unless separate evidence is added, this package does **not** claim to provide:
 - Do not modify `main`.
 - Keep unresolved evidence items visibly marked as pending.
 
-## Exact commits after the starting SHA (snapshot through `fcbd187...`)
+## Exact commits after the starting SHA (17-commit ledger through `fcbd187...`)
 
 Newest first:
 
 | SHA | Commit message |
 |---|---|
+| `fcbd1877329cd02510f0aa1ea7a4330a9d204182` | docs(agent): point audit diff links at reviewed snapshot |
+| `7d2430eaf33d4750b97678bb7f22171c191bbeb4` | docs(agent): refresh audit ledger and comparison evidence |
 | `ed0af30110e3e5c9ec25f26b14b4f4b69e5b0b51` | fix(agent): preserve discriminated cancellation result types |
 | `aa8aabf7c3bfe87450e76cca183c6d00dac0296e` | docs(agent): correct audit ledger and attach diff evidence |
 | `3a583859a64fc61a2d4b899a905cf0f93ad3f3e6` | fix(agent): align cancellation result state with runtime |
@@ -90,14 +93,14 @@ Newest first:
 | `a1993d2da5472802192106f13ad4103b309e1ee3` | docs(agent): clarify execution state semantics |
 | `93535c26e213ba5ef75f597cf96578b76973e943` | docs(agent): document cooperative ModelPort cancellation |
 
-The README refresh commit is intentionally excluded from its own ledger; record its exact SHA in the external audit cover note. The final target SHA is supplied separately.
+The final documentation-refresh commit `67041601d393a62e89263a9fb5e0d2b87f48daf3` is intentionally excluded from this ledger to avoid self-reference. Its direct push CI is run `43712190856` (all jobs successful).
 
-## Comparison against current `main` (snapshot SHA)
+## Comparison against current `main` (final target SHA)
 
 - `main` SHA: `6eb55bd5b22aabd148b1fcb846c083752c49a8cc`
 - Merge base: `8500c4098372abb1c29f46ad518e7b87202bd403`
-- Branch head: `3a583859a64fc61a2d4b899a905cf0f93ad3f3e6`
-- Branch ahead: 182 commits
+- Branch head: `67041601d393a62e89263a9fb5e0d2b87f48daf3`
+- Branch ahead: 183 commits
 - Branch behind: 1 commit
 - The one commit on `main` not contained in the branch is `6eb55bd5b22aabd148b1fcb846c083752c49a8cc`, titled `docs(strategy): add INFINYX master vision and architecture v3.0`.
 
