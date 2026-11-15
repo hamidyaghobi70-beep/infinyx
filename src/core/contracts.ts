@@ -151,7 +151,10 @@ export interface ProtectedOperationHandle<TInput = unknown, TOutput = unknown> {
 }
 
 export interface ProtectedOperationContext {
+  /** Unique identifier for this invocation, not the registered definition. */
   readonly operationId: string;
+  /** Stable identifier of the registered operation definition. */
+  readonly operationDefinitionId: string;
   readonly signal: AbortSignal;
 }
 
