@@ -54,7 +54,12 @@ describe("snapshotBoundedPolicyData", () => {
   });
 
   it("accepts exactly the aggregate byte limit and rejects one byte over", () => {
-    const atLimit = Array.from({ length: 16 }, () => "x".repeat(16_384));
+    const indexBytes = Array.from({ length: 16 }, (_, index) =>
+      new TextEncoder().encode(String(index)).byteLength
+    ).reduce((total, bytes) => total + bytes, 0);
+    const atLimit = Array.from({ length: 16 }, (_, index) =>
+      "x".repeat(index === 15 ? 16_384 - indexBytes : 16_384)
+    );
     expect(snapshotBoundedPolicyData(atLimit).ok).toBe(true);
     expect(snapshotBoundedPolicyData([...atLimit, "x"])).toEqual({
       ok: false, reason: "RESOURCE_LIMIT"
