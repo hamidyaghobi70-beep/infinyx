@@ -439,4 +439,109 @@ describe("ProtectedOperationExecutor", () => {
   });
 
 
+  it("passes the same detached immutable snapshot to validation and the handler", async () => {
+    let validatedInput: unknown;
+    let handledInput: unknown;
+    const original = { value: "before", nested: { label: "stable" } };
+    const engine = new CoreEngine({ policy: { evaluate: async () => allow } });
+    const operation = engine.registerProtectedOperation({
+      id: "records.input-snapshot",
+      action: "record.write",
+      resource: "record:snapshot",
+      validateInput: (value: unknown): value is typeof original => {
+        validatedInput = value;
+        return typeof value === "object" && value !== null &&
+          "value" in value && typeof value.value === "string";
+      },
+      handler: (value) => {
+        handledInput = value;
+        return value.value;
+      }
+    });
+    await ensureStarted(engine);
+    const result = await engine.protectedOperations.execute(
+      operation, { actorId: "snapshot-input" }, original
+    );
+    original.value = "mutated";
+    original.nested.label = "mutated";
+
+    expect(result).toEqual({ status: "executed", value: "before" });
+    expect(validatedInput).toBe(handledInput);
+    expect(handledInput).not.toBe(original);
+    expect(handledInput).toEqual({ value: "before", nested: { label: "stable" } });
+    expect(Object.isFrozen(handledInput)).toBe(true);
+    expect(Object.isFrozen((handledInput as typeof original).nested)).toBe(true);
+  });
+
+  it("fails closed when the validator attempts to mutate the immutable snapshot", async () => {
+    const handler = vi.fn(async () => "must-not-run");
+    const evaluator = vi.fn(async () => allow);
+    const engine = new CoreEngine({ policy: { evaluate: evaluator } });
+    const operation = engine.registerProtectedOperation({
+      id: "records.mutating-validator",
+      action: "record.write",
+      resource: "record:mutation",
+      validateInput: (value: unknown): value is { value: string } => {
+        Object.assign(value as object, { value: "tampered" });
+        return true;
+      },
+      handler
+    });
+    await ensureStarted(engine);
+    const result = await engine.protectedOperations.execute(
+      operation, { actorId: "mutating-validator" }, { value: "original" }
+    );
+
+    expect(result).toMatchObject({ status: "denied" });
+    expect(evaluator).not.toHaveBeenCalled();
+    expect(handler).not.toHaveBeenCalled();
+  });
+
+  it("rejects an unbounded or cyclic operation input before validation and policy", async () => {
+    const validator = vi.fn((value: unknown): value is object => true);
+    const evaluator = vi.fn(async () => allow);
+    const handler = vi.fn(async () => "must-not-run");
+    const engine = new CoreEngine({ policy: { evaluate: evaluator } });
+    const operation = engine.registerProtectedOperation({
+      id: "records.invalid-snapshot",
+      action: "record.write",
+      resource: "record:invalid",
+      validateInput: validator,
+      handler
+    });
+    await ensureStarted(engine);
+    const cyclic: Record<string, unknown> = {};
+    cyclic.self = cyclic;
+    const result = await engine.protectedOperations.execute(
+      operation, { actorId: "invalid-snapshot" }, cyclic
+    );
+
+    expect(result).toMatchObject({ status: "denied" });
+    expect(validator).not.toHaveBeenCalled();
+    expect(evaluator).not.toHaveBeenCalled();
+    expect(handler).not.toHaveBeenCalled();
+  });
+
+  it("preserves undefined as a valid protected-operation input", async () => {
+    const engine = new CoreEngine({ policy: { evaluate: async () => allow } });
+    const handler = vi.fn(async (value: undefined) => value === undefined ? "valid" : "invalid");
+    const operation = engine.registerProtectedOperation({
+      id: "records.undefined-input",
+      action: "record.read",
+      resource: "record:undefined",
+      validateInput: (value: unknown): value is undefined => value === undefined,
+      handler
+    });
+    await ensureStarted(engine);
+    const result = await engine.protectedOperations.execute(
+      operation, { actorId: "undefined-input" }, undefined
+    );
+
+    expect(result).toEqual({ status: "executed", value: "valid" });
+    expect(handler).toHaveBeenCalledTimes(1);
+    expect(handler).toHaveBeenCalledWith(undefined, expect.objectContaining({
+      operationId: "records.undefined-input"
+    }));
+  });
+
 });
