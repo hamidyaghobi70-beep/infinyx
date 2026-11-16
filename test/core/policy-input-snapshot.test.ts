@@ -2,6 +2,22 @@ import { describe, expect, it } from "vitest";
 import { snapshotBoundedPolicyData } from "../../src/core/policy-input-snapshot.js";
 
 describe("snapshotBoundedPolicyData", () => {
+
+  it("fails closed when a Proxy trap throws an object with hostile traps", () => {
+    const thrown = new Proxy({}, {
+      has: () => { throw new Error("hostile has trap"); },
+      get: () => { throw new Error("hostile get trap"); }
+    });
+    const input = new Proxy({}, {
+      ownKeys: () => { throw thrown; }
+    });
+
+    expect(snapshotBoundedPolicyData(input)).toEqual({
+      ok: false,
+      reason: "INVALID_STRUCTURE"
+    });
+  });
+
   it("preserves valid undefined without confusing it with failure", () => {
     expect(snapshotBoundedPolicyData(undefined)).toEqual({ ok: true, value: undefined });
   });
