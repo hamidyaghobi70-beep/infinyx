@@ -29,18 +29,7 @@ export type SnapshotResult<T> =
   | { readonly ok: true; readonly value: DeepReadonly<T> }
   | { readonly ok: false; readonly reason: SnapshotFailureReason };
 
-interface SnapshotFailure {
-  readonly snapshotFailure: SnapshotFailureReason;
-}
-
 const SNAPSHOT_ABORT = Symbol("snapshot-abort");
-
-function reject(reason: SnapshotFailureReason): never {
-  activeFailureReason = reason;
-  throw SNAPSHOT_ABORT;
-}
-
-let activeFailureReason: SnapshotFailureReason | undefined;
 
 function byteLength(value: string): number {
   return new TextEncoder().encode(value).byteLength;
@@ -56,7 +45,11 @@ function byteLength(value: string): number {
  */
 export function snapshotBoundedPolicyData<T>(input: T): SnapshotResult<T> {
   let nodes = 0;
-  activeFailureReason = undefined;
+  let failureReason: SnapshotFailureReason | undefined;
+  const reject = (reason: SnapshotFailureReason): never => {
+    failureReason = reason;
+    throw SNAPSHOT_ABORT;
+  };
   let totalBytes = 0;
   const ancestors = new Set<object>();
 
@@ -155,14 +148,12 @@ export function snapshotBoundedPolicyData<T>(input: T): SnapshotResult<T> {
   } catch (error) {
     // Only recognize our private sentinel by identity. Never inspect a thrown
     // value: a Proxy trap may throw an object whose own traps are hostile.
-    if (error === SNAPSHOT_ABORT && activeFailureReason !== undefined) {
-      return { ok: false, reason: activeFailureReason };
+    if (error === SNAPSHOT_ABORT && failureReason !== undefined) {
+      return { ok: false, reason: failureReason };
     }
 
     // Reflection on hostile or revoked Proxies may throw. Do not expose the
     // underlying exception or execute fallback logic on the original object.
     return { ok: false, reason: "INVALID_STRUCTURE" };
-  } finally {
-    activeFailureReason = undefined;
   }
 }
