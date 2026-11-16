@@ -33,9 +33,14 @@ interface SnapshotFailure {
   readonly snapshotFailure: SnapshotFailureReason;
 }
 
+const SNAPSHOT_ABORT = Symbol("snapshot-abort");
+
 function reject(reason: SnapshotFailureReason): never {
-  throw { snapshotFailure: reason } satisfies SnapshotFailure;
+  activeFailureReason = reason;
+  throw SNAPSHOT_ABORT;
 }
+
+let activeFailureReason: SnapshotFailureReason | undefined;
 
 function byteLength(value: string): number {
   return new TextEncoder().encode(value).byteLength;
@@ -51,6 +56,7 @@ function byteLength(value: string): number {
  */
 export function snapshotBoundedPolicyData<T>(input: T): SnapshotResult<T> {
   let nodes = 0;
+  activeFailureReason = undefined;
   let totalBytes = 0;
   const ancestors = new Set<object>();
 
@@ -147,21 +153,16 @@ export function snapshotBoundedPolicyData<T>(input: T): SnapshotResult<T> {
   try {
     return { ok: true, value: clone(input, 0) as DeepReadonly<T> };
   } catch (error) {
-    if (typeof error === "object" && error !== null && "snapshotFailure" in error) {
-      const reason = error.snapshotFailure;
-      if (
-        reason === "RESOURCE_LIMIT" ||
-        reason === "UNSUPPORTED_VALUE" ||
-        reason === "CIRCULAR_REFERENCE" ||
-        reason === "ACCESSOR_PROPERTY" ||
-        reason === "INVALID_STRUCTURE"
-      ) {
-        return { ok: false, reason };
-      }
+    // Only recognize our private sentinel by identity. Never inspect a thrown
+    // value: a Proxy trap may throw an object whose own traps are hostile.
+    if (error === SNAPSHOT_ABORT && activeFailureReason !== undefined) {
+      return { ok: false, reason: activeFailureReason };
     }
 
     // Reflection on hostile or revoked Proxies may throw. Do not expose the
     // underlying exception or execute fallback logic on the original object.
     return { ok: false, reason: "INVALID_STRUCTURE" };
+  } finally {
+    activeFailureReason = undefined;
   }
 }
