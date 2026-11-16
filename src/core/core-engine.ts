@@ -194,8 +194,10 @@ export class CoreEngine {
     const stopPromise = this.installStopPromise(() => {
       const policyShutdown = this.beginPolicyShutdown();
       if (this.initializedModules.length === 0) {
-        return policyShutdown.then(
-          () => { this.lifecycle = "stopped"; },
+        return policyShutdown.then(async () => {
+          await this.protectedOperationExecutor.drain();
+          this.lifecycle = "stopped";
+        },
           (error: unknown) => {
             this.lifecycle = "failed";
             throw new CoreError(
@@ -248,6 +250,7 @@ export class CoreEngine {
   private async performStop(policyShutdown: Promise<void>): Promise<void> {
     try {
       await policyShutdown;
+      await this.protectedOperationExecutor.drain();
     } catch (error) {
       this.lifecycle = "failed";
       throw new CoreError(
