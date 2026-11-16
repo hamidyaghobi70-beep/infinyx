@@ -84,7 +84,10 @@ export function snapshotBoundedPolicyData<T>(input: T): SnapshotResult<T> {
 
     const isArray = Array.isArray(value);
     const prototype = Object.getPrototypeOf(value);
-    if (!isArray && prototype !== Object.prototype && prototype !== null) {
+    if (
+      (isArray && prototype !== Array.prototype) ||
+      (!isArray && prototype !== Object.prototype && prototype !== null)
+    ) {
       reject("UNSUPPORTED_VALUE");
     }
 
@@ -106,7 +109,9 @@ export function snapshotBoundedPolicyData<T>(input: T): SnapshotResult<T> {
 
         const result: unknown[] = [];
         for (let index = 0; index < value.length; index += 1) {
-          const descriptor = Object.getOwnPropertyDescriptor(value, String(index));
+          const key = String(index);
+          accountString(key);
+          const descriptor = Object.getOwnPropertyDescriptor(value, key);
           if (!descriptor || !("value" in descriptor) || !descriptor.enumerable) {
             reject("ACCESSOR_PROPERTY");
           }
