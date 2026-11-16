@@ -57,6 +57,44 @@ describe("ProtectedOperationExecutor", () => {
     expect(handler).toHaveBeenCalledTimes(1);
   });
 
+  it("assigns a unique UUID to each execution while preserving the registration ID", async () => {
+    const executionIds: string[] = [];
+    const registrationIds: string[] = [];
+    const engine = new CoreEngine({ policy: { evaluate: async () => allow } });
+    const operation = engine.registerProtectedOperation({
+      id: "records.execution-identity",
+      action: "record.read",
+      resource: "record:identity",
+      validateInput: (value: unknown): value is string => typeof value === "string",
+      handler: (_input, context) => {
+        executionIds.push(context.operationId);
+        registrationIds.push(context.registrationId);
+        return "ok";
+      }
+    });
+    await ensureStarted(engine);
+
+    const results = await Promise.all([
+      engine.protectedOperations.execute(operation, { actorId: "identity-a" }, "a"),
+      engine.protectedOperations.execute(operation, { actorId: "identity-b" }, "b"),
+      engine.protectedOperations.execute(operation, { actorId: "identity-c" }, "c")
+    ]);
+
+    expect(results).toHaveLength(3);
+    expect(results.every((result) => result.status === "executed")).toBe(true);
+    expect(new Set(executionIds).size).toBe(3);
+    expect(executionIds).toEqual(expect.arrayContaining([
+      expect.stringMatching(/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i),
+      expect.stringMatching(/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i),
+      expect.stringMatching(/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i)
+    ]));
+    expect(registrationIds).toEqual([
+      "records.execution-identity",
+      "records.execution-identity",
+      "records.execution-identity"
+    ]);
+  });
+
   it("never invokes a handler after Deny", async () => {
     const { engine, operation, handler } = makeEngine(async () => deny);
     await ensureStarted(engine);
@@ -540,7 +578,8 @@ describe("ProtectedOperationExecutor", () => {
     expect(result).toEqual({ status: "executed", value: "valid" });
     expect(handler).toHaveBeenCalledTimes(1);
     expect(handler).toHaveBeenCalledWith(undefined, expect.objectContaining({
-      operationId: "records.undefined-input"
+      registrationId: "records.undefined-input",
+      operationId: expect.stringMatching(/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i)
     }));
   });
 
