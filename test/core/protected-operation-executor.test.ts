@@ -83,6 +83,7 @@ describe("ProtectedOperationExecutor", () => {
     expect(results).toHaveLength(3);
     expect(results.every((result) => result.status === "executed")).toBe(true);
     expect(new Set(executionIds).size).toBe(3);
+    expect(executionIds).not.toContain("records.execution-identity");
     expect(executionIds).toEqual(expect.arrayContaining([
       expect.stringMatching(/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i),
       expect.stringMatching(/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i),
