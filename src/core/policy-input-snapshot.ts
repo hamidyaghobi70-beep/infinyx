@@ -114,7 +114,8 @@ export function snapshotBoundedPolicyData<T>(input: T): SnapshotResult<T> {
           if (!descriptor || !("value" in descriptor) || !descriptor.enumerable) {
             reject("ACCESSOR_PROPERTY");
           }
-          result.push(clone(descriptor.value, depth + 1));
+          const dataDescriptor = descriptor as PropertyDescriptor & { readonly value: unknown };
+          result.push(clone(dataDescriptor.value, depth + 1));
         }
         return Object.freeze(result);
       }
@@ -124,16 +125,18 @@ export function snapshotBoundedPolicyData<T>(input: T): SnapshotResult<T> {
 
       for (const key of keys) {
         if (typeof key !== "string") reject("INVALID_STRUCTURE");
-        accountString(key);
-        const descriptor = Object.getOwnPropertyDescriptor(value, key);
+        const stringKey = key as string;
+        accountString(stringKey);
+        const descriptor = Object.getOwnPropertyDescriptor(value, stringKey);
         if (!descriptor || !("value" in descriptor) || !descriptor.enumerable) {
           reject("ACCESSOR_PROPERTY");
         }
-        Object.defineProperty(result, key, {
+        const dataDescriptor = descriptor as PropertyDescriptor & { readonly value: unknown };
+        Object.defineProperty(result, stringKey, {
           configurable: false,
           enumerable: true,
           writable: false,
-          value: clone(descriptor.value, depth + 1)
+          value: clone(dataDescriptor.value, depth + 1)
         });
       }
 
