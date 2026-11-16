@@ -6,12 +6,14 @@ on:
       - foundation/repository-foundation
       - release/**
       - fix/infinyx-core-policy-cancellation
+      - fix/patch-*
       - feat/gap-002-protected-operation-executor
       - integration/infinyx-core-runtime-v1
       - integration/infinyx-agent-v1-audit-hardening
   pull_request:
     branches:
       - integration/infinyx-core-runtime-v1
+      - integration/infinyx-agent-v1-audit-hardening
       - foundation/repository-foundation
       - main
       - feat/gap-002-protected-operation-executor
