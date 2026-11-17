@@ -584,7 +584,20 @@ export class CoreEngine {
           this.moduleStopCompleted.add(module.id);
         }
         const memory = this.moduleMemory.get(module.id);
-        if (memory) await revokeGuardedMemoryPort(memory, deadlineAt);
+        if (memory) {
+          try {
+            await revokeGuardedMemoryPort(memory, deadlineAt);
+          } catch (cause) {
+            if (deadlineAt !== undefined && performance.now() >= deadlineAt) {
+              throw new CoreError(
+                "MODULE_MEMORY_DRAIN_TIMEOUT",
+                "Module memory operations did not drain before the shutdown deadline.",
+                { cause }
+              );
+            }
+            throw cause;
+          }
+        }
         this.moduleStates.set(module.id, preserveFailure ? "failed" : "stopped");
         // Release the module-scoped capability only after its cleanup succeeds.
         // Failed hooks retain it so an explicit cleanup retry sees the same context.
