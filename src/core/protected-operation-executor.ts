@@ -184,20 +184,58 @@ export class ProtectedOperationExecutor implements ProtectedOperationPort {
   }
 
   register<TInput, TOutput>(definition: ProtectedOperationDefinition<TInput, TOutput>): ProtectedOperationHandle<TInput, TOutput> {
-    if (!definition || typeof definition.id !== "string" || !definition.id.trim() ||
-      typeof definition.action !== "string" || !definition.action.trim() ||
-      typeof definition.resource !== "string" || !definition.resource.trim() ||
-      typeof definition.validateInput !== "function" || typeof definition.handler !== "function") {
+    // Registration is a trust boundary: capture one immutable descriptor snapshot
+    // so accessors and later caller mutation cannot change the authorized target.
+    let id: unknown;
+    let action: unknown;
+    let resource: unknown;
+    let validateInput: unknown;
+    let handler: unknown;
+    try {
+      if (!definition || typeof definition !== "object" || Array.isArray(definition)) {
+        throw new TypeError("Protected operation registration is invalid.");
+      }
+      const prototype = Object.getPrototypeOf(definition);
+      if (prototype !== Object.prototype && prototype !== null) {
+        throw new TypeError("Protected operation registration must be a plain record.");
+      }
+      const descriptors = Object.getOwnPropertyDescriptors(definition);
+      const keys = Reflect.ownKeys(definition);
+      const allowed = new Set(["id", "action", "resource", "validateInput", "handler"]);
+      if (keys.length !== allowed.size || keys.some((key) => typeof key !== "string" || !allowed.has(key))) {
+        throw new TypeError("Protected operation registration has unexpected properties.");
+      }
+      const read = (key: string): unknown => {
+        const descriptor = descriptors[key];
+        if (!descriptor || !Object.prototype.hasOwnProperty.call(descriptor, "value") ||
+            descriptor.enumerable !== true) {
+          throw new TypeError("Protected operation registration requires enumerable data properties.");
+        }
+        return descriptor.value;
+      };
+      id = read("id");
+      action = read("action");
+      resource = read("resource");
+      validateInput = read("validateInput");
+      handler = read("handler");
+    } catch {
       throw new TypeError("Protected operation registration is invalid.");
     }
-    if (this.operationIds.has(definition.id)) throw new TypeError("Protected operation ID is already registered.");
-    const handle: InternalHandle = Object.freeze({ id: definition.id, [handleBrand]: true as const });
+    if (typeof id !== "string" || !id.trim() || id.length > 128 ||
+        typeof action !== "string" || !action.trim() || action.length > 256 ||
+        typeof resource !== "string" || !resource.trim() || resource.length > 256 ||
+        typeof validateInput !== "function" || typeof handler !== "function") {
+      throw new TypeError("Protected operation registration is invalid.");
+    }
+    if (this.operationIds.has(id)) throw new TypeError("Protected operation ID is already registered.");
+    const handle: InternalHandle = Object.freeze({ id, [handleBrand]: true as const });
     const registration: RegisteredOperation<TInput, TOutput> = Object.freeze({
-      id: definition.id, action: definition.action, resource: definition.resource,
-      validateInput: definition.validateInput, handler: definition.handler
+      id, action, resource,
+      validateInput: validateInput as (value: unknown) => value is TInput,
+      handler: handler as (input: TInput, context: ProtectedOperationContext) => TOutput | Promise<TOutput>
     });
     this.registrations.set(handle, registration as RegisteredOperation);
-    this.operationIds.add(definition.id);
+    this.operationIds.add(id);
     return handle;
   }
 
