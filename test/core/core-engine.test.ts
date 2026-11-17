@@ -891,6 +891,46 @@ describe("CoreEngine bounded rollback memory drain", () => {
 });
 
 
+describe("CoreEngine rollback and shutdown concurrency", () => {
+  it("joins an in-flight startup rollback without invoking module cleanup twice", async () => {
+    const engine = new CoreEngine({
+      protectedOperationShutdown: { drainDeadlineMs: 1000 }
+    });
+    let releaseStop!: () => void;
+    let signalStopStarted!: () => void;
+    const stopStarted = new Promise<void>((resolve) => { signalStopStarted = resolve; });
+    const stopGate = new Promise<void>((resolve) => { releaseStop = resolve; });
+    let stopCalls = 0;
+
+    engine.register({
+      id: "worker",
+      version: "1.0.0",
+      start: () => { throw new Error("startup failed"); },
+      stop: async () => {
+        stopCalls += 1;
+        signalStopStarted();
+        await stopGate;
+      }
+    });
+
+    await engine.initialize();
+    const startup = engine.start();
+    await stopStarted;
+
+    expect(engine.state).toBe("failed");
+    const shutdown = engine.stop();
+    expect(stopCalls).toBe(1);
+
+    releaseStop();
+    await expect(startup).rejects.toThrow(/startup failed/i);
+    await shutdown;
+
+    expect(stopCalls).toBe(1);
+    expect(engine.state).toBe("stopped");
+    expect(engine.getModuleStates().get("worker")).toBe("stopped");
+  });
+});
+
 describe("CoreEngine bounded module stop hooks", () => {
   it("times out a pending dependent stop hook and resumes without invoking it twice", async () => {
     const engine = new CoreEngine({
