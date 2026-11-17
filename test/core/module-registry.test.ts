@@ -219,6 +219,24 @@ describe("ModuleRegistry resource bounds", () => {
     })).toThrowError(CoreError);
   });
 
+  it("rejects dependency identifiers that exceed the module identifier contract", () => {
+    const registry = new ModuleRegistry();
+
+    expect(() => registry.register({
+      id: "oversized-dependency",
+      version: "1.0.0",
+      dependencies: ["a".repeat(129)]
+    })).toThrowError(CoreError);
+
+    expect(() => registry.register({
+      id: "malformed-dependency",
+      version: "1.0.0",
+      dependencies: ["Invalid_Dependency"]
+    })).toThrowError(CoreError);
+
+    expect(registry.list()).toHaveLength(0);
+  });
+
   it("enforces a total dependency-edge budget across the registry", async () => {
     const registry = new ModuleRegistry();
     const perModule = MAX_MODULE_DEPENDENCIES;
