@@ -548,3 +548,35 @@ describe("hostile policy evaluation options", () => {
     expect(evaluator).not.toHaveBeenCalled();
   });
 });
+
+
+describe("global policy evaluation resource bound", () => {
+  it("rejects evaluations beyond the process-wide concurrency limit", async () => {
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    let evaluatorCalls = 0;
+    const policy = new FailClosedPolicyEngine({
+      evaluate: async () => {
+        evaluatorCalls += 1;
+        await gate;
+        return { effect: "allow", reason: "completed" };
+      }
+    });
+
+    const active = Array.from({ length: 512 }, () => policy.evaluate(request));
+    const overflow = await policy.evaluate(request);
+
+    expect(overflow).toMatchObject({
+      effect: "deny",
+      reason: expect.stringMatching(/concurrency limit/i)
+    });
+    expect(evaluatorCalls).toBe(0);
+
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(evaluatorCalls).toBe(512);
+    release();
+    const results = await Promise.all(active);
+    expect(results.every((result) => result.effect === "allow")).toBe(true);
+  });
+});
