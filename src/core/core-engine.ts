@@ -37,6 +37,60 @@ export interface CoreEngineOptions {
   };
 }
 
+function snapshotOptionRecord(
+  value: unknown,
+  allowedKeys: readonly string[],
+  code: string,
+  message: string
+): Record<string, unknown> {
+  try {
+    if (typeof value !== "object" || value === null || Array.isArray(value)) {
+      throw new Error("Invalid option record.");
+    }
+    const prototype = Object.getPrototypeOf(value);
+    if (prototype !== Object.prototype && prototype !== null) {
+      throw new Error("Option records must be plain objects.");
+    }
+    const result: Record<string, unknown> = Object.create(null) as Record<string, unknown>;
+    for (const key of Reflect.ownKeys(value)) {
+      if (typeof key !== "string" || !allowedKeys.includes(key)) {
+        throw new Error("Unknown option property.");
+      }
+      const descriptor = Object.getOwnPropertyDescriptor(value, key);
+      if (!descriptor ||
+          !Object.prototype.hasOwnProperty.call(descriptor, "value") ||
+          descriptor.enumerable !== true) {
+        throw new Error("Option properties must be enumerable data properties.");
+      }
+      result[key] = descriptor.value;
+    }
+    return result;
+  } catch {
+    throw new CoreError(code, message);
+  }
+}
+
+function snapshotCoreEngineOptions(value: unknown): CoreEngineOptions {
+  const options = snapshotOptionRecord(
+    value,
+    ["events", "policy", "memory", "policyTimeoutMs", "protectedOperationShutdown"],
+    "CORE_ENGINE_OPTIONS_INVALID",
+    "Core Engine options must contain only stable data properties."
+  );
+  const shutdown = options.protectedOperationShutdown;
+  if (shutdown === undefined) {
+    return Object.freeze(options) as CoreEngineOptions;
+  }
+  const shutdownOptions = snapshotOptionRecord(
+    shutdown,
+    ["drainDeadlineMs"],
+    "PROTECTED_OPERATION_SHUTDOWN_CONFIG_INVALID",
+    "Protected-operation shutdown configuration is invalid."
+  );
+  options.protectedOperationShutdown = Object.freeze(shutdownOptions);
+  return Object.freeze(options) as CoreEngineOptions;
+}
+
 export class CoreEngine {
   readonly events: EventBusPort;
   readonly policy: PolicyEngine;
@@ -61,9 +115,11 @@ export class CoreEngine {
   private executorDrainFailure: CoreError | undefined;
   private policyShutdownFailure: CoreError | undefined;
   private readonly moduleMemory = new Map<string, GuardedMemoryPort>();
+  private readonly options: CoreEngineOptions;
 
-  constructor(private readonly options: CoreEngineOptions = {}) {
-    const shutdownConfig = options.protectedOperationShutdown;
+  constructor(options: CoreEngineOptions = {}) {
+    this.options = snapshotCoreEngineOptions(options);
+    const shutdownConfig = this.options.protectedOperationShutdown;
     if (shutdownConfig !== undefined &&
         (typeof shutdownConfig !== "object" || shutdownConfig === null)) {
       throw new CoreError(
@@ -86,9 +142,9 @@ export class CoreEngine {
     this.drainDeadlineMs = hasExplicitDrainDeadline
       ? configuredDrainDeadline as number
       : 30_000;
-    this.events = options.events ?? new InMemoryEventBus();
-    this.policy = options.policy
-      ? new FailClosedPolicyEngine(options.policy, options.policyTimeoutMs)
+    this.events = this.options.events ?? new InMemoryEventBus();
+    this.policy = this.options.policy
+      ? new FailClosedPolicyEngine(this.options.policy, this.options.policyTimeoutMs)
       : new DefaultDenyPolicyEngine();
     this.protectedOperationExecutor = new ProtectedOperationExecutor(
       this.policy,
