@@ -460,11 +460,9 @@ export class CoreEngine {
       timer = setTimeout(() => resolve(false), remainingMs);
     });
 
-    let bothSettledBeforeDeadline = false;
     try {
-      const drained = Promise.allSettled([executorDrain, policyShutdown]).then(() => true as const);
-      const completed = await Promise.race([drained, timedOut]);
-      bothSettledBeforeDeadline = completed && performance.now() <= deadline;
+      const drained = Promise.allSettled([executorDrain, policyShutdown]);
+      await Promise.race([drained, timedOut]);
     } finally {
       if (timer !== undefined) clearTimeout(timer);
     }
@@ -496,14 +494,6 @@ export class CoreEngine {
     if (!this.policyShutdownSettled ||
         (this.policyShutdownSettledAt !== undefined &&
          this.policyShutdownSettledAt > deadline && !this.policyShutdownFailure)) {
-      blockers.push({
-        code: "POLICY_EVALUATION_DRAIN_TIMEOUT",
-        subsystem: "policy",
-        state: "unresolved"
-      });
-    }
-
-    if (!bothSettledBeforeDeadline && blockers.length === 0) {
       blockers.push({
         code: "POLICY_EVALUATION_DRAIN_TIMEOUT",
         subsystem: "policy",
