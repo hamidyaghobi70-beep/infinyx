@@ -32,7 +32,7 @@ export type SnapshotResult<T> =
 const SNAPSHOT_ABORT = Symbol("snapshot-abort");
 
 function byteLength(value: string): number {
-  return new TextEncoder().encode(value).byteLength;
+  return Buffer.byteLength(value, "utf8");
 }
 
 /**
