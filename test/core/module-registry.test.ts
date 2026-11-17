@@ -180,3 +180,65 @@ describe("ModuleRegistry trust-boundary snapshots", () => {
     expect(calls).toBe(1);
   });
 });
+
+
+describe("ModuleRegistry resource bounds", () => {
+  it("rejects registration beyond the global module limit", async () => {
+    const { MAX_CORE_MODULES } = await import("../../src/core/module-registry.js");
+    const registry = new ModuleRegistry();
+    for (let index = 0; index < MAX_CORE_MODULES; index += 1) {
+      registry.register({
+        id: "module-" + index,
+        version: "1.0.0"
+      });
+    }
+
+    expect(() => registry.register({
+      id: "module-over-limit",
+      version: "1.0.0"
+    })).toThrowError(CoreError);
+    expect(registry.list()).toHaveLength(MAX_CORE_MODULES);
+  });
+
+  it("rejects oversized and duplicate dependency lists", () => {
+    const { MAX_MODULE_DEPENDENCIES } = requireModuleLimitsForTest();
+    const registry = new ModuleRegistry();
+    const tooMany = Array.from(
+      { length: MAX_MODULE_DEPENDENCIES + 1 },
+      (_, index) => "dependency-" + index
+    );
+
+    expect(() => registry.register({
+      id: "oversized",
+      version: "1.0.0",
+      dependencies: tooMany
+    })).toThrowError(CoreError);
+
+    expect(() => registry.register({
+      id: "duplicates",
+      version: "1.0.0",
+      dependencies: ["base", "base"]
+    })).toThrowError(CoreError);
+  });
+
+  it("does not reread caller-controlled module properties after snapshotting", () => {
+    const engine = new CoreEngine();
+    const target = { id: "stable-module", version: "1.0.0" } as CoreModule;
+    const hostile = new Proxy(target, {
+      get() {
+        throw new Error("untrusted property read");
+      }
+    });
+
+    expect(() => engine.register(hostile)).not.toThrow();
+    expect(engine.getModules().map((module) => module.id)).toEqual(["stable-module"]);
+    expect(engine.getModuleStates().get("stable-module")).toBe("registered");
+  });
+});
+
+function requireModuleLimitsForTest(): {
+  MAX_MODULE_DEPENDENCIES: number;
+} {
+  // Kept synchronous so this test can assert the registration boundary directly.
+  return { MAX_MODULE_DEPENDENCIES: 64 };
+}
