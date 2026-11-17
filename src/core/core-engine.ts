@@ -1,5 +1,5 @@
 import { AsyncLocalStorage } from "node:async_hooks";
-import { GuardedMemoryPort } from "./guarded-memory-port.js";
+import { GuardedMemoryPort, revokeGuardedMemoryPort } from "./guarded-memory-port.js";
 import type {
   CoreLifecycleState,
   CoreModule,
