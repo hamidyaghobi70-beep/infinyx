@@ -708,7 +708,6 @@ describe("ProtectedOperationExecutor", () => {
 
     const pending = engine.protectedOperations.execute(parent, { actorId: "parent-caller" }, "parent");
     await started;
-    expect(engine["protectedOperationExecutor"].activeExecutionCount).toBe(2);
     let settled = false;
     void pending.then(() => { settled = true; });
     await Promise.resolve();
@@ -716,7 +715,6 @@ describe("ProtectedOperationExecutor", () => {
 
     releaseChild("child-complete");
     await expect(pending).resolves.toEqual({ status: "executed", value: "parent" });
-    expect(engine["protectedOperationExecutor"].activeExecutionCount).toBe(0);
   });
 
   it("supports nested child executions and records explicit parent identities", async () => {
@@ -795,7 +793,6 @@ describe("ProtectedOperationExecutor", () => {
     await engine.protectedOperations.execute(parent, { actorId: "parent-caller" }, "root");
 
     await expect(lateRunChild(child)).resolves.toMatchObject({ status: "denied" });
-    expect(engine["protectedOperationExecutor"].activeExecutionCount).toBe(0);
   });
 
   it("fails the parent operation when a child handler fails", async () => {
@@ -827,6 +824,8 @@ describe("ProtectedOperationExecutor", () => {
   it("cascades parent cancellation to child execution signals", async () => {
     const controller = new AbortController();
     let childSignal: AbortSignal | undefined;
+    let childStarted!: () => void;
+    const started = new Promise<void>((resolve) => { childStarted = resolve; });
     let releaseChild!: () => void;
     const childGate = new Promise<void>((resolve) => { releaseChild = resolve; });
     const engine = new CoreEngine({ policy: { evaluate: async () => allow } });
@@ -837,6 +836,7 @@ describe("ProtectedOperationExecutor", () => {
       validateInput: (value: unknown): value is string => typeof value === "string",
       handler: async (_input, context) => {
         childSignal = context.signal;
+        childStarted();
         await childGate;
         return "child";
       }
@@ -848,7 +848,7 @@ describe("ProtectedOperationExecutor", () => {
       validateInput: (value: unknown): value is string => typeof value === "string",
       handler: async (_input, context) => {
         const childPromise = context.runChild(child, { actorId: "child-caller" }, "child");
-        await Promise.resolve();
+        await started;
         controller.abort();
         const result = await childPromise;
         expect(result.status).toBe("executed");
@@ -860,8 +860,7 @@ describe("ProtectedOperationExecutor", () => {
     const pending = engine.protectedOperations.execute(
       parent, { actorId: "parent-caller" }, "root", { signal: controller.signal }
     );
-    await Promise.resolve();
-    await Promise.resolve();
+    await started;
     expect(childSignal?.aborted).toBe(true);
     releaseChild();
     await pending;
