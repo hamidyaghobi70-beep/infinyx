@@ -98,20 +98,17 @@ export class ModuleRegistry {
         throw new CoreError("MODULE_DEPENDENCY_CYCLE", 'Module "' + id + '" cannot depend on itself.');
       }
 
-      // Preserve class-instance receivers while capturing stable callable hooks.
+      // Resolve each hook exactly once while preserving class-instance receivers.
+      const initialize = readLifecycleHook(module, "initialize");
+      const start = readLifecycleHook(module, "start");
+      const stop = readLifecycleHook(module, "stop");
       const registered: CoreModule = {
         id,
         version,
         dependencies,
-        ...(readLifecycleHook(module, "initialize")
-          ? { initialize: readLifecycleHook(module, "initialize") }
-          : {}),
-        ...(readLifecycleHook(module, "start")
-          ? { start: readLifecycleHook(module, "start") }
-          : {}),
-        ...(readLifecycleHook(module, "stop")
-          ? { stop: readLifecycleHook(module, "stop") }
-          : {})
+        ...(initialize ? { initialize } : {}),
+        ...(start ? { start } : {}),
+        ...(stop ? { stop } : {})
       };
 
       this.modules.set(id, Object.freeze(registered));
