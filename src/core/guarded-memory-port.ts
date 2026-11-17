@@ -84,6 +84,32 @@ interface NormalizedDecision {
   readonly reason: string;
 }
 
+function captureTrustedMethod<T extends (...args: never[]) => unknown>(
+  target: unknown,
+  name: string
+): T {
+  try {
+    if ((typeof target !== "object" && typeof target !== "function") || target === null) {
+      throw new Error("Invalid capability target.");
+    }
+    let current: object | null = target as object;
+    while (current !== null) {
+      const descriptor = Object.getOwnPropertyDescriptor(current, name);
+      if (descriptor) {
+        if (!Object.prototype.hasOwnProperty.call(descriptor, "value") ||
+            typeof descriptor.value !== "function") {
+          throw new Error("Capability methods must be data properties.");
+        }
+        return Function.prototype.bind.call(descriptor.value, target) as T;
+      }
+      current = Object.getPrototypeOf(current) as object | null;
+    }
+  } catch {
+    throw new TypeError("GuardedMemoryPort dependencies must expose stable data methods.");
+  }
+  throw new TypeError("GuardedMemoryPort dependencies must expose stable data methods.");
+}
+
 /**
  * Tenant-scoped, policy-checked, audited decorator over a MemoryPort.
  *
@@ -100,9 +126,12 @@ interface NormalizedDecision {
  * key management, retention, backup and durable audit storage are NOT provided.
  */
 export class GuardedMemoryPort implements MemoryPort {
-  readonly #store: MemoryPort;
-  readonly #policy: PolicyEngine;
-  readonly #audit: MemoryAuditPort;
+  readonly #storeRead: (address: MemoryAddress) => Promise<unknown | null>;
+  readonly #storeWrite: (address: MemoryAddress, value: unknown) => Promise<void>;
+  readonly #storeDelete: (address: MemoryAddress) => Promise<void>;
+  readonly #policyEvaluate: PolicyEngine["evaluate"];
+  readonly #auditPublishDecision: MemoryAuditPort["publishDecision"];
+  readonly #auditPublishFailure: MemoryAuditPort["publishFailure"];
   readonly #scope: MemoryScope;
   readonly #maxValueBytes: number;
   readonly #policyTimeoutMs: number;
@@ -177,9 +206,12 @@ export class GuardedMemoryPort implements MemoryPort {
       );
     }
 
-    this.#store = store as MemoryPort;
-    this.#policy = policy as PolicyEngine;
-    this.#audit = audit as MemoryAuditPort;
+    this.#storeRead = captureTrustedMethod(store, "read");
+    this.#storeWrite = captureTrustedMethod(store, "write");
+    this.#storeDelete = captureTrustedMethod(store, "delete");
+    this.#policyEvaluate = captureTrustedMethod(policy, "evaluate");
+    this.#auditPublishDecision = captureTrustedMethod(audit, "publishDecision");
+    this.#auditPublishFailure = captureTrustedMethod(audit, "publishFailure");
     this.#maxValueBytes = maxValueBytes;
     this.#policyTimeoutMs = policyTimeoutMs;
     this.#auditTimeoutMs = auditTimeoutMs;
@@ -198,7 +230,7 @@ export class GuardedMemoryPort implements MemoryPort {
     await this.authorize("read", target);
 
     return this.callStore("read", target, async () => {
-      const stored = await this.#store.read(target.inner);
+      const stored = await this.#storeRead(target.inner);
       if (stored === null) return null;
       if (typeof stored !== "string") {
         throw new TypeError("Backing store returned a value that is not a serialized string.");
@@ -211,13 +243,13 @@ export class GuardedMemoryPort implements MemoryPort {
     const target = this.resolve(address);
     const serialized = this.serialize(value);
     await this.authorize("write", target);
-    await this.callStore("write", target, () => this.#store.write(target.inner, serialized));
+    await this.callStore("write", target, () => this.#storeWrite(target.inner, serialized));
   }
 
   async delete(address: MemoryAddress): Promise<void> {
     const target = this.resolve(address);
     await this.authorize("delete", target);
-    await this.callStore("delete", target, () => this.#store.delete(target.inner));
+    await this.callStore("delete", target, () => this.#storeDelete(target.inner));
   }
 
   private resolve(address: MemoryAddress): ResolvedTarget {
@@ -298,7 +330,7 @@ export class GuardedMemoryPort implements MemoryPort {
 
     let decision: NormalizedDecision;
     try {
-      const result = await withTimeout(() => this.#policy.evaluate(request), this.#policyTimeoutMs);
+      const result = await withTimeout(() => this.#policyEvaluate(request), this.#policyTimeoutMs);
       decision = result === TIMED_OUT
         ? { effect: "deny", reason: "Policy evaluation timed out." }
         : normalizeDecision(result);
@@ -317,7 +349,7 @@ export class GuardedMemoryPort implements MemoryPort {
 
     try {
       const published = await withTimeout(
-        () => this.#audit.publishDecision(audit),
+        () => this.#auditPublishDecision(audit),
         this.#auditTimeoutMs
       );
       if (published !== true) {
@@ -376,7 +408,7 @@ export class GuardedMemoryPort implements MemoryPort {
       // Failure reporting is best-effort and bounded by the same audit deadline.
       // A stalled subscriber must not delay propagation of the original backend error.
       await withTimeout(
-        () => this.#audit.publishFailure(failure),
+        () => this.#auditPublishFailure(failure),
         this.#auditTimeoutMs
       );
     } catch {
