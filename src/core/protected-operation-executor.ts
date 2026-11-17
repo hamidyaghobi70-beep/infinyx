@@ -54,6 +54,8 @@ interface ActiveExecution {
   readonly parent?: ActiveExecution;
   readonly childExecutionIds: Set<string>;
   readonly childPromises: Set<Promise<ProtectedOperationResult<unknown>>>;
+  readonly settled: Promise<void>;
+  readonly resolveSettled: () => void;
   phase: ActiveExecutionPhase;
   childScopeOpen: boolean;
   childFailed: boolean;
@@ -87,6 +89,28 @@ export class ProtectedOperationExecutor implements ProtectedOperationPort {
   /** Number of accepted executions that have not actually settled yet. */
   get activeExecutionCount(): number {
     return this.activeExecutions.size;
+  }
+
+  /**
+   * Wait for every admitted execution, including nested and detached children,
+   * to settle. Expiry is a hard drain failure, not evidence of cancellation.
+   */
+  async drain(deadlineAt: number): Promise<boolean> {
+    while (this.activeExecutions.size > 0) {
+      const remaining = deadlineAt - Date.now();
+      if (remaining <= 0) return false;
+      let timeout: ReturnType<typeof setTimeout> | undefined;
+      const settled = Promise.all(
+        [...this.activeExecutions.values()].map((execution) => execution.settled)
+      ).then(() => true);
+      const timedOut = new Promise<false>((resolve) => {
+        timeout = setTimeout(() => resolve(false), remaining);
+      });
+      const completed = await Promise.race([settled, timedOut]);
+      if (timeout !== undefined) clearTimeout(timeout);
+      if (!completed) return false;
+    }
+    return true;
   }
 
   register<TInput, TOutput>(definition: ProtectedOperationDefinition<TInput, TOutput>): ProtectedOperationHandle<TInput, TOutput> {
@@ -184,9 +208,13 @@ export class ProtectedOperationExecutor implements ProtectedOperationPort {
     }
     const executionId = randomUUID();
     const operationController = new AbortController();
+    let resolveSettled!: () => void;
+    const settled = new Promise<void>((resolve) => { resolveSettled = resolve; });
     const activeExecution: ActiveExecution = {
       id: executionId,
       controller: operationController,
+      settled,
+      resolveSettled,
       ...(parentExecution ? { parent: parentExecution } : {}),
       childExecutionIds: new Set<string>(),
       childPromises: new Set<Promise<ProtectedOperationResult<unknown>>>(),
@@ -295,6 +323,7 @@ export class ProtectedOperationExecutor implements ProtectedOperationPort {
       if (parentSignal && parentAbortListener) parentSignal.removeEventListener("abort", parentAbortListener);
       this.activeExecutions.delete(executionId);
       parentExecution?.childExecutionIds.delete(executionId);
+      activeExecution.resolveSettled();
     }
   }
 
