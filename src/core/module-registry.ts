@@ -1,6 +1,12 @@
 import type { CoreModule } from "./contracts.js";
 import { CoreError } from "./core-error.js";
 
+export const MAX_CORE_MODULES = 256;
+export const MAX_MODULE_DEPENDENCIES = 64;
+export const MAX_TOTAL_MODULE_DEPENDENCIES = 4_096;
+export const MAX_MODULE_ID_LENGTH = 128;
+export const MAX_MODULE_VERSION_LENGTH = 128;
+
 function invalidModule(): CoreError {
   return new CoreError(
     "INVALID_MODULE",
@@ -49,7 +55,8 @@ function snapshotDependencies(value: unknown): readonly string[] {
   if (!lengthDescriptor ||
       !Object.prototype.hasOwnProperty.call(lengthDescriptor, "value") ||
       !Number.isSafeInteger(lengthDescriptor.value) ||
-      lengthDescriptor.value < 0) {
+      lengthDescriptor.value < 0 ||
+      lengthDescriptor.value > MAX_MODULE_DEPENDENCIES) {
     throw invalidModule();
   }
 
@@ -63,13 +70,15 @@ function snapshotDependencies(value: unknown): readonly string[] {
     }
     dependencies.push(descriptor.value);
   }
+  if (new Set(dependencies).size !== dependencies.length) throw invalidModule();
   return Object.freeze(dependencies);
 }
 
 export class ModuleRegistry {
   private readonly modules = new Map<string, CoreModule>();
+  private totalDependencies = 0;
 
-  register(module: CoreModule): void {
+  register(module: CoreModule): CoreModule {
     try {
       if ((typeof module !== "object" && typeof module !== "function") || module === null) {
         throw invalidModule();
@@ -84,9 +93,16 @@ export class ModuleRegistry {
       );
 
       if (typeof id !== "string" ||
+          id.length > MAX_MODULE_ID_LENGTH ||
           !/^[a-z][a-z0-9-]*$/.test(id) ||
           typeof version !== "string" ||
-          !version.trim()) {
+          !version.trim() ||
+          version.length > MAX_MODULE_VERSION_LENGTH) {
+        throw invalidModule();
+      }
+
+      if (this.modules.size >= MAX_CORE_MODULES ||
+          this.totalDependencies + dependencies.length > MAX_TOTAL_MODULE_DEPENDENCIES) {
         throw invalidModule();
       }
 
@@ -111,7 +127,10 @@ export class ModuleRegistry {
         ...(stop ? { stop } : {})
       };
 
-      this.modules.set(id, Object.freeze(registered));
+      const snapshot = Object.freeze(registered);
+      this.modules.set(id, snapshot);
+      this.totalDependencies += dependencies.length;
+      return snapshot;
     } catch (error) {
       if (error instanceof CoreError) throw error;
       throw invalidModule();
