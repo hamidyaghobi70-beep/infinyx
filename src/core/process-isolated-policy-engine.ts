@@ -1,6 +1,7 @@
 import { existsSync } from "node:fs";
 import { fork } from "node:child_process";
 import { randomUUID } from "node:crypto";
+import { getProcessContainmentCapability, isProcessGroupEmpty, signalProcessGroup, waitForProcessGroupEmpty } from "./process-containment.js";
 import { observePolicyOutputStream, type PolicyOutputFailureReason } from "./policy-output-stream.js";
 import { dirname, isAbsolute, join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -186,6 +187,10 @@ export class ProcessIsolatedPolicyEngine implements PolicyEngine {
     return this.active.size;
   }
 
+  get containmentCapability() {
+    return getProcessContainmentCapability();
+  }
+
   async evaluate(
     request: PolicyRequest,
     options?: PolicyEvaluationOptions
@@ -254,7 +259,8 @@ export class ProcessIsolatedPolicyEngine implements PolicyEngine {
       execArgv: [...runner.execArgv, `--max-old-space-size=${this.maxOldSpaceSizeMb}`],
       silent: true,
       serialization: "advanced",
-      windowsHide: true
+      windowsHide: true,
+      detached: process.platform !== "win32"
     });
 
 
@@ -357,7 +363,8 @@ export class ProcessIsolatedPolicyEngine implements PolicyEngine {
         // First request cooperative termination. If the child ignores it,
         // escalate to an uncatchable signal before declaring termination unknown.
         try {
-          child.kill("SIGTERM");
+          if (process.platform === "win32" || child.pid === undefined) child.kill("SIGTERM");
+          else signalProcessGroup(child.pid, "SIGTERM");
         } catch {
           // Continue to forceful escalation after the grace window.
         }
@@ -367,7 +374,8 @@ export class ProcessIsolatedPolicyEngine implements PolicyEngine {
           if (closed || resolved) return;
 
           try {
-            child.kill("SIGKILL");
+            if (process.platform === "win32" || child.pid === undefined) child.kill("SIGKILL");
+            else signalProcessGroup(child.pid, "SIGKILL");
           } catch {
             // The final close wait decides whether termination is confirmed.
           }
@@ -560,52 +568,78 @@ export class ProcessIsolatedPolicyEngine implements PolicyEngine {
       closed = true;
       clearTimers();
       removeAbortListeners();
-      this.active.delete(executionId);
-      // finishUnresolved already committed a candidate-free UNRESOLVED record;
-      // close only releases capacity and must not run terminal candidate logic.
-      if (resolved) return;
-
-      if (!candidateFrozen || !candidate) {
-        candidateFrozen = true;
-        candidate = {
-          outcome: "FAILED",
-          decision: deny(
-            "Policy evaluator process exited without a valid result; access denied."
-          )
-        };
-      }
-
-      // Arbitration is first-accepted-stop, not a fixed output-vs-cancellation
-      // priority. outputFailureReason is assigned only when requestOutputStop
-      // receives PRIMARY from acceptStopCause; therefore, when present, it is
-      // necessarily the primary stop cause. A later output failure is rejected
-      // after a cancellation/timeout veto, while a later veto cannot replace an
-      // output failure that was accepted first.
-      terminalCommitted = true;
-      let outcome = (terminalVeto ?? candidate).outcome;
-      let decision = (terminalVeto ?? candidate).decision;
-      if (outputFailureReason !== undefined) {
-        outcome = "FAILED";
-        decision = deny(stopMessage(outputFailureReason));
-      } else if ((outcome === "COMPLETED" || outcome === "DENIED") && code !== 0) {
-        outcome = "FAILED";
-        decision = deny("Policy evaluator process exited abnormally; access denied.");
-      }
-
-      // ChildProcess "close" fires after the child has ended and its stdio
-      // streams have closed. Only this point can publish a committed allow.
-      if (outcome === "COMPLETED") notify("AUTHORIZED");
-      notify("TERMINAL");
-      resolved = true;
-      resolveCompletion(makeRecord(
-        "TERMINAL",
-        outcome,
-        decision,
-        "STOPPED",
-        "COMPLETED",
-        stopReason ?? outputFailureReason ?? terminalVeto?.stopReason ?? candidate.stopReason,
-        stopProvenance
-      ));
+      void (async () => {
+        let descendantsWerePresent = false;
+        if (process.platform !== "win32" && child.pid !== undefined && !isProcessGroupEmpty(child.pid)) {
+          descendantsWerePresent = true;
+          signalProcessGroup(child.pid, "SIGTERM");
+          let empty = await waitForProcessGroupEmpty(child.pid, this.terminationGraceMs);
+          if (!empty) {
+            signalProcessGroup(child.pid, "SIGKILL");
+            empty = await waitForProcessGroupEmpty(child.pid, this.killWaitMs);
+          }
+          if (!empty) {
+            this.active.delete(executionId);
+            if (!resolved) {
+              terminalCommitted = true;
+              resolved = true;
+              notify("UNRESOLVED");
+              resolveCompletion(makeRecord(
+                "UNRESOLVED", "UNRESOLVED",
+                deny("Policy process-group cleanup could not be confirmed; access denied."),
+                "UNRESOLVED", "UNRESOLVED", stopReason, stopProvenance
+              ));
+            }
+            return;
+          }
+        }
+        this.active.delete(executionId);
+        if (resolved) return;
+        if (!candidateFrozen || !candidate) {
+          candidateFrozen = true;
+          candidate = {
+            outcome: "FAILED",
+            decision: deny("Policy evaluator process exited without a valid result; access denied.")
+          };
+        }
+        if (descendantsWerePresent) {
+          candidate = {
+            outcome: "FAILED",
+            decision: deny("Policy evaluator left descendant processes; access denied.")
+          };
+        }
+        terminalCommitted = true;
+        let outcome = (terminalVeto ?? candidate).outcome;
+        let decision = (terminalVeto ?? candidate).decision;
+        if (outputFailureReason !== undefined) {
+          outcome = "FAILED";
+          decision = deny(stopMessage(outputFailureReason));
+        } else if (!descendantsWerePresent &&
+          (outcome === "COMPLETED" || outcome === "DENIED") && code !== 0) {
+          outcome = "FAILED";
+          decision = deny("Policy evaluator process exited abnormally; access denied.");
+        }
+        if (outcome === "COMPLETED") notify("AUTHORIZED");
+        notify("TERMINAL");
+        resolved = true;
+        resolveCompletion(makeRecord(
+          "TERMINAL", outcome, decision, "STOPPED", "COMPLETED",
+          stopReason ?? outputFailureReason ?? terminalVeto?.stopReason ?? candidate.stopReason,
+          stopProvenance
+        ));
+      })().catch(() => {
+        this.active.delete(executionId);
+        if (!resolved) {
+          terminalCommitted = true;
+          resolved = true;
+          notify("UNRESOLVED");
+          resolveCompletion(makeRecord(
+            "UNRESOLVED", "UNRESOLVED",
+            deny("Policy process-group state could not be verified; access denied."),
+            "UNRESOLVED", "UNRESOLVED", stopReason, stopProvenance
+          ));
+        }
+      });
     });
 
     if (options?.signal?.aborted) {

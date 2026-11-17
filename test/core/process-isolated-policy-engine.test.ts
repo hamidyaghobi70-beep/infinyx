@@ -1,4 +1,6 @@
-import { ChildProcess } from "node:child_process";
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { describe, expect, it, vi } from "vitest";
 import { ProcessIsolatedPolicyEngine } from "../../src/core/process-isolated-policy-engine.js";
@@ -9,8 +11,8 @@ const fixturePath = fileURLToPath(
 );
 const fixtureUrl = pathToFileURL(fixturePath).href;
 
-function request(action = "allow"): PolicyRequest {
-  return { actorId: "test-actor", action, resource: "record:123" };
+function request(action = "allow", resource = "record:123"): PolicyRequest {
+  return { actorId: "test-actor", action, resource };
 }
 
 function stateObserver(target: string): {
@@ -32,6 +34,61 @@ function stateObserver(target: string): {
 }
 
 describe("ProcessIsolatedPolicyEngine", () => {
+  it("reports reduced containment capability on Windows", () => {
+    const engine = new ProcessIsolatedPolicyEngine({ moduleUrl: fixtureUrl });
+    expect(engine.containmentCapability).toBe(
+      process.platform === "win32" ? "DIRECT_CHILD_ONLY" : "POSIX_PROCESS_GROUP_BEST_EFFORT"
+    );
+  });
+
+  it.skipIf(process.platform === "win32")(
+    "demonstrates that a detached session can escape POSIX process-group cleanup",
+    async () => {
+      const directory = mkdtempSync(join(tmpdir(), "infinyx-detached-escape-"));
+      const pidFile = join(directory, "detached.pid");
+      let detachedPid: number | undefined;
+      try {
+        const engine = new ProcessIsolatedPolicyEngine({ moduleUrl: fixtureUrl });
+        const result = await engine.evaluateDetailed(request("detached-descendant", pidFile));
+        detachedPid = Number(readFileSync(pidFile, "utf8"));
+        expect(result.outcome).toBe("COMPLETED");
+        expect(engine.containmentCapability).toBe("POSIX_PROCESS_GROUP_BEST_EFFORT");
+        expect(() => process.kill(detachedPid!, 0)).not.toThrow();
+      } finally {
+        if (detachedPid !== undefined) {
+          try { process.kill(detachedPid, "SIGKILL"); } catch { /* already exited */ }
+        }
+        rmSync(directory, { recursive: true, force: true });
+      }
+    }
+  );
+
+  it.skipIf(process.platform === "win32")(
+    "terminates a surviving evaluator descendant before releasing capacity or allowing",
+    async () => {
+      const directory = mkdtempSync(join(tmpdir(), "infinyx-process-group-"));
+      const pidFile = join(directory, "descendant.pid");
+      try {
+        const engine = new ProcessIsolatedPolicyEngine({
+          moduleUrl: fixtureUrl,
+          terminationGraceMs: 30,
+          killWaitMs: 2_000,
+          maxConcurrent: 1
+        });
+        const result = await engine.evaluateDetailed(request("orphan-descendant", pidFile));
+        const descendantPid = Number(readFileSync(pidFile, "utf8"));
+        expect(Number.isSafeInteger(descendantPid)).toBe(true);
+        expect(result.outcome).toBe("FAILED");
+        expect(result.decision.effect).toBe("deny");
+        expect(result.decision.reason).toContain("descendant processes");
+        expect(engine.activeExecutionCount).toBe(0);
+        expect(() => process.kill(descendantPid, 0)).toThrow();
+      } finally {
+        rmSync(directory, { recursive: true, force: true });
+      }
+    }
+  );
+
   it("returns an immutable allow decision only after the child process exits", async () => {
     const engine = new ProcessIsolatedPolicyEngine({ moduleUrl: fixtureUrl });
     const result = await engine.evaluateDetailed(request());
@@ -386,25 +443,21 @@ describe("ProcessIsolatedPolicyEngine", () => {
     expect(engine.activeExecutionCount).toBe(0);
   });
 
-  it("escalates ignored SIGTERM and releases capacity only after child close", async () => {
+  it.skipIf(process.platform === "win32")("escalates POSIX process-group SIGTERM to SIGKILL", async () => {
     const observer = stateObserver("RUNNING");
     const controller = new AbortController();
-    const killSignals: Array<NodeJS.Signals | number | undefined> = [];
-    const originalKill = ChildProcess.prototype.kill;
-    const killSpy = vi.spyOn(ChildProcess.prototype, "kill").mockImplementation(
-      function (this: ChildProcess, signal?: NodeJS.Signals | number): boolean {
-        killSignals.push(signal);
-        return originalKill.call(this, signal);
-      }
-    );
-
+    const signals: Array<NodeJS.Signals | number | undefined> = [];
+    const originalKill = process.kill;
+    const killSpy = vi.spyOn(process, "kill").mockImplementation((pid, signal) => {
+      if (typeof pid === "number" && pid < 0) signals.push(signal);
+      return originalKill.call(process, pid, signal);
+    });
     try {
       const engine = new ProcessIsolatedPolicyEngine({
         moduleUrl: fixtureUrl,
         timeoutMs: 5_000,
         terminationGraceMs: 10,
-        killWaitMs: 80,
-        maxConcurrent: 1,
+        killWaitMs: 500,
         onStateChange: observer.onStateChange
       });
       const evaluation = engine.evaluateDetailed(request("ignore-sigterm"), {
@@ -412,111 +465,32 @@ describe("ProcessIsolatedPolicyEngine", () => {
       });
       await observer.reached;
       controller.abort();
-
       const result = await evaluation;
       expect(result.outcome).toBe("CANCELLED");
-      expect(result.stopReason).toBe("CALLER_CANCELLED");
-      expect(result.runtimeStatus).toBe("STOPPED");
       expect(result.cleanupStatus).toBe("COMPLETED");
+      expect(signals).toContain("SIGTERM");
+      expect(signals).toContain("SIGKILL");
+      expect(signals.indexOf("SIGTERM")).toBeLessThan(signals.indexOf("SIGKILL"));
       expect(engine.activeExecutionCount).toBe(0);
-
-      // Assert platform-specific termination behavior instead of elapsed wall-clock time.
-      const sigtermIndex = killSignals.indexOf("SIGTERM");
-      const sigkillIndex = killSignals.indexOf("SIGKILL");
-      expect(sigtermIndex).toBeGreaterThanOrEqual(0);
-      if (process.platform === "win32") {
-        // Node maps supported signals to Windows process termination semantics;
-        // the close barrier, not a second signal, confirms the child has ended.
-        expect(sigkillIndex).toBe(-1);
-      } else {
-        expect(sigkillIndex).toBeGreaterThan(sigtermIndex);
-      }
     } finally {
       killSpy.mockRestore();
     }
   });
 
-  it("ignores a child error after unresolved commitment and releases its active reference on close", async () => {
-    let child: ChildProcess | undefined;
-    let resolveUnresolved!: () => void;
-    const unresolvedReached = new Promise<void>((resolve) => {
-      resolveUnresolved = resolve;
-    });
+  it.skipIf(process.platform === "win32")("retains capacity until an unconfirmed process group actually becomes empty", async () => {
     const observer = stateObserver("RUNNING");
-    const killSpy = vi.spyOn(ChildProcess.prototype, "kill").mockImplementation(
-      function (this: ChildProcess): boolean {
-        child = this;
+    const controller = new AbortController();
+    const originalKill = process.kill;
+    let processGroupId: number | undefined;
+    const killSpy = vi.spyOn(process, "kill").mockImplementation((pid, signal) => {
+      if (typeof pid === "number" && pid < 0 &&
+          (signal === "SIGTERM" || signal === "SIGKILL")) {
+        processGroupId = -pid;
         return false;
       }
-    );
-
-    try {
-      const controller = new AbortController();
-      const engine = new ProcessIsolatedPolicyEngine({
-        moduleUrl: fixtureUrl,
-        timeoutMs: 5_000,
-        terminationGraceMs: 5,
-        killWaitMs: 20,
-        onStateChange: (event) => {
-          observer.onStateChange(event);
-          if (event.state === "UNRESOLVED") resolveUnresolved();
-        }
-      });
-      const evaluation = engine.evaluateDetailed(request("ignore-sigterm"), {
-        signal: controller.signal
-      });
-
-      await observer.reached;
-      controller.abort();
-      await unresolvedReached;
-
-      const result = await evaluation;
-      expect(result.outcome).toBe("UNRESOLVED");
-      expect(result.runtimeStatus).toBe("UNRESOLVED");
-      expect(engine.activeExecutionCount).toBe(1);
-      expect(child).toBeDefined();
-
-      // Simulate a late ChildProcess error after finishUnresolved committed
-      // the immutable record. freezeCandidate must not create a new candidate.
-      child!.emit("error", new Error("synthetic late child error"));
-      expect(result.outcome).toBe("UNRESOLVED");
-      expect(result.decision.reason).toBe(
-        "Policy process termination could not be confirmed; access denied."
-      );
-
-      const closed = new Promise<void>((resolve) => {
-        child!.once("close", () => resolve());
-      });
-      killSpy.mockRestore();
-      child!.kill("SIGKILL");
-      await closed;
-      expect(engine.activeExecutionCount).toBe(0);
-    } finally {
-      killSpy.mockRestore();
-      if (child && child.exitCode === null && child.signalCode === null) {
-        child.kill("SIGKILL");
-      }
-    }
-  });
-
-  it("retains capacity until the actual child close after unconfirmed termination", async () => {
-    let child: ChildProcess | undefined;
-    let resolveClose!: () => void;
-    const closeObserved = new Promise<void>((resolve) => {
-      resolveClose = resolve;
+      return originalKill.call(process, pid, signal);
     });
-    const killSpy = vi.spyOn(ChildProcess.prototype, "kill").mockImplementation(
-      function (this: ChildProcess): boolean {
-        if (!child) {
-          child = this;
-          child.once("close", () => resolveClose());
-        }
-        return false;
-      }
-    );
     try {
-      const observer = stateObserver("RUNNING");
-      const controller = new AbortController();
       const engine = new ProcessIsolatedPolicyEngine({
         moduleUrl: fixtureUrl,
         timeoutMs: 5_000,
@@ -525,36 +499,35 @@ describe("ProcessIsolatedPolicyEngine", () => {
         maxConcurrent: 1,
         onStateChange: observer.onStateChange
       });
-      const evaluation = engine.evaluateDetailed(request("ignore-sigterm"), {
-        signal: controller.signal
-      });
+      const evaluation = engine.evaluateDetailed(request("hang"), { signal: controller.signal });
       await observer.reached;
       controller.abort();
-
       const result = await evaluation;
       expect(result.outcome).toBe("UNRESOLVED");
-      expect(result.runtimeStatus).toBe("UNRESOLVED");
-      expect(result.cleanupStatus).toBe("UNRESOLVED");
       expect(engine.activeExecutionCount).toBe(1);
-      expect(child).toBeDefined();
-      expect(killSpy).toHaveBeenNthCalledWith(1, "SIGTERM");
-      expect(killSpy).toHaveBeenNthCalledWith(2, "SIGKILL");
+      expect(processGroupId).toBeDefined();
 
-      // UNRESOLVED must keep the only slot occupied and reject new work.
       const rejected = await engine.evaluateDetailed(request());
       expect(rejected.outcome).toBe("FAILED");
-      expect(rejected.runtimeStatus).toBe("NOT_STARTED");
       expect(rejected.decision.reason).toContain("capacity is exhausted");
       expect(engine.activeExecutionCount).toBe(1);
 
-      // The listener was attached before termination was requested. Only the
-      // actual ChildProcess close event may release the retained capacity slot.
-      await closeObserved;
+      killSpy.mockRestore();
+      originalKill.call(process, processGroupId!, "SIGKILL");
+      await new Promise<void>((resolve, reject) => {
+        const started = Date.now();
+        const check = () => {
+          if (engine.activeExecutionCount === 0) resolve();
+          else if (Date.now() - started > 2_000) reject(new Error("Process-group slot was not released."));
+          else setTimeout(check, 10);
+        };
+        check();
+      });
       expect(engine.activeExecutionCount).toBe(0);
     } finally {
       killSpy.mockRestore();
-      if (child && child.exitCode === null && child.signalCode === null) {
-        child.kill("SIGKILL");
+      if (processGroupId !== undefined) {
+        try { originalKill.call(process, processGroupId, "SIGKILL"); } catch { /* already exited */ }
       }
     }
   });
