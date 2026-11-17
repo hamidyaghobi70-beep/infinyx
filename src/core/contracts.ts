@@ -155,7 +155,20 @@ export interface ProtectedOperationContext {
   readonly operationId: string;
   /** Stable identifier assigned when the operation definition is registered. */
   readonly registrationId: string;
+  /** Parent execution UUID; absent for a root execution. */
+  readonly parentOperationId?: string;
   readonly signal: AbortSignal;
+  /**
+   * Execute a registered operation as a child of this execution. The child
+   * inherits cancellation and remains tracked even when the returned Promise
+   * is not awaited by the handler. Calls after the handler settles are denied.
+   */
+  readonly runChild: <TInput, TOutput>(
+    operation: ProtectedOperationHandle<TInput, TOutput>,
+    caller: ProtectedOperationCaller,
+    input: TInput,
+    options?: Omit<PolicyEvaluationOptions, "parentSignal">
+  ) => Promise<ProtectedOperationResult<TOutput>>;
 }
 
 export interface ProtectedOperationDefinition<TInput, TOutput> {
