@@ -349,13 +349,26 @@ export class GuardedMemoryPort implements MemoryPort {
       await drain;
       return;
     }
+    // An empty drain is already complete, even if the caller's deadline has
+    // elapsed. For admitted work, verify its actual settlement timestamp rather
+    // than relying only on timer delivery (which can be delayed by the event loop).
+    if (this.#activeOperations.size === 0) {
+      await drain;
+      return;
+    }
     const remainingMs = Math.max(0, deadlineAt - performance.now());
     let timer: ReturnType<typeof setTimeout> | undefined;
     try {
       const timedOut = new Promise<never>((_, reject) => {
         timer = setTimeout(() => reject(new Error("Module memory operations did not drain before the shutdown deadline.")), remainingMs);
       });
-      await Promise.race([drain, timedOut]);
+      const completedAt = await Promise.race([
+        drain.then(() => performance.now()),
+        timedOut
+      ]);
+      if (completedAt > deadlineAt) {
+        throw new Error("Module memory operations did not drain before the shutdown deadline.");
+      }
     } finally {
       if (timer !== undefined) clearTimeout(timer);
     }
