@@ -414,17 +414,25 @@ export class CoreEngine {
     this.policyShutdownSettledAt = undefined;
 
     try {
-      this.policyShutdownPromise = Promise.resolve(this.policy.shutdown?.()).catch(() => {
+      const shutdown = this.policy.shutdown?.();
+      let attempt!: Promise<void>;
+      attempt = Promise.resolve(shutdown).catch(() => {
         const failure = new CoreError(
           "POLICY_SHUTDOWN_FAILED",
           "Policy runtime shutdown failed."
         );
-        this.policyShutdownFailure = failure;
+        if (this.policyShutdownPromise === attempt) {
+          this.policyShutdownFailure = failure;
+        }
         throw failure;
       }).finally(() => {
-        this.policyShutdownSettled = true;
-        this.policyShutdownSettledAt = performance.now();
+        // A settled attempt must never overwrite the state of a newer retry.
+        if (this.policyShutdownPromise === attempt) {
+          this.policyShutdownSettled = true;
+          this.policyShutdownSettledAt = performance.now();
+        }
       });
+      this.policyShutdownPromise = attempt;
     } catch {
       const failure = new CoreError(
         "POLICY_SHUTDOWN_FAILED",
