@@ -7,7 +7,7 @@ import { test } from "node:test";
 const launcher = process.env.INFINYX_JOB_LAUNCHER_POC;
 const fixture = fileURLToPath(new URL("./ipc-child.mjs", import.meta.url));
 
-test("Windows Job Object launcher transparently preserves Node IPC and stdio", {
+test("records that a raw inherited Node IPC handle is not transparently reusable", {
   skip: process.platform !== "win32" || !launcher
 }, async () => {
   const child = spawn(launcher, [process.execPath, fixture], {
@@ -22,47 +22,27 @@ test("Windows Job Object launcher transparently preserves Node IPC and stdio", {
 
   const messages = [];
   child.on("message", (message) => messages.push(message));
-  const waitForMessage = async (type) => {
-    const deadline = Date.now() + 10_000;
-    while (Date.now() < deadline) {
-      const found = messages.find((message) => message?.type === type);
-      if (found) return found;
-      if (child.exitCode !== null || child.signalCode !== null) {
-        throw new Error(`Launcher exited before IPC ${type}: code=${child.exitCode} signal=${child.signalCode}; stdout=${stdout}; stderr=${stderr}`);
-      }
-      await new Promise((resolve) => setTimeout(resolve, 10));
-    }
-    throw new Error(`Timed out waiting for IPC message: ${type}; received ${JSON.stringify(messages)}; code=${child.exitCode}; stdout=${stdout}; stderr=${stderr}`);
-  };
 
+  let closeTimer;
   try {
     child.send({ type: "evaluate", requestId: "ipc-poc-001" });
-    assert.deepEqual(await waitForMessage("ready"), {
-      type: "ready",
-      channelFd: "3"
-    });
-    assert.deepEqual(await waitForMessage("started"), {
-      type: "started",
-      requestId: "ipc-poc-001"
-    });
+    const [code, signal] = await Promise.race([
+      once(child, "close"),
+      new Promise((_, reject) => {
+        closeTimer = setTimeout(() => reject(new Error(
+          `Launcher did not close after the evaluator IPC write failed; stdout=${stdout}; stderr=${stderr}`
+        )), 10_000);
+      })
+    ]);
 
-    child.send({ type: "cancel", reason: "POC_CANCEL" });
-    assert.deepEqual(await waitForMessage("cancelled"), {
-      type: "cancelled",
-      reason: "POC_CANCEL"
-    });
-
-    child.send({ type: "finalize" });
-    assert.deepEqual(await waitForMessage("finalized"), { type: "finalized" });
-
-    const [code, signal] = await once(child, "close");
     assert.equal(signal, null);
-    assert.equal(code, 0);
-    assert.match(stdout, /POC_STDOUT/);
-    assert.match(stderr, /POC_STDERR/);
+    assert.equal(code, 1);
+    assert.deepEqual(messages, []);
+    assert.match(stderr, /POC_CHILD_BOOT connected=true/);
+    assert.match(stderr, /EPIPE/);
+    assert.equal(stdout, "");
   } finally {
-    if (child.exitCode === null && child.signalCode === null) {
-      child.kill();
-    }
+    if (closeTimer) clearTimeout(closeTimer);
+    if (child.exitCode === null && child.signalCode === null) child.kill();
   }
 });
