@@ -900,3 +900,51 @@ describe("protected executor caller snapshot trust boundary", () => {
     expect(handler).not.toHaveBeenCalled();
   });
 });
+
+
+describe("protected-operation cancellation cleanup hardening", () => {
+  it("denies a non-finite deadline before policy evaluation", async () => {
+    const evaluator = vi.fn(async () => allow);
+    const { engine, operation, handler } = makeEngine(evaluator);
+    await ensureStarted(engine);
+
+    const result = await engine.protectedOperations.execute(
+      operation,
+      { actorId: "invalid-deadline" },
+      { value: "no" },
+      { deadlineAt: Number.POSITIVE_INFINITY }
+    );
+
+    expect(result).toMatchObject({ status: "denied" });
+    expect(evaluator).not.toHaveBeenCalled();
+    expect(handler).not.toHaveBeenCalled();
+    await engine.stop();
+  });
+
+  it("cleans up the parent listener even when caller listener cleanup throws", async () => {
+    let parentCleanupCalls = 0;
+    const callerSignal = {
+      aborted: false,
+      addEventListener: () => undefined,
+      removeEventListener: () => { throw new Error("caller cleanup failed"); }
+    } as unknown as AbortSignal;
+    const parentSignal = {
+      aborted: false,
+      addEventListener: () => undefined,
+      removeEventListener: () => { parentCleanupCalls += 1; }
+    } as unknown as AbortSignal;
+    const { engine, operation } = makeEngine();
+    await ensureStarted(engine);
+
+    const result = await engine.protectedOperations.execute(
+      operation,
+      { actorId: "independent-cleanup" },
+      { value: "ok" },
+      { signal: callerSignal, parentSignal }
+    );
+
+    expect(result).toEqual({ status: "executed", value: "OK" });
+    expect(parentCleanupCalls).toBe(1);
+    await engine.stop();
+  });
+});
