@@ -1118,3 +1118,55 @@ describe("GuardedMemoryPort policy decision trust boundary", () => {
     }
   });
 });
+
+
+describe("GuardedMemoryPort memory value snapshot boundary", () => {
+  it("rejects accessor values without invoking getters or calling policy/backend", async () => {
+    let getterCalls = 0;
+    const value = Object.defineProperty({}, "secret", {
+      enumerable: true,
+      get() {
+        getterCalls += 1;
+        return "should never be read";
+      }
+    });
+    const evaluate = vi.fn(async () => ({ effect: "allow" as const, reason: "allow" }));
+    const store: MemoryPort = {
+      read: vi.fn(async () => null),
+      write: vi.fn(async () => undefined),
+      delete: vi.fn(async () => undefined)
+    };
+    const { guard } = setup({ store, policy: { evaluate } });
+
+    expect(await codeOf(guard.write({ namespace: "n", key: "k" }, value)))
+      .toBe("MEMORY_INVALID_VALUE");
+    expect(getterCalls).toBe(0);
+    expect(evaluate).not.toHaveBeenCalled();
+    expect(store.write).not.toHaveBeenCalled();
+  });
+
+  it("rejects hostile Proxies and executable toJSON hooks before serialization", async () => {
+    let trapCalls = 0;
+    let toJSONCalls = 0;
+    const hostile = new Proxy({}, {
+      getPrototypeOf() {
+        trapCalls += 1;
+        throw new Error("hostile value proxy");
+      }
+    });
+    const executable = {
+      toJSON() {
+        toJSONCalls += 1;
+        return { effect: "allow" };
+      }
+    };
+    const { guard } = setup();
+
+    expect(await codeOf(guard.write({ namespace: "n", key: "proxy" }, hostile)))
+      .toBe("MEMORY_INVALID_VALUE");
+    expect(await codeOf(guard.write({ namespace: "n", key: "json" }, executable)))
+      .toBe("MEMORY_INVALID_VALUE");
+    expect(trapCalls).toBeGreaterThan(0);
+    expect(toJSONCalls).toBe(0);
+  });
+});
