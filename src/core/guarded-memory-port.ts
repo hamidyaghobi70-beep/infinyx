@@ -84,6 +84,38 @@ interface NormalizedDecision {
   readonly reason: string;
 }
 
+function snapshotMemoryOptionRecord(
+  value: unknown,
+  allowedKeys: readonly string[],
+  errorMessage: string
+): Record<string, unknown> {
+  try {
+    if (typeof value !== "object" || value === null || Array.isArray(value)) {
+      throw new Error("Invalid option record.");
+    }
+    const prototype = Object.getPrototypeOf(value);
+    if (prototype !== Object.prototype && prototype !== null) {
+      throw new Error("Option records must be plain objects.");
+    }
+    const result: Record<string, unknown> = Object.create(null) as Record<string, unknown>;
+    for (const key of Reflect.ownKeys(value)) {
+      if (typeof key !== "string" || !allowedKeys.includes(key)) {
+        throw new Error("Unexpected option property.");
+      }
+      const descriptor = Object.getOwnPropertyDescriptor(value, key);
+      if (!descriptor ||
+          !Object.prototype.hasOwnProperty.call(descriptor, "value") ||
+          descriptor.enumerable !== true) {
+        throw new Error("Options must be enumerable data properties.");
+      }
+      result[key] = descriptor.value;
+    }
+    return result;
+  } catch {
+    throw new TypeError(errorMessage);
+  }
+}
+
 function captureTrustedMethod<T extends (...args: never[]) => unknown>(
   target: unknown,
   name: string
@@ -143,22 +175,16 @@ export class GuardedMemoryPort implements MemoryPort {
   }
 
   constructor(options: GuardedMemoryPortOptions) {
-    if (!options || typeof options !== "object") {
-      throw new TypeError("GuardedMemoryPort options are required.");
-    }
-    // Capture dependency references once, then validate and retain those exact
-    // references. Re-reading option accessors after validation would create a
-    // time-of-check/time-of-use gap in this security boundary.
-    let store: unknown;
-    let policy: unknown;
-    let audit: unknown;
-    try {
-      store = options.store;
-      policy = options.policy;
-      audit = options.audit;
-    } catch {
-      throw new TypeError("GuardedMemoryPort dependencies must be readable values.");
-    }
+    const safeOptions = snapshotMemoryOptionRecord(
+      options,
+      ["store", "policy", "audit", "scope", "maxValueBytes", "policyTimeoutMs", "auditTimeoutMs"],
+      "GuardedMemoryPort options must contain only stable data properties."
+    );
+    // Dependencies and scalar settings are captured once from a descriptor-only
+    // snapshot; no caller-controlled option getter is invoked.
+    const store: unknown = safeOptions.store;
+    const policy: unknown = safeOptions.policy;
+    const audit: unknown = safeOptions.audit;
     let storeRead: (address: MemoryAddress) => Promise<unknown | null>;
     let storeWrite: (address: MemoryAddress, value: unknown) => Promise<void>;
     let storeDelete: (address: MemoryAddress) => Promise<void>;
@@ -176,17 +202,29 @@ export class GuardedMemoryPort implements MemoryPort {
       throw new TypeError("GuardedMemoryPort dependencies must expose stable data methods.");
     }
 
-    const maxValueBytes = options.maxValueBytes ?? DEFAULT_MAX_MEMORY_VALUE_BYTES;
+    const maxValueBytes = safeOptions.maxValueBytes ?? DEFAULT_MAX_MEMORY_VALUE_BYTES;
     if (!Number.isSafeInteger(maxValueBytes) || maxValueBytes <= 0) {
       throw new TypeError("maxValueBytes must be a positive safe integer.");
     }
 
-    const policyTimeoutMs = options.policyTimeoutMs ?? DEFAULT_MEMORY_POLICY_TIMEOUT_MS;
-    const auditTimeoutMs = options.auditTimeoutMs ?? DEFAULT_MEMORY_AUDIT_TIMEOUT_MS;
+    const policyTimeoutMs = safeOptions.policyTimeoutMs ?? DEFAULT_MEMORY_POLICY_TIMEOUT_MS;
+    const auditTimeoutMs = safeOptions.auditTimeoutMs ?? DEFAULT_MEMORY_AUDIT_TIMEOUT_MS;
     if (!isValidTimeout(policyTimeoutMs)) throw new TypeError(`policyTimeoutMs must be an integer from 1 to ${MAX_TIMEOUT_MS}.`);
     if (!isValidTimeout(auditTimeoutMs)) throw new TypeError(`auditTimeoutMs must be an integer from 1 to ${MAX_TIMEOUT_MS}.`);
 
-    const suppliedScope = options.scope as Partial<MemoryScope> | undefined;
+    let suppliedScope: Partial<MemoryScope> | undefined;
+    try {
+      suppliedScope = snapshotMemoryOptionRecord(
+        safeOptions.scope,
+        ["tenantId", "actorId", "moduleId"],
+        "Memory scope must contain only stable data properties."
+      ) as Partial<MemoryScope>;
+    } catch {
+      throw new MemoryAccessError(
+        "MEMORY_INVALID_SCOPE",
+        "tenantId, actorId and moduleId must be non-empty strings without control characters."
+      );
+    }
     // Snapshot each property exactly once before validation. Re-reading accessors
     // after validation would allow a changing getter to bypass the scope checks.
     let tenantId: unknown;
