@@ -286,7 +286,12 @@ describe("FailClosedPolicyEngine caller and parent cancellation", () => {
     let evaluatorStarted!: () => void;
     const started = new Promise<void>((resolve) => { evaluatorStarted = resolve; });
     const policy = new FailClosedPolicyEngine({
-      evaluate: () => new Promise(() => { evaluatorStarted(); })
+      evaluate: (_request, options) => new Promise((resolve) => {
+        evaluatorStarted();
+        options?.signal?.addEventListener("abort", () => {
+          resolve({ effect: "deny", reason: "cooperatively stopped" });
+        }, { once: true });
+      })
     });
 
     const pending = policy.evaluate(request, { signal: controller.signal });
