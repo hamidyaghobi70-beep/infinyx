@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { CoreEngine } from "../../src/core/core-engine.js";
+import { ProtectedOperationExecutor } from "../../src/core/protected-operation-executor.js";
 import type {
   PolicyDecision,
   PolicyRequest,
@@ -49,6 +50,74 @@ async function ensureStarted(engine: CoreEngine): Promise<void> {
 
 
 describe("ProtectedOperationExecutor", () => {
+  it("closes admission synchronously and prevents an in-flight authorization from starting its handler", async () => {
+    let resolvePolicy!: (decision: PolicyDecision) => void;
+    let policySignal: AbortSignal | undefined;
+    const evaluator = vi.fn((_request: PolicyRequest, options?: { readonly signal?: AbortSignal }) => {
+      policySignal = options?.signal;
+      return new Promise<PolicyDecision>((resolve) => { resolvePolicy = resolve; });
+    });
+    const executor = new ProtectedOperationExecutor({ evaluate: evaluator }, () => true);
+    const handler = vi.fn(() => "must-not-run");
+    const operation = executor.register({
+      id: "lifecycle.admission-policy",
+      action: "record.read",
+      resource: "record:admission",
+      validateInput: (value: unknown): value is string => typeof value === "string",
+      handler
+    });
+
+    const pending = executor.execute(operation, { actorId: "admission-policy" }, "input");
+    await Promise.resolve();
+    expect(executor.activeExecutionCount).toBe(1);
+
+    executor.closeAdmission();
+    expect(policySignal?.aborted).toBe(true);
+    expect(executor.activeExecutionCount).toBe(1);
+
+    resolvePolicy(allow);
+    const result = await pending;
+    expect(result).toMatchObject({ status: "denied" });
+    expect(handler).not.toHaveBeenCalled();
+    expect(executor.activeExecutionCount).toBe(0);
+
+    const callsBeforeRejectedAdmission = evaluator.mock.calls.length;
+    const afterClose = await executor.execute(operation, { actorId: "after-close" }, "input");
+    expect(afterClose).toMatchObject({ status: "denied" });
+    expect(evaluator).toHaveBeenCalledTimes(callsBeforeRejectedAdmission);
+  });
+
+  it("keeps a running handler registered until its promise actually settles after cancellation", async () => {
+    let resolveHandler!: (value: string) => void;
+    let handlerSignal: AbortSignal | undefined;
+    const executor = new ProtectedOperationExecutor({ evaluate: async () => allow }, () => true);
+    const operation = executor.register({
+      id: "lifecycle.admission-handler",
+      action: "record.read",
+      resource: "record:handler",
+      validateInput: (value: unknown): value is string => typeof value === "string",
+      handler: (_input, context) => {
+        handlerSignal = context.signal;
+        return new Promise<string>((resolve) => { resolveHandler = resolve; });
+      }
+    });
+
+    const pending = executor.execute(operation, { actorId: "admission-handler" }, "input");
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(executor.activeExecutionCount).toBe(1);
+    expect(handlerSignal).toBeDefined();
+
+    executor.closeAdmission();
+    expect(handlerSignal?.aborted).toBe(true);
+    expect(executor.activeExecutionCount).toBe(1);
+
+    resolveHandler("settled");
+    await expect(pending).resolves.toEqual({ status: "executed", value: "settled" });
+    expect(executor.activeExecutionCount).toBe(0);
+  });
+
+
   it("executes a handler only after a valid Allow decision", async () => {
     const { engine, operation, handler } = makeEngine();
     await ensureStarted(engine);
