@@ -440,12 +440,6 @@ function withTimeout<T>(work: () => Promise<T> | T, ms: number): Promise<T | typ
   });
 }
 
-function hasMethods(value: unknown, names: readonly string[]): boolean {
-  if (!value || typeof value !== "object") return false;
-  const record = value as Record<string, unknown>;
-  return names.every((name) => typeof record[name] === "function");
-}
-
 function isValidSegment(value: unknown, maxLength: number): value is string {
   if (typeof value !== "string") return false;
   if (value.trim().length === 0 || value.length > maxLength) return false;
