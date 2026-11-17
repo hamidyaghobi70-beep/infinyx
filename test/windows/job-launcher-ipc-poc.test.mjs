@@ -27,13 +27,20 @@ test("Windows Job Object launcher transparently preserves Node IPC and stdio", {
     while (Date.now() < deadline) {
       const found = messages.find((message) => message?.type === type);
       if (found) return found;
+      if (child.exitCode !== null || child.signalCode !== null) {
+        throw new Error(`Launcher exited before IPC ${type}: code=${child.exitCode} signal=${child.signalCode}; stdout=${stdout}; stderr=${stderr}`);
+      }
       await new Promise((resolve) => setTimeout(resolve, 10));
     }
-    throw new Error(`Timed out waiting for IPC message: ${type}; received ${JSON.stringify(messages)}`);
+    throw new Error(`Timed out waiting for IPC message: ${type}; received ${JSON.stringify(messages)}; code=${child.exitCode}; stdout=${stdout}; stderr=${stderr}`);
   };
 
   try {
     child.send({ type: "evaluate", requestId: "ipc-poc-001" });
+    assert.deepEqual(await waitForMessage("ready"), {
+      type: "ready",
+      channelFd: "3"
+    });
     assert.deepEqual(await waitForMessage("started"), {
       type: "started",
       requestId: "ipc-poc-001"
