@@ -628,6 +628,44 @@ describe("CoreEngine policy shutdown integration", () => {
     expect(moduleStops).toBe(1);
     expect(engine.state).toBe("stopped");
   });
+
+  it("shares one concurrent retry after a transient policy shutdown failure", async () => {
+    let shutdownCalls = 0;
+    let moduleStops = 0;
+    let releaseRetry!: () => void;
+    const retryGate = new Promise<void>((resolve) => { releaseRetry = resolve; });
+    const engine = new CoreEngine({
+      policy: {
+        evaluate: async () => ({ effect: "allow", reason: "allowed" }),
+        shutdown: () => {
+          shutdownCalls += 1;
+          if (shutdownCalls === 1) throw new Error("temporary policy shutdown failure");
+          return retryGate;
+        }
+      }
+    });
+    engine.register({
+      id: "policy-concurrent-retry-module",
+      version: "1.0.0",
+      stop: () => { moduleStops += 1; }
+    });
+
+    await engine.initialize();
+    await engine.start();
+    await expect(engine.stop()).rejects.toMatchObject({ code: "POLICY_SHUTDOWN_FAILED" });
+
+    const retryA = engine.stop();
+    const retryB = engine.stop();
+    expect(retryB).toBe(retryA);
+    expect(shutdownCalls).toBe(2);
+    expect(moduleStops).toBe(0);
+
+    releaseRetry();
+    await Promise.all([retryA, retryB]);
+    expect(shutdownCalls).toBe(2);
+    expect(moduleStops).toBe(1);
+    expect(engine.state).toBe("stopped");
+  });
 });
 
 describe("CoreEngine module memory capability lifetime", () => {
