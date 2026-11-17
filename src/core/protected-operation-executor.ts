@@ -61,6 +61,11 @@ function createChildActivityContext(
       void rejected.catch(() => undefined);
       return rejected;
     }
+    if (active.controller.signal.aborted) {
+      const rejected = Promise.reject<T>(new Error("Child activity registration is closed after cancellation."));
+      void rejected.catch(() => undefined);
+      return rejected;
+    }
     if (active.pendingChildren >= MAX_PENDING_CHILD_ACTIVITIES) {
       const rejected = Promise.reject<T>(new Error("Child activity concurrency limit exceeded."));
       void rejected.catch(() => undefined);
