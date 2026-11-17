@@ -840,3 +840,38 @@ describe("protected executor policy decision trust boundary", () => {
     expect(handler).not.toHaveBeenCalled();
   });
 });
+
+
+describe("protected executor caller snapshot trust boundary", () => {
+  it("rejects accessor-backed caller identity without invoking its getter", async () => {
+    let getterCalls = 0;
+    const caller = Object.defineProperty({}, "actorId", {
+      enumerable: true,
+      get() {
+        getterCalls += 1;
+        throw new Error("caller getter must not execute");
+      }
+    });
+    const policy = vi.fn(async () => allow);
+    const handler = vi.fn(async () => "must-not-run");
+    const executor = new ProtectedOperationExecutor({
+      evaluate: policy
+    }, () => true);
+    const operation = executor.register({
+      id: "security.hostile-caller",
+      action: "record.read",
+      resource: "record:caller",
+      validateInput: (value: unknown): value is { value: string } =>
+        typeof value === "object" && value !== null &&
+        "value" in value && typeof value.value === "string",
+      handler
+    });
+
+    const result = await executor.execute(operation, caller as never, { value: "input" });
+
+    expect(result).toMatchObject({ status: "denied" });
+    expect(getterCalls).toBe(0);
+    expect(policy).not.toHaveBeenCalled();
+    expect(handler).not.toHaveBeenCalled();
+  });
+});
