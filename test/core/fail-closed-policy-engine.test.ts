@@ -397,6 +397,20 @@ describe("untrusted policy decision descriptors", () => {
 
     await expect(policy.evaluate(request)).resolves.toMatchObject({ effect: "deny" });
   });
+
+  it("rejects non-enumerable policy decision fields", async () => {
+    const output = {};
+    Object.defineProperties(output, {
+      effect: { configurable: true, enumerable: false, value: "allow" },
+      reason: { configurable: true, enumerable: true, value: "hidden effect" }
+    });
+    const evaluator = vi.fn(async () => output as never);
+    const policy = new FailClosedPolicyEngine({ evaluate: evaluator });
+
+    await expect(policy.evaluate(request)).resolves.toMatchObject({ effect: "deny" });
+    expect(evaluator).toHaveBeenCalledTimes(1);
+  });
+
 });
 
 
