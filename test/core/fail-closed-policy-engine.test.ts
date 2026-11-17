@@ -13,6 +13,41 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
+describe("FailClosedPolicyEngine delegate method integrity", () => {
+  it("pins evaluator and shutdown methods against later delegate mutation", async () => {
+    const originalEvaluate = vi.fn(async () => ({ effect: "allow" as const, reason: "pinned" }));
+    const originalShutdown = vi.fn(async () => undefined);
+    const delegate = { evaluate: originalEvaluate, shutdown: originalShutdown };
+    const policy = new FailClosedPolicyEngine(delegate);
+    const replacementEvaluate = vi.fn(async () => ({ effect: "deny" as const, reason: "replaced" }));
+    const replacementShutdown = vi.fn(async () => { throw new Error("replacement shutdown"); });
+    delegate.evaluate = replacementEvaluate;
+    delegate.shutdown = replacementShutdown;
+
+    await expect(policy.evaluate(request)).resolves.toEqual({ effect: "allow", reason: "pinned" });
+    await expect(policy.shutdown()).resolves.toBeUndefined();
+    expect(originalEvaluate).toHaveBeenCalledTimes(1);
+    expect(originalShutdown).toHaveBeenCalledTimes(1);
+    expect(replacementEvaluate).not.toHaveBeenCalled();
+    expect(replacementShutdown).not.toHaveBeenCalled();
+  });
+
+  it("rejects accessor-backed delegate methods without invoking getters", () => {
+    let getterCalls = 0;
+    const delegate = Object.defineProperty({}, "evaluate", {
+      enumerable: true,
+      get() {
+        getterCalls += 1;
+        throw new Error("hostile evaluator getter");
+      }
+    });
+
+    expect(() => new FailClosedPolicyEngine(delegate as never))
+      .toThrow(/stable data methods/i);
+    expect(getterCalls).toBe(0);
+  });
+});
+
 describe("FailClosedPolicyEngine", () => {
   it("preserves an explicit allow decision from the evaluator", async () => {
     const policy = new FailClosedPolicyEngine({
