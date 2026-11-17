@@ -299,19 +299,37 @@ export class GuardedMemoryPort implements MemoryPort {
   }
 
   private resolve(address: MemoryAddress): ResolvedTarget {
-    const candidate = address as Partial<MemoryAddress> | null | undefined;
-
-    // Read each property exactly once. Validating and then re-reading would let an
-    // address with accessor properties pass validation and return different values later.
     let namespace: unknown;
     let key: unknown;
-    if (candidate && typeof candidate === "object") {
-      try {
-        namespace = candidate.namespace;
-        key = candidate.key;
-      } catch {
-        // A throwing accessor is treated as an invalid address, not an internal error.
+    try {
+      if (typeof address !== "object" || address === null || Array.isArray(address)) {
+        throw new TypeError("Memory address must be a plain record.");
       }
+      const prototype = Object.getPrototypeOf(address);
+      if (prototype !== Object.prototype && prototype !== null) {
+        throw new TypeError("Memory address must be a plain record.");
+      }
+      const keys = Reflect.ownKeys(address);
+      if (keys.length !== 2 || keys.some((name) => name !== "namespace" && name !== "key")) {
+        throw new TypeError("Memory address must contain exactly namespace and key.");
+      }
+      const namespaceDescriptor = Object.getOwnPropertyDescriptor(address, "namespace");
+      const keyDescriptor = Object.getOwnPropertyDescriptor(address, "key");
+      if (!namespaceDescriptor ||
+          !Object.prototype.hasOwnProperty.call(namespaceDescriptor, "value") ||
+          namespaceDescriptor.enumerable !== true ||
+          !keyDescriptor ||
+          !Object.prototype.hasOwnProperty.call(keyDescriptor, "value") ||
+          keyDescriptor.enumerable !== true) {
+        throw new TypeError("Memory address fields must be enumerable data properties.");
+      }
+      namespace = namespaceDescriptor.value;
+      key = keyDescriptor.value;
+    } catch {
+      throw new MemoryAccessError(
+        "MEMORY_INVALID_ADDRESS",
+        "Memory namespace and key must be own enumerable data properties on a plain record."
+      );
     }
 
     if (
