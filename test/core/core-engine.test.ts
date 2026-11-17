@@ -328,6 +328,48 @@ describe("multi-level dependency cleanup retry", () => {
 });
 
 
+describe("fan-out dependency cleanup recovery", () => {
+  it("cleans independent dependents but preserves a shared dependency after one dependent fails", async () => {
+    const engine = new CoreEngine();
+    const calls: string[] = [];
+    let alphaAttempts = 0;
+
+    engine.register({
+      id: "foundation",
+      version: "1.0.0",
+      stop: () => { calls.push("foundation"); }
+    });
+    engine.register({
+      id: "alpha",
+      version: "1.0.0",
+      dependencies: ["foundation"],
+      stop: () => {
+        alphaAttempts += 1;
+        calls.push("alpha:" + alphaAttempts);
+        if (alphaAttempts === 1) throw new Error("alpha cleanup failed");
+      }
+    });
+    engine.register({
+      id: "beta",
+      version: "1.0.0",
+      dependencies: ["foundation"],
+      stop: () => { calls.push("beta"); }
+    });
+
+    await engine.initialize();
+    await expect(engine.stop()).rejects.toThrow(/failed to stop/i);
+
+    expect(calls).toEqual(["beta", "alpha:1"]);
+    expect(engine.getModuleStates().get("beta")).toBe("stopped");
+    expect(engine.getModuleStates().get("alpha")).toBe("failed");
+    expect(engine.getModuleStates().get("foundation")).toBe("initialized");
+
+    await engine.stop();
+    expect(calls).toEqual(["beta", "alpha:1", "alpha:2", "foundation"]);
+    expect(engine.state).toBe("stopped");
+  });
+});
+
 describe("CoreEngine guarded memory composition", () => {
   it("rejects a raw MemoryPort supplied as a module memory capability", async () => {
     const { InMemoryMemoryStore } = await import("../../src/core/in-memory-memory-store.js");
