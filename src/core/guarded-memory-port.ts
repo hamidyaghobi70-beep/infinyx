@@ -192,12 +192,12 @@ export class GuardedMemoryPort implements MemoryPort {
     let auditPublishDecision: MemoryAuditPort["publishDecision"];
     let auditPublishFailure: MemoryAuditPort["publishFailure"];
     try {
-      storeRead = captureTrustedMethod(store, "read");
-      storeWrite = captureTrustedMethod(store, "write");
-      storeDelete = captureTrustedMethod(store, "delete");
-      policyEvaluate = captureTrustedMethod(policy, "evaluate");
-      auditPublishDecision = captureTrustedMethod(audit, "publishDecision");
-      auditPublishFailure = captureTrustedMethod(audit, "publishFailure");
+      storeRead = captureTrustedMethod<MemoryPort["read"]>(store, "read");
+      storeWrite = captureTrustedMethod<MemoryPort["write"]>(store, "write");
+      storeDelete = captureTrustedMethod<MemoryPort["delete"]>(store, "delete");
+      policyEvaluate = captureTrustedMethod<PolicyEngine["evaluate"]>(policy, "evaluate");
+      auditPublishDecision = captureTrustedMethod<MemoryAuditPort["publishDecision"]>(audit, "publishDecision");
+      auditPublishFailure = captureTrustedMethod<MemoryAuditPort["publishFailure"]>(audit, "publishFailure");
     } catch {
       throw new TypeError("GuardedMemoryPort dependencies must expose stable data methods.");
     }
