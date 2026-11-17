@@ -596,6 +596,65 @@ describe("CoreEngine policy shutdown integration", () => {
     expect(engine.state).toBe("stopped");
   });
 
+  it("blocks module cleanup until detached protected-operation children settle", async () => {
+    let releaseChild!: () => void;
+    let signalChildStarted!: () => void;
+    const childStarted = new Promise<void>((resolve) => {
+      signalChildStarted = resolve;
+    });
+    const childGate = new Promise<void>((resolve) => {
+      releaseChild = resolve;
+    });
+    let moduleStops = 0;
+    const engine = new CoreEngine({
+      policy: {
+        evaluate: async () => ({ effect: "allow", reason: "allowed" })
+      },
+      protectedOperationShutdown: { drainDeadlineMs: 15 }
+    });
+    const operation = engine.registerProtectedOperation({
+      id: "shutdown.detached-child",
+      action: "record.write",
+      resource: "record:shutdown-child",
+      validateInput: (value: unknown): value is undefined => value === undefined,
+      handler: (_input, context) => {
+        void context.runChild(async () => {
+          signalChildStarted();
+          await childGate;
+        });
+        return "root-handler-completed";
+      }
+    });
+    engine.register({
+      id: "shutdown-child-dependent-module",
+      version: "1.0.0",
+      stop: () => { moduleStops += 1; }
+    });
+
+    await engine.initialize();
+    await engine.start();
+    const execution = engine.protectedOperations.execute(
+      operation, { actorId: "shutdown-child-test" }, undefined
+    );
+    await childStarted;
+
+    await expect(engine.stop()).rejects.toMatchObject({
+      code: "PROTECTED_OPERATION_DRAIN_TIMEOUT"
+    });
+    expect(engine.state).toBe("stopping");
+    expect(moduleStops).toBe(0);
+
+    releaseChild();
+    await expect(execution).resolves.toEqual({
+      status: "executed",
+      value: "root-handler-completed"
+    });
+    await engine.stop();
+
+    expect(moduleStops).toBe(1);
+    expect(engine.state).toBe("stopped");
+  });
+
   it("retries a transient policy shutdown failure without rerunning successful cleanup", async () => {
     let shutdownCalls = 0;
     let moduleStops = 0;
