@@ -219,10 +219,18 @@ export class ProtectedOperationExecutor implements ProtectedOperationPort {
       return this.denied("Protected operation input validation failed.");
     }
 
-    const callerSignal = options?.signal;
-    const parentSignal = options?.parentSignal;
-    if (callerSignal?.aborted || parentSignal?.aborted) {
-      return this.denied("Protected operation was cancelled before authorization.");
+    let callerSignal: AbortSignal | undefined;
+    let parentSignal: AbortSignal | undefined;
+    let deadlineAt: number | undefined;
+    try {
+      callerSignal = options?.signal;
+      parentSignal = options?.parentSignal;
+      deadlineAt = options?.deadlineAt;
+      if (callerSignal?.aborted || parentSignal?.aborted) {
+        return this.denied("Protected operation was cancelled before authorization.");
+      }
+    } catch {
+      return this.denied("Protected operation cancellation options are invalid.");
     }
 
     let used = this.usedRequests.get(operation as object);
@@ -234,21 +242,31 @@ export class ProtectedOperationExecutor implements ProtectedOperationPort {
     const operationController = new AbortController();
     let callerAbortListener: (() => void) | undefined;
     let parentAbortListener: (() => void) | undefined;
-    if (callerSignal) {
-      callerAbortListener = () => operationController.abort({
-        code: "CALLER_CANCELLED",
-        message: "Protected operation cancellation requested by caller."
-      });
-      callerSignal.addEventListener("abort", callerAbortListener, { once: true });
-      if (callerSignal.aborted) callerAbortListener();
-    }
-    if (parentSignal) {
-      parentAbortListener = () => operationController.abort({
-        code: "PARENT_CANCELLED",
-        message: "Protected operation cancellation requested by parent."
-      });
-      parentSignal.addEventListener("abort", parentAbortListener, { once: true });
-      if (parentSignal.aborted) parentAbortListener();
+    try {
+      if (callerSignal) {
+        callerAbortListener = () => operationController.abort({
+          code: "CALLER_CANCELLED",
+          message: "Protected operation cancellation requested by caller."
+        });
+        callerSignal.addEventListener("abort", callerAbortListener, { once: true });
+        if (callerSignal.aborted) callerAbortListener();
+      }
+      if (parentSignal) {
+        parentAbortListener = () => operationController.abort({
+          code: "PARENT_CANCELLED",
+          message: "Protected operation cancellation requested by parent."
+        });
+        parentSignal.addEventListener("abort", parentAbortListener, { once: true });
+        if (parentSignal.aborted) parentAbortListener();
+      }
+    } catch {
+      try {
+        if (callerSignal && callerAbortListener) callerSignal.removeEventListener("abort", callerAbortListener);
+        if (parentSignal && parentAbortListener) parentSignal.removeEventListener("abort", parentAbortListener);
+      } catch {
+        // A malformed cancellation capability must not escape the deny boundary.
+      }
+      return this.denied("Protected operation cancellation options are invalid.");
     }
 
     try {
@@ -259,7 +277,7 @@ export class ProtectedOperationExecutor implements ProtectedOperationPort {
       try {
         decision = await this.policy.evaluate(policyRequestCandidate, {
           signal: operationController.signal,
-          ...(options?.deadlineAt === undefined ? {} : { deadlineAt: options.deadlineAt })
+          ...(deadlineAt === undefined ? {} : { deadlineAt })
         });
       } catch {
         return this.denied("Policy evaluation failed; protected operation denied.");
@@ -319,8 +337,12 @@ export class ProtectedOperationExecutor implements ProtectedOperationPort {
     } catch {
       return { status: "failed", reason: "Protected operation handler failed." };
     } finally {
-      if (callerSignal && callerAbortListener) callerSignal.removeEventListener("abort", callerAbortListener);
-      if (parentSignal && parentAbortListener) parentSignal.removeEventListener("abort", parentAbortListener);
+      try {
+        if (callerSignal && callerAbortListener) callerSignal.removeEventListener("abort", callerAbortListener);
+        if (parentSignal && parentAbortListener) parentSignal.removeEventListener("abort", parentAbortListener);
+      } catch {
+        // Listener cleanup is best-effort for malformed caller-supplied signal objects.
+      }
     }
   }
 
