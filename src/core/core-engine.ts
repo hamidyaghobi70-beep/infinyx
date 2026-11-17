@@ -641,7 +641,7 @@ export class CoreEngine {
                 stopWork.then(() => true as const),
                 timedOut
               ]);
-              if (!completed || performance.now() > deadlineAt) {
+              if (!completed) {
                 throw new CoreError(
                   "MODULE_STOP_TIMEOUT",
                   "Module stop hook did not settle before the shutdown deadline."
