@@ -162,6 +162,16 @@ describe("InMemoryEventBus trust and resource boundaries", () => {
     expect(bus.hasSubscribers("bounded.event")).toBe(true);
   });
 
+  it("enforces the global subscriber ceiling across event types", () => {
+    const bus = new InMemoryEventBus();
+    for (let typeIndex = 0; typeIndex < 16; typeIndex += 1) {
+      for (let subscriberIndex = 0; subscriberIndex < 256; subscriberIndex += 1) {
+        bus.subscribe("global." + typeIndex, () => undefined);
+      }
+    }
+    expect(() => bus.subscribe("global.overflow", () => undefined)).toThrow(/capacity/i);
+  });
+
   it("bounds concurrent event dispatches and releases capacity after settlement", async () => {
     const bus = new InMemoryEventBus();
     let release!: () => void;
