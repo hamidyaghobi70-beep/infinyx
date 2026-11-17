@@ -40,7 +40,7 @@ function readLifecycleHook(
       const hook: unknown = descriptor.value;
       if (hook === undefined) return undefined;
       if (typeof hook !== "function") throw invalidModule();
-      return hook.bind(target);
+      return Function.prototype.bind.call(hook, target);
     }
     current = Object.getPrototypeOf(current) as object | null;
   }
