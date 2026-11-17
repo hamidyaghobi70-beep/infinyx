@@ -73,19 +73,46 @@ export function isValidPolicyRequest(value: unknown): value is PolicyRequest {
       Object.keys(attributes).every((key) => key.trim().length > 0));
 }
 
-export function isValidPolicyDecision(value: unknown): value is PolicyDecision {
-  return isPlainRecord(value) &&
-    (value.effect === "allow" || value.effect === "deny") &&
-    isNonEmptyString(value.reason);
-}
-
+/**
+ * Read a policy result through own property descriptors. Never dereference
+ * untrusted properties: accessor getters must not execute at the trust boundary.
+ *
+ * Proxy reflection traps cannot be detected or prevented by JavaScript; any
+ * trap failure is caught by the caller and converted into a deny decision.
+ */
 export function snapshotPolicyDecision(value: unknown): PolicyDecision | undefined {
   try {
-    if (!isValidPolicyDecision(value)) return undefined;
-    return Object.freeze({ effect: value.effect, reason: value.reason });
+    if (typeof value !== "object" || value === null || Array.isArray(value)) return undefined;
+    const prototype = Object.getPrototypeOf(value);
+    if (prototype !== Object.prototype && prototype !== null) return undefined;
+
+    const descriptors = Object.getOwnPropertyDescriptors(value);
+    const keys = Reflect.ownKeys(descriptors);
+    if (keys.length !== 2 || !keys.includes("effect") || !keys.includes("reason")) {
+      return undefined;
+    }
+
+    const effectDescriptor = descriptors.effect;
+    const reasonDescriptor = descriptors.reason;
+    if (!effectDescriptor || !("value" in effectDescriptor) ||
+        !reasonDescriptor || !("value" in reasonDescriptor)) {
+      return undefined;
+    }
+
+    const effect: unknown = effectDescriptor.value;
+    const reason: unknown = reasonDescriptor.value;
+    if ((effect !== "allow" && effect !== "deny") || !isNonEmptyString(reason)) {
+      return undefined;
+    }
+
+    return Object.freeze({ effect, reason });
   } catch {
     return undefined;
   }
+}
+
+export function isValidPolicyDecision(value: unknown): value is PolicyDecision {
+  return snapshotPolicyDecision(value) !== undefined;
 }
 
 function cancellationMessage(reason: PolicyStopReason): string {
