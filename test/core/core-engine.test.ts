@@ -685,7 +685,7 @@ describe("CoreEngine injected Event Bus capability boundary", () => {
     const engine = new CoreEngine({
       memory: (moduleId) => new GuardedMemoryPort({
         store,
-        policy: new DefaultDenyPolicyEngine(),
+        policy: { evaluate: async () => ({ effect: "allow" as const, reason: "shutdown test allow" }) },
         audit,
         scope: { tenantId: "tenant", actorId: "actor", moduleId }
       })
