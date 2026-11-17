@@ -4,6 +4,7 @@ import type {
   PolicyEngine,
   PolicyRequest
 } from "./contracts.js";
+import { snapshotPolicyDecision } from "./fail-closed-policy-engine.js";
 import { MemoryAccessError } from "./memory-error.js";
 
 /** Published before every memory operation is executed or refused. */
@@ -547,15 +548,14 @@ function isValidSegment(value: unknown, maxLength: number): value is string {
 }
 
 function normalizeDecision(result: unknown): NormalizedDecision {
-  if (!result || typeof result !== "object" || Array.isArray(result)) {
-    return { effect: "deny", reason: "Policy returned an invalid decision." };
-  }
-
-  const { effect, reason } = result as { effect?: unknown; reason?: unknown };
-  if ((effect !== "allow" && effect !== "deny") || typeof reason !== "string" || !reason.trim()) {
-    return { effect: "deny", reason: "Policy returned an invalid decision." };
-  }
-  return { effect, reason };
+  // GuardedMemoryPort is independently constructible, so it must enforce its own
+  // decision boundary instead of trusting callers to wrap policies in FailClosedPolicyEngine.
+  // Descriptor-based snapshotting rejects accessors, extra/symbol keys and hostile reflection
+  // without executing untrusted getters.
+  return snapshotPolicyDecision(result) ?? {
+    effect: "deny",
+    reason: "Policy returned an invalid decision."
+  };
 }
 
 
