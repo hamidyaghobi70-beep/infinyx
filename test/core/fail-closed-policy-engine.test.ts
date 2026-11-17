@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { CoreEngine } from "../../src/core/core-engine.js";
 import { FailClosedPolicyEngine } from "../../src/core/fail-closed-policy-engine.js";
-import type { PolicyRequest } from "../../src/core/contracts.js";
+import type { PolicyDecision, PolicyRequest } from "../../src/core/contracts.js";
 
 const request: PolicyRequest = {
   actorId: "test-actor",
