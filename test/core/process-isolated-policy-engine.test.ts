@@ -12,8 +12,8 @@ const fixturePath = fileURLToPath(
 );
 const fixtureUrl = pathToFileURL(fixturePath).href;
 
-function request(action = "allow"): PolicyRequest {
-  return { actorId: "test-actor", action, resource: "record:123" };
+function request(action = "allow", resource = "record:123"): PolicyRequest {
+  return { actorId: "test-actor", action, resource };
 }
 
 function stateObserver(target: string): {
