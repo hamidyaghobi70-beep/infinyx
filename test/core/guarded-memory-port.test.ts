@@ -1,3 +1,9 @@
+describe("GuardedMemoryPort public API boundary", () => {
+  it("does not expose the internal capability revoker from the public core entry point", () => {
+    expect("revokeGuardedMemoryPort" in CorePublicApi).toBe(false);
+  });
+});
+
 import { describe, expect, it, vi } from "vitest";
 import type {
   EventBusPort,
@@ -23,6 +29,7 @@ import type {
 } from "../../src/core/guarded-memory-port.js";
 import { InMemoryMemoryStore } from "../../src/core/in-memory-memory-store.js";
 import { MemoryAccessError } from "../../src/core/memory-error.js";
+import * as CorePublicApi from "../../src/core/index.js";
 
 const allowAll: PolicyEngine = {
   evaluate: async () => ({ effect: "allow", reason: "test allow" })
