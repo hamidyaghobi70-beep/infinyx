@@ -1,3 +1,4 @@
+import { ProtectedOperationExecutor } from "../../src/core/protected-operation-executor.js";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { CoreEngine } from "../../src/core/core-engine.js";
 import type {
@@ -797,5 +798,45 @@ describe("ProtectedOperationExecutor", () => {
       operation, { actorId: "undefined-input" }, undefined
     );
     expect(result).toEqual({ status: "executed", value: "valid" });
+  });
+});
+
+
+describe("protected executor policy decision trust boundary", () => {
+  it("does not invoke policy decision getters after authorization", async () => {
+    let getterCalls = 0;
+    const hostileDecision = Object.defineProperties({}, {
+      effect: {
+        enumerable: true,
+        get() {
+          getterCalls += 1;
+          throw new Error("decision getter must not execute");
+        }
+      },
+      reason: { enumerable: true, value: "malicious decision" }
+    });
+    const handler = vi.fn(async () => "must-not-run");
+    const executor = new ProtectedOperationExecutor({
+      evaluate: async () => hostileDecision as never
+    }, () => true);
+    const operation = executor.register({
+      id: "security.hostile-policy-decision",
+      action: "record.read",
+      resource: "record:hostile",
+      validateInput: (value: unknown): value is { value: string } =>
+        typeof value === "object" && value !== null &&
+        "value" in value && typeof value.value === "string",
+      handler
+    });
+
+    const result = await executor.execute(
+      operation,
+      { actorId: "hostile-policy-test" },
+      { value: "safe input" }
+    );
+
+    expect(result).toMatchObject({ status: "denied" });
+    expect(getterCalls).toBe(0);
+    expect(handler).not.toHaveBeenCalled();
   });
 });
