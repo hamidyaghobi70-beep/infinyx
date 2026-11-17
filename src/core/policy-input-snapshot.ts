@@ -102,12 +102,21 @@ export function snapshotBoundedPolicyData<T>(input: T): SnapshotResult<T> {
           reject("INVALID_STRUCTURE");
         }
 
-        if (value.length > MAX_CONTAINER_ENTRIES || keys.length !== value.length + 1) {
+        // Read the intrinsic length from its own data descriptor. A Proxy get
+        // trap must not be able to vary array length between validation and copy.
+        const lengthDescriptor = Object.getOwnPropertyDescriptor(value, "length");
+        if (!lengthDescriptor || !("value" in lengthDescriptor) ||
+            lengthDescriptor.enumerable || !Number.isSafeInteger(lengthDescriptor.value) ||
+            (lengthDescriptor.value as number) < 0) {
+          reject("INVALID_STRUCTURE");
+        }
+        const length = lengthDescriptor.value as number;
+        if (length > MAX_CONTAINER_ENTRIES || keys.length !== length + 1) {
           reject("RESOURCE_LIMIT");
         }
 
         const result: unknown[] = [];
-        for (let index = 0; index < value.length; index += 1) {
+        for (let index = 0; index < length; index += 1) {
           const key = String(index);
           accountString(key);
           const descriptor = Object.getOwnPropertyDescriptor(value, key);
