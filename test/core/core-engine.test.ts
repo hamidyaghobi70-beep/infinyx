@@ -775,3 +775,117 @@ describe("CoreEngine bounded module memory drain", () => {
     expect(engine.state).toBe("stopped");
   });
 });
+
+
+describe("CoreEngine bounded rollback memory drain", () => {
+  it("bounds initialization rollback and resumes after the admitted memory operation settles", async () => {
+    const { GuardedMemoryPort } = await import("../../src/core/guarded-memory-port.js");
+    let releaseRead!: (value: string) => void;
+    let signalReadStarted!: () => void;
+    const readStarted = new Promise<void>((resolve) => { signalReadStarted = resolve; });
+    const store: import("../../src/core/contracts.js").MemoryPort = {
+      read: () => {
+        signalReadStarted();
+        return new Promise<string>((resolve) => { releaseRead = resolve; });
+      },
+      write: async () => undefined,
+      delete: async () => undefined
+    };
+    let memory!: InstanceType<typeof GuardedMemoryPort>;
+    let stopCalls = 0;
+    const engine = new CoreEngine({
+      protectedOperationShutdown: { drainDeadlineMs: 25 },
+      memory: (moduleId) => {
+        memory = new GuardedMemoryPort({
+          store,
+          policy: { evaluate: async () => ({ effect: "allow" as const, reason: "rollback test" }) },
+          audit: { publishDecision: async () => true, publishFailure: async () => undefined },
+          scope: { tenantId: "tenant", actorId: "actor", moduleId }
+        });
+        return memory;
+      }
+    });
+    engine.register({
+      id: "rollback-worker",
+      version: "1.0.0",
+      initialize: (context) => {
+        void context.memory!.read({ namespace: "rollback", key: "pending" });
+        throw new Error("initialization failed after starting memory work");
+      },
+      stop: () => { stopCalls += 1; }
+    });
+
+    const initialization = engine.initialize();
+    await readStarted;
+    await expect(initialization).rejects.toThrow(/rollback failed/i);
+    expect(engine.state).toBe("failed");
+    expect(stopCalls).toBe(1);
+    await expect(memory.read({ namespace: "rollback", key: "late" })).rejects.toMatchObject({
+      code: "MEMORY_CAPABILITY_REVOKED"
+    });
+
+    releaseRead('"finished"');
+    await engine.stop();
+    expect(stopCalls).toBe(1);
+    expect(engine.state).toBe("stopped");
+  });
+
+  it("bounds startup rollback and does not rerun a successful stop hook on recovery", async () => {
+    const { GuardedMemoryPort } = await import("../../src/core/guarded-memory-port.js");
+    let releaseRead!: (value: string) => void;
+    let signalReadStarted!: () => void;
+    const readStarted = new Promise<void>((resolve) => { signalReadStarted = resolve; });
+    const store: import("../../src/core/contracts.js").MemoryPort = {
+      read: () => {
+        signalReadStarted();
+        return new Promise<string>((resolve) => { releaseRead = resolve; });
+      },
+      write: async () => undefined,
+      delete: async () => undefined
+    };
+    let memory!: InstanceType<typeof GuardedMemoryPort>;
+    let stopCalls = 0;
+    const engine = new CoreEngine({
+      protectedOperationShutdown: { drainDeadlineMs: 25 },
+      memory: (moduleId) => {
+        memory = new GuardedMemoryPort({
+          store,
+          policy: { evaluate: async () => ({ effect: "allow" as const, reason: "rollback test" }) },
+          audit: { publishDecision: async () => true, publishFailure: async () => undefined },
+          scope: { tenantId: "tenant", actorId: "actor", moduleId }
+        });
+        return memory;
+      }
+    });
+    engine.register({
+      id: "rollback-worker",
+      version: "1.0.0",
+      initialize: () => undefined,
+      start: (context) => {
+        void context.memory!.read({ namespace: "rollback", key: "pending" });
+      },
+      stop: () => { stopCalls += 1; }
+    });
+    engine.register({
+      id: "rollback-failure",
+      version: "1.0.0",
+      dependencies: ["rollback-worker"],
+      start: () => { throw new Error("later module failed to start"); }
+    });
+
+    await engine.initialize();
+    const startup = engine.start();
+    await readStarted;
+    await expect(startup).rejects.toThrow(/rollback failed/i);
+    expect(engine.state).toBe("failed");
+    expect(stopCalls).toBe(1);
+    await expect(memory.read({ namespace: "rollback", key: "late" })).rejects.toMatchObject({
+      code: "MEMORY_CAPABILITY_REVOKED"
+    });
+
+    releaseRead('"finished"');
+    await engine.stop();
+    expect(stopCalls).toBe(1);
+    expect(engine.state).toBe("stopped");
+  });
+});
