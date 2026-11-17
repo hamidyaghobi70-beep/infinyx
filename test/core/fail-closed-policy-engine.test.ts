@@ -477,3 +477,74 @@ describe("policy request snapshot descriptor integrity", () => {
     expect(evaluator).not.toHaveBeenCalled();
   });
 });
+
+
+describe("hostile policy evaluation options", () => {
+  it("denies option Proxy getters without rejecting evaluate", async () => {
+    const options = new Proxy({}, {
+      get(_target, property) {
+        if (property === "signal") throw new Error("hostile options getter");
+        return undefined;
+      }
+    });
+    const evaluator = vi.fn(async () => ({
+      effect: "allow" as const,
+      reason: "must not execute"
+    }));
+    const policy = new FailClosedPolicyEngine({ evaluate: evaluator });
+
+    await expect(policy.evaluate(request, options as never)).resolves.toMatchObject({
+      effect: "deny"
+    });
+    expect(evaluator).not.toHaveBeenCalled();
+  });
+
+  it("denies a signal whose listener registration getter throws", async () => {
+    const signal = new Proxy({
+      aborted: false,
+      removeEventListener: () => undefined
+    }, {
+      get(target, property, receiver) {
+        if (property === "addEventListener") throw new Error("hostile registration getter");
+        return Reflect.get(target, property, receiver);
+      }
+    });
+    const evaluator = vi.fn(async () => ({
+      effect: "allow" as const,
+      reason: "must not execute"
+    }));
+    const policy = new FailClosedPolicyEngine({ evaluate: evaluator });
+
+    await expect(policy.evaluate(request, { signal: signal as unknown as AbortSignal }))
+      .resolves.toMatchObject({ effect: "deny" });
+    expect(evaluator).not.toHaveBeenCalled();
+  });
+
+  it("keeps a settled policy decision when signal listener cleanup throws", async () => {
+    const signal = {
+      aborted: false,
+      addEventListener: () => undefined,
+      removeEventListener: () => { throw new Error("hostile cleanup"); }
+    } as unknown as AbortSignal;
+    const policy = new FailClosedPolicyEngine({
+      evaluate: async () => ({ effect: "allow", reason: "evaluation completed" })
+    });
+
+    await expect(policy.evaluate(request, { signal })).resolves.toEqual({
+      effect: "allow",
+      reason: "evaluation completed"
+    });
+  });
+
+  it("denies a non-finite deadline before invoking the evaluator", async () => {
+    const evaluator = vi.fn(async () => ({
+      effect: "allow" as const,
+      reason: "must not execute"
+    }));
+    const policy = new FailClosedPolicyEngine({ evaluate: evaluator });
+
+    await expect(policy.evaluate(request, { deadlineAt: Number.POSITIVE_INFINITY }))
+      .resolves.toMatchObject({ effect: "deny" });
+    expect(evaluator).not.toHaveBeenCalled();
+  });
+});
