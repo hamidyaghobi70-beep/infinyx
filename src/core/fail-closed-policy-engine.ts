@@ -356,23 +356,24 @@ export class FailClosedPolicyEngine implements PolicyEngine {
     this.shuttingDown = true;
     for (const stop of [...this.activeStops]) stop("RUNTIME_SHUTDOWN");
 
-    let delegateShutdown: Promise<void>;
-    try {
-      delegateShutdown = Promise.resolve(this.delegateShutdown?.());
-    } catch (error) {
-      this.shutdownPromise = Promise.reject(error);
-      return this.shutdownPromise;
-    }
-
-    // The wrapper's cancellation race is not proof that delegate work settled.
-    // Retain the underlying evaluation promises until they actually settle.
-    const evaluations = [...this.activeEvaluations].map((evaluation) =>
-      evaluation.then(() => undefined, () => undefined)
-    );
-    this.shutdownPromise = Promise.all([
-      delegateShutdown,
-      Promise.all(evaluations).then(() => undefined)
-    ]).then(() => undefined);
-    return this.shutdownPromise;
+    const attempt = Promise.resolve().then(async () => {
+      // The wrapper's cancellation race is not proof that delegate work settled.
+      // Retain the underlying evaluation promises until they actually settle.
+      const evaluations = [...this.activeEvaluations].map((evaluation) =>
+        evaluation.then(() => undefined, () => undefined)
+      );
+      await Promise.all([
+        Promise.resolve(this.delegateShutdown?.()),
+        Promise.all(evaluations).then(() => undefined)
+      ]);
+    });
+    let tracked!: Promise<void>;
+    tracked = attempt.catch((error: unknown) => {
+      // Concurrent callers share this attempt; a later call may retry a transient failure.
+      if (this.shutdownPromise === tracked) this.shutdownPromise = undefined;
+      throw error;
+    });
+    this.shutdownPromise = tracked;
+    return tracked;
   }
 }
