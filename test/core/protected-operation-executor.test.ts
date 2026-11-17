@@ -699,9 +699,6 @@ describe("ProtectedOperationExecutor", () => {
   });
 
 
-});
-
-
   it("passes the same detached immutable snapshot to validation and the handler", async () => {
     let validatedInput: unknown;
     let handledInput: unknown;
