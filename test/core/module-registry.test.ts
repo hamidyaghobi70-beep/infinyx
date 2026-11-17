@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { CoreModule } from "../../src/core/contracts.js";
 import { CoreEngine } from "../../src/core/core-engine.js";
 import { CoreError } from "../../src/core/core-error.js";
-import { MAX_CORE_MODULES, MAX_MODULE_DEPENDENCIES, ModuleRegistry } from "../../src/core/module-registry.js";
+import { MAX_CORE_MODULES, MAX_MODULE_DEPENDENCIES, MAX_TOTAL_MODULE_DEPENDENCIES, ModuleRegistry } from "../../src/core/module-registry.js";
 
 describe("ModuleRegistry", () => {
   it("resolves dependencies before dependants", () => {
@@ -216,6 +216,28 @@ describe("ModuleRegistry resource bounds", () => {
       id: "duplicates",
       version: "1.0.0",
       dependencies: ["base", "base"]
+    })).toThrowError(CoreError);
+  });
+
+  it("enforces a total dependency-edge budget across the registry", async () => {
+    const registry = new ModuleRegistry();
+    const perModule = MAX_MODULE_DEPENDENCIES;
+    const fullLists = Math.floor(MAX_TOTAL_MODULE_DEPENDENCIES / perModule);
+    for (let index = 0; index < fullLists; index += 1) {
+      registry.register({
+        id: "edge-module-" + index,
+        version: "1.0.0",
+        dependencies: Array.from(
+          { length: perModule },
+          (_, dependencyIndex) => "dependency-" + dependencyIndex
+        )
+      });
+    }
+
+    expect(() => registry.register({
+      id: "edge-module-overflow",
+      version: "1.0.0",
+      dependencies: ["one"]
     })).toThrowError(CoreError);
   });
 
