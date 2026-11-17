@@ -1,7 +1,29 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { CoreEngine } from "../../src/core/core-engine.js";
 
 describe("CoreEngine", () => {
+  it("does not report a false drain timeout when settlement preceded the deadline but continuation resumed later", async () => {
+    const engine = new CoreEngine({
+      protectedOperationShutdown: { drainDeadlineMs: 15 }
+    });
+    engine.register({
+      id: "deadline-boundary-module",
+      version: "1.0.0",
+      initialize: () => undefined
+    });
+    await engine.initialize();
+    await engine.start();
+
+    const clock = [100, 100, 110, 111, 120];
+    const now = vi.spyOn(performance, "now").mockImplementation(() => clock.shift() ?? 110);
+    try {
+      await expect(engine.stop()).resolves.toBeUndefined();
+      expect(engine.state).toBe("stopped");
+    } finally {
+      now.mockRestore();
+    }
+  });
+
   it("initializes and starts modules in dependency order, then stops in reverse", async () => {
     const engine = new CoreEngine();
     const calls: string[] = [];
