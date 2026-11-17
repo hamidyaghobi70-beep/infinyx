@@ -32,6 +32,33 @@ describe("ModuleRegistry", () => {
     expect(() => cyclic.resolveStartOrder()).toThrowError(/dependency cycle/i);
   });
 
+  it("detects an indirect dependency cycle and reports the cycle path", () => {
+    const registry = new ModuleRegistry();
+    registry.register({ id: "alpha", version: "1.0.0", dependencies: ["beta"] });
+    registry.register({ id: "beta", version: "1.0.0", dependencies: ["gamma"] });
+    registry.register({ id: "gamma", version: "1.0.0", dependencies: ["alpha"] });
+
+    expect(() => registry.resolveStartOrder()).toThrowError(/alpha -> beta -> gamma -> alpha/);
+  });
+
+  it("resolves a dependency chain at the maximum supported module count", () => {
+    const registry = new ModuleRegistry();
+    for (let index = 0; index < MAX_CORE_MODULES; index += 1) {
+      registry.register({
+        id: "chain-" + index,
+        version: "1.0.0",
+        ...(index + 1 < MAX_CORE_MODULES
+          ? { dependencies: ["chain-" + (index + 1)] }
+          : {})
+      });
+    }
+
+    const order = registry.resolveStartOrder().map((module) => module.id);
+    expect(order).toHaveLength(MAX_CORE_MODULES);
+    expect(order[0]).toBe("chain-" + (MAX_CORE_MODULES - 1));
+    expect(order[MAX_CORE_MODULES - 1]).toBe("chain-0");
+  });
+
   it("preserves prototype lifecycle hooks and their instance context", async () => {
     class StatefulModule implements CoreModule {
       readonly id = "stateful";
