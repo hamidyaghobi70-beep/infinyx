@@ -99,6 +99,31 @@ describe("ProtectedOperationExecutor", () => {
     expect(handler).not.toHaveBeenCalled();
   });
 
+  it("fails closed when caller cancellation options or signals have hostile getters", async () => {
+    const { engine, operation, handler } = makeEngine();
+    await ensureStarted(engine);
+
+    const hostileOptions = new Proxy({}, {
+      get() { throw new Error("hostile options getter"); }
+    });
+    await expect(engine.protectedOperations.execute(
+      operation, caller, { value: "no" }, hostileOptions as never
+    )).resolves.toMatchObject({ status: "denied" });
+
+    const hostileSignal = new Proxy({ aborted: false }, {
+      get(target, property, receiver) {
+        if (property === "addEventListener") throw new Error("hostile signal getter");
+        return Reflect.get(target, property, receiver);
+      }
+    });
+    await expect(engine.protectedOperations.execute(
+      operation, { actorId: "hostile-signal" }, { value: "no" },
+      { signal: hostileSignal as unknown as AbortSignal }
+    )).resolves.toMatchObject({ status: "denied" });
+
+    expect(handler).not.toHaveBeenCalled();
+  });
+
   it("cancels an in-flight policy evaluation and does not invoke the handler", async () => {
     const controller = new AbortController();
     let evaluatorSignal: AbortSignal | undefined;
