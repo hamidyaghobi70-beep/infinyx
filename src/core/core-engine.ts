@@ -91,6 +91,61 @@ function snapshotCoreEngineOptions(value: unknown): CoreEngineOptions {
   return Object.freeze(options) as CoreEngineOptions;
 }
 
+function captureEventBusMethod(
+  target: object,
+  name: "subscribe" | "publish" | "publishIfSubscribed" | "hasSubscribers",
+  required: boolean
+): Function | undefined {
+  let current: object | null = target;
+  const visited = new Set<object>();
+  try {
+    while (current !== null) {
+      if (visited.has(current)) throw new TypeError("Invalid Event Bus prototype chain.");
+      visited.add(current);
+      const descriptor = Object.getOwnPropertyDescriptor(current, name);
+      if (descriptor) {
+        if (!Object.prototype.hasOwnProperty.call(descriptor, "value") ||
+            typeof descriptor.value !== "function") {
+          throw new TypeError("Event Bus methods must be data properties containing functions.");
+        }
+        return Function.prototype.bind.call(descriptor.value, target);
+      }
+      current = Object.getPrototypeOf(current);
+    }
+  } catch {
+    throw new TypeError("Event Bus capability could not be safely inspected.");
+  }
+  if (required) throw new TypeError("Event Bus is missing required method: " + name + ".");
+  return undefined;
+}
+
+function createEventBusCapability(value: unknown): EventBusPort {
+  if ((typeof value !== "object" || value === null) && typeof value !== "function") {
+    throw new TypeError("Event Bus capability must be an object.");
+  }
+  const target = value as object;
+  const subscribe = captureEventBusMethod(target, "subscribe", true) as EventBusPort["subscribe"];
+  const publish = captureEventBusMethod(target, "publish", true) as EventBusPort["publish"];
+  const publishIfSubscribed = captureEventBusMethod(
+    target, "publishIfSubscribed", false
+  ) as EventBusPort["publishIfSubscribed"];
+  const hasSubscribers = captureEventBusMethod(
+    target, "hasSubscribers", false
+  ) as EventBusPort["hasSubscribers"];
+
+  const capability: EventBusPort = {
+    subscribe: (type, handler) => subscribe(type, handler),
+    publish: (type, payload) => publish(type, payload)
+  };
+  if (publishIfSubscribed) {
+    capability.publishIfSubscribed = (type, payload) => publishIfSubscribed(type, payload);
+  }
+  if (hasSubscribers) {
+    capability.hasSubscribers = (type) => hasSubscribers(type);
+  }
+  return Object.freeze(capability);
+}
+
 export class CoreEngine {
   readonly events: EventBusPort;
   readonly policy: PolicyEngine;
@@ -142,7 +197,7 @@ export class CoreEngine {
     this.drainDeadlineMs = hasExplicitDrainDeadline
       ? configuredDrainDeadline as number
       : 30_000;
-    this.events = this.options.events ?? new InMemoryEventBus();
+    this.events = createEventBusCapability(this.options.events ?? new InMemoryEventBus());
     this.policy = this.options.policy
       ? new FailClosedPolicyEngine(this.options.policy, this.options.policyTimeoutMs)
       : new DefaultDenyPolicyEngine();
