@@ -1059,3 +1059,49 @@ describe("global protected-operation admission bound", () => {
     await engine.stop();
   });
 });
+
+
+describe("child registration after cancellation", () => {
+  it("rejects new descendants after the parent operation is cancelled", async () => {
+    const callerController = new AbortController();
+    let releaseChild!: () => void;
+    const childGate = new Promise<void>((resolve) => { releaseChild = resolve; });
+    let childStarted!: () => void;
+    const started = new Promise<void>((resolve) => { childStarted = resolve; });
+    const nestedHandler = vi.fn(async () => "must-not-run");
+    let nestedRejected = false;
+
+    const engine = new CoreEngine({ policy: { evaluate: async () => allow } });
+    const operation = engine.registerProtectedOperation({
+      id: "records.cancelled-child-registration",
+      action: "record.write",
+      resource: "record:cancelled",
+      validateInput: isRecordInput,
+      handler: async (_input, context) => {
+        const child = context.runChild(async (childContext) => {
+          childStarted();
+          await childGate;
+          await expect(childContext.runChild(nestedHandler))
+            .rejects.toThrow(/closed after cancellation/i);
+        });
+        await child;
+        return "completed";
+      }
+    });
+    await ensureStarted(engine);
+
+    const pending = engine.protectedOperations.execute(
+      operation,
+      { actorId: "cancelled-child-registration" },
+      { value: "ok" },
+      { signal: callerController.signal }
+    );
+    await started;
+    callerController.abort();
+    releaseChild();
+
+    await expect(pending).resolves.toEqual({ status: "executed", value: "completed" });
+    expect(nestedHandler).not.toHaveBeenCalled();
+    await engine.stop();
+  });
+});
