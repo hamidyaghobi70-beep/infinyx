@@ -1393,12 +1393,14 @@ describe("CoreEngine dependency memory capability recovery", () => {
     engine.register({
       id: "foundation",
       version: "1.0.0",
+      initialize: (context) => { void context.memory; },
       stop: async () => { calls.push("foundation"); }
     });
     engine.register({
       id: "alpha",
       version: "1.0.0",
       dependencies: ["foundation"],
+      initialize: (context) => { void context.memory; },
       stop: async () => {
         alphaAttempts += 1;
         calls.push("alpha:" + alphaAttempts);
@@ -1409,11 +1411,12 @@ describe("CoreEngine dependency memory capability recovery", () => {
       id: "beta",
       version: "1.0.0",
       dependencies: ["foundation"],
+      initialize: (context) => { void context.memory; },
       stop: async () => { calls.push("beta"); }
     });
 
     await engine.initialize();
-    await engine.stop();
+    await expect(engine.stop()).rejects.toMatchObject({ code: "MODULE_STOP_FAILED" });
 
     expect(calls).toEqual(["beta", "alpha:1"]);
     await expect(capabilities.get("beta")!.read({ namespace: "probe", key: "x" }))
