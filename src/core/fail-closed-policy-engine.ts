@@ -129,11 +129,19 @@ function cancellationMessage(reason: PolicyStopReason): string {
 }
 
 function reasonFromSignal(signal: AbortSignal, fallback: PolicyStopReason): PolicyStopReason {
-  const reason: unknown = signal.reason;
-  if (typeof reason === "object" && reason !== null && "code" in reason) {
-    const code = reason.code;
-    if (code === "CALLER_CANCELLED" || code === "POLICY_TIMEOUT" ||
-        code === "RUNTIME_SHUTDOWN" || code === "PARENT_CANCELLED") return code;
+  try {
+    const reason: unknown = signal.reason;
+    if (typeof reason === "object" && reason !== null) {
+      const descriptor = Object.getOwnPropertyDescriptor(reason, "code");
+      if (descriptor && "value" in descriptor) {
+        const code: unknown = descriptor.value;
+        if (code === "CALLER_CANCELLED" || code === "POLICY_TIMEOUT" ||
+            code === "RUNTIME_SHUTDOWN" || code === "PARENT_CANCELLED") return code;
+      }
+    }
+  } catch {
+    // Abort reasons are caller-controlled; hostile reflection must not escape
+    // the cancellation boundary or prevent the fail-closed fallback.
   }
   return fallback;
 }
