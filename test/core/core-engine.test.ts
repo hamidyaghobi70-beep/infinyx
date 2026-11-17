@@ -255,6 +255,46 @@ describe("CoreEngine", () => {
     expect(engine.state).toBe("stopped");
   });
 
+  it("rejects accessor Core Engine options without invoking their getters", () => {
+    let getterCalls = 0;
+    const options = Object.defineProperty({}, "policy", {
+      enumerable: true,
+      get() {
+        getterCalls += 1;
+        throw new Error("hostile policy getter");
+      }
+    }) as import("../../src/core/core-engine.js").CoreEngineOptions;
+
+    expect(() => new CoreEngine(options)).toThrow(/stable data properties/i);
+    expect(getterCalls).toBe(0);
+  });
+
+  it("rejects accessor shutdown configuration without invoking its getter", () => {
+    let getterCalls = 0;
+    const shutdown = Object.defineProperty({}, "drainDeadlineMs", {
+      enumerable: true,
+      get() {
+        getterCalls += 1;
+        return 1;
+      }
+    });
+
+    expect(() => new CoreEngine({
+      protectedOperationShutdown: shutdown as { drainDeadlineMs?: number }
+    })).toThrow(/shutdown configuration is invalid/i);
+    expect(getterCalls).toBe(0);
+  });
+
+  it("converts throwing option Proxy traps into a controlled configuration error", () => {
+    const options = new Proxy({}, {
+      ownKeys() {
+        throw new Error("hostile options reflection trap");
+      }
+    }) as import("../../src/core/core-engine.js").CoreEngineOptions;
+
+    expect(() => new CoreEngine(options)).toThrow(/stable data properties/i);
+  });
+
   it("does not authorize actions without an explicit policy", async () => {
     const engine = new CoreEngine();
     const decision = await engine.policy.evaluate({
