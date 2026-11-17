@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { CoreModule } from "../../src/core/contracts.js";
 import { CoreEngine } from "../../src/core/core-engine.js";
 import { CoreError } from "../../src/core/core-error.js";
-import { ModuleRegistry } from "../../src/core/module-registry.js";
+import { MAX_CORE_MODULES, MAX_MODULE_DEPENDENCIES, ModuleRegistry } from "../../src/core/module-registry.js";
 
 describe("ModuleRegistry", () => {
   it("resolves dependencies before dependants", () => {
@@ -184,7 +184,6 @@ describe("ModuleRegistry trust-boundary snapshots", () => {
 
 describe("ModuleRegistry resource bounds", () => {
   it("rejects registration beyond the global module limit", async () => {
-    const { MAX_CORE_MODULES } = await import("../../src/core/module-registry.js");
     const registry = new ModuleRegistry();
     for (let index = 0; index < MAX_CORE_MODULES; index += 1) {
       registry.register({
@@ -201,7 +200,6 @@ describe("ModuleRegistry resource bounds", () => {
   });
 
   it("rejects oversized and duplicate dependency lists", () => {
-    const { MAX_MODULE_DEPENDENCIES } = requireModuleLimitsForTest();
     const registry = new ModuleRegistry();
     const tooMany = Array.from(
       { length: MAX_MODULE_DEPENDENCIES + 1 },
@@ -236,9 +234,3 @@ describe("ModuleRegistry resource bounds", () => {
   });
 });
 
-function requireModuleLimitsForTest(): {
-  MAX_MODULE_DEPENDENCIES: number;
-} {
-  // Kept synchronous so this test can assert the registration boundary directly.
-  return { MAX_MODULE_DEPENDENCIES: 64 };
-}
