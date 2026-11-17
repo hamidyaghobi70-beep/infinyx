@@ -1278,7 +1278,7 @@ describe("CoreEngine rollback and shutdown concurrency", () => {
     expect(stopCalls).toBe(1);
 
     releaseStop();
-    await expect(initialization).rejects.toThrow("MODULE_INITIALIZATION_FAILED");
+    await expect(initialization).rejects.toMatchObject({ code: "MODULE_INITIALIZATION_FAILED" });
     await shutdown;
 
     expect(stopCalls).toBe(1);
