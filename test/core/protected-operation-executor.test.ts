@@ -948,3 +948,69 @@ describe("protected-operation cancellation cleanup hardening", () => {
     await engine.stop();
   });
 });
+
+
+describe("protected-operation child activity resource bounds", () => {
+  it("rejects child activity beyond the per-operation concurrency limit", async () => {
+    let releaseChildren!: () => void;
+    const childGate = new Promise<void>((resolve) => { releaseChildren = resolve; });
+    let childrenRegistered!: () => void;
+    const registered = new Promise<void>((resolve) => { childrenRegistered = resolve; });
+    const engine = new CoreEngine({ policy: { evaluate: async () => allow } });
+    const operation = engine.registerProtectedOperation({
+      id: "records.child-limit",
+      action: "record.write",
+      resource: "record:bounded",
+      validateInput: isRecordInput,
+      handler: async (_input, context) => {
+        const children = Array.from({ length: 1024 }, () =>
+          context.runChild(async () => childGate)
+        );
+        await expect(context.runChild(async () => undefined))
+          .rejects.toThrow(/concurrency limit/i);
+        childrenRegistered();
+        await Promise.all(children);
+        return "bounded";
+      }
+    });
+    await ensureStarted(engine);
+
+    const pending = engine.protectedOperations.execute(
+      operation, { actorId: "child-limit" }, { value: "ok" }
+    );
+    await registered;
+    releaseChildren();
+    await expect(pending).resolves.toEqual({ status: "executed", value: "bounded" });
+    await engine.stop();
+  });
+
+  it("rejects child activity beyond the maximum nesting depth", async () => {
+    const engine = new CoreEngine({ policy: { evaluate: async () => allow } });
+    const operation = engine.registerProtectedOperation({
+      id: "records.child-depth",
+      action: "record.write",
+      resource: "record:depth",
+      validateInput: isRecordInput,
+      handler: async (_input, context) => {
+        const descend = async (scope: typeof context, depth: number): Promise<void> => {
+          await scope.runChild(async (childScope) => {
+            if (depth === 63) {
+              await expect(childScope.runChild(async () => undefined))
+                .rejects.toThrow(/nesting limit/i);
+              return;
+            }
+            await descend(childScope, depth + 1);
+          });
+        };
+        await descend(context, 0);
+        return "bounded";
+      }
+    });
+    await ensureStarted(engine);
+
+    await expect(engine.protectedOperations.execute(
+      operation, { actorId: "child-depth" }, { value: "ok" }
+    )).resolves.toEqual({ status: "executed", value: "bounded" });
+    await engine.stop();
+  });
+});
