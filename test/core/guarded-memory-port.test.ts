@@ -1051,3 +1051,70 @@ describe("GuardedMemoryPort — Core Engine integration", () => {
     expect(publicAuditSpy).not.toHaveBeenCalled();
   });
 });
+
+
+describe("GuardedMemoryPort policy decision trust boundary", () => {
+  it("rejects accessor-backed policy decisions without invoking getters or touching the store", async () => {
+    let getterCalls = 0;
+    const decision = Object.defineProperties({}, {
+      effect: {
+        enumerable: true,
+        get() {
+          getterCalls += 1;
+          return "allow";
+        }
+      },
+      reason: {
+        enumerable: true,
+        get() {
+          getterCalls += 1;
+          return "hostile allow";
+        }
+      }
+    });
+    const store: MemoryPort = {
+      read: vi.fn(async () => null),
+      write: vi.fn(async () => undefined),
+      delete: vi.fn(async () => undefined)
+    };
+    const policy: PolicyEngine = { evaluate: async () => decision as never };
+    const { guard, decided } = setup({ store, policy });
+
+    expect(await codeOf(guard.write({ namespace: "n", key: "k" }, "v")))
+      .toBe("MEMORY_ACCESS_DENIED");
+    expect(getterCalls).toBe(0);
+    expect(store.write).not.toHaveBeenCalled();
+    expect(decided).toHaveLength(1);
+    expect(decided[0]?.decision).toBe("deny");
+  });
+
+  it("fails closed on hostile decision Proxy reflection and unexpected own keys", async () => {
+    const hostile = new Proxy(
+      { effect: "allow", reason: "must not pass" },
+      {
+        getPrototypeOf() {
+          throw new Error("hostile prototype trap");
+        }
+      }
+    );
+    const symbolDecision = Object.assign(
+      { effect: "allow", reason: "unexpected symbol" },
+      { [Symbol("extra")]: true }
+    );
+
+    for (const result of [hostile, symbolDecision]) {
+      const store: MemoryPort = {
+        read: vi.fn(async () => null),
+        write: vi.fn(async () => undefined),
+        delete: vi.fn(async () => undefined)
+      };
+      const policy: PolicyEngine = { evaluate: async () => result as never };
+      const { guard, decided } = setup({ store, policy });
+
+      expect(await codeOf(guard.write({ namespace: "n", key: "k" }, "v")))
+        .toBe("MEMORY_ACCESS_DENIED");
+      expect(store.write).not.toHaveBeenCalled();
+      expect(decided[0]?.decision).toBe("deny");
+    }
+  });
+});
