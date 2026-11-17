@@ -1370,6 +1370,66 @@ describe("CoreEngine concurrent stop single-flight", () => {
   });
 });
 
+describe("CoreEngine stop-hook timeout recovery", () => {
+  it("waits for the original timed-out stop hook before revoking its memory capability", async () => {
+    const { GuardedMemoryPort } = await import("../../src/core/guarded-memory-port.js");
+    const { InMemoryMemoryStore } = await import("../../src/core/in-memory-memory-store.js");
+    let releaseStop!: () => void;
+    let signalStopStarted!: () => void;
+    const stopGate = new Promise<void>((resolve) => { releaseStop = resolve; });
+    const stopStarted = new Promise<void>((resolve) => { signalStopStarted = resolve; });
+    const store = new InMemoryMemoryStore();
+    let memory!: InstanceType<typeof GuardedMemoryPort>;
+    let stopCalls = 0;
+    const engine = new CoreEngine({
+      protectedOperationShutdown: { drainDeadlineMs: 20 },
+      memory: (moduleId) => {
+        memory = new GuardedMemoryPort({
+          store,
+          policy: { evaluate: async () => ({ effect: "allow" as const, reason: "stop retry test" }) },
+          audit: { publishDecision: async () => true, publishFailure: async () => undefined },
+          scope: { tenantId: "tenant", actorId: "actor", moduleId }
+        });
+        return memory;
+      }
+    });
+    engine.register({
+      id: "slow-stop-memory-worker",
+      version: "1.0.0",
+      initialize: () => undefined,
+      stop: async (context) => {
+        stopCalls += 1;
+        signalStopStarted();
+        await stopGate;
+        await context.memory!.write(
+          { namespace: "shutdown", key: "final" },
+          "written-after-first-timeout"
+        );
+      }
+    });
+
+    await engine.initialize();
+    await engine.start();
+    const firstStop = engine.stop();
+    await stopStarted;
+    await expect(firstStop).rejects.toMatchObject({ code: "MODULE_STOP_FAILED" });
+    expect(engine.state).toBe("failed");
+    await expect(memory.read({ namespace: "shutdown", key: "probe" })).resolves.toBeNull();
+
+    releaseStop();
+    await engine.stop();
+
+    expect(stopCalls).toBe(1);
+    expect(await store.read({ namespace: "tenant/shutdown", key: "final" }))
+      .toBe('"written-after-first-timeout"');
+    await expect(memory.read({ namespace: "shutdown", key: "late" })).rejects.toMatchObject({
+      code: "MEMORY_CAPABILITY_REVOKED"
+    });
+    expect(engine.state).toBe("stopped");
+  });
+});
+
+
 describe("CoreEngine stop-hook deadline boundary", () => {
   it("does not turn a completed stop hook into a timeout because its continuation resumes later", async () => {
     const engine = new CoreEngine({
