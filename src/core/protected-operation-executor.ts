@@ -20,6 +20,8 @@ const handleBrand: unique symbol = Symbol("ProtectedOperationHandle");
 // from exhausting process resources through unbounded detached descendants.
 const MAX_PENDING_CHILD_ACTIVITIES = 1024;
 const MAX_CHILD_ACTIVITY_DEPTH = 64;
+// Process-wide cap for admitted protected handlers across all registered operations.
+const MAX_ACTIVE_PROTECTED_OPERATIONS = 256;
 
 interface InternalHandle extends ProtectedOperationHandle {
   readonly [handleBrand]: true;
@@ -310,6 +312,9 @@ export class ProtectedOperationExecutor implements ProtectedOperationPort {
       // there is no await between these checks and invoking the handler.
       if (!this.isCoreReady() || this.admissionClosed) return this.denied("Core Engine is stopping; protected operation denied.");
       if (operationController.signal.aborted) return this.denied("Protected operation was cancelled during authorization.");
+      if (this.activeHandlers.size >= MAX_ACTIVE_PROTECTED_OPERATIONS) {
+        return this.denied("Protected operation concurrency limit exceeded.");
+      }
       const safeDecision = snapshotPolicyDecision(decision);
       if (!safeDecision) return this.denied("Policy returned an invalid decision; protected operation denied.");
       if (safeDecision.effect !== "allow") return this.denied(safeDecision.reason);
