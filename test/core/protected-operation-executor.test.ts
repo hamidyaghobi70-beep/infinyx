@@ -87,6 +87,31 @@ describe("ProtectedOperationExecutor", () => {
     expect(evaluator).toHaveBeenCalledTimes(callsBeforeRejectedAdmission);
   });
 
+  it("removes an admitted execution if abort-listener registration throws", async () => {
+    const executor = new ProtectedOperationExecutor({ evaluate: async () => allow }, () => true);
+    const handler = vi.fn(() => "must-not-run");
+    const operation = executor.register({
+      id: "lifecycle.abort-listener-failure",
+      action: "record.read",
+      resource: "record:abort-listener",
+      validateInput: (value: unknown): value is string => typeof value === "string",
+      handler
+    });
+    const invalidSignal = {
+      aborted: false,
+      addEventListener: () => { throw new Error("listener registration failed"); },
+      removeEventListener: () => undefined
+    } as unknown as AbortSignal;
+
+    const result = await executor.execute(
+      operation, { actorId: "abort-listener-failure" }, "input", { signal: invalidSignal }
+    );
+
+    expect(result).toMatchObject({ status: "failed" });
+    expect(executor.activeExecutionCount).toBe(0);
+    expect(handler).not.toHaveBeenCalled();
+  });
+
   it("keeps a running handler registered until its promise actually settles after cancellation", async () => {
     let resolveHandler!: (value: string) => void;
     let handlerSignal: AbortSignal | undefined;
