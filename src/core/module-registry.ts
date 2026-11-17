@@ -101,13 +101,13 @@ export class ModuleRegistry {
         throw invalidModule();
       }
 
+      if (this.modules.has(id)) {
+        throw new CoreError("DUPLICATE_MODULE", 'Module "' + id + '" is already registered.');
+      }
+
       if (this.modules.size >= MAX_CORE_MODULES ||
           this.totalDependencies + dependencies.length > MAX_TOTAL_MODULE_DEPENDENCIES) {
         throw invalidModule();
-      }
-
-      if (this.modules.has(id)) {
-        throw new CoreError("DUPLICATE_MODULE", 'Module "' + id + '" is already registered.');
       }
 
       if (dependencies.includes(id)) {
