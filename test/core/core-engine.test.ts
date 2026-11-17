@@ -483,3 +483,59 @@ describe("CoreEngine guarded memory composition", () => {
   });
 
 });
+
+describe("CoreEngine policy shutdown integration", () => {
+  it("waits for underlying policy work after cancellation before completing shutdown", async () => {
+    let releaseEvaluation!: () => void;
+    let signalEvaluationStarted!: () => void;
+    const evaluationStarted = new Promise<void>((resolve) => {
+      signalEvaluationStarted = resolve;
+    });
+    let evaluatorSignal: AbortSignal | undefined;
+    let handlerCalls = 0;
+    const engine = new CoreEngine({
+      policy: {
+        evaluate: (_request, options) => {
+          evaluatorSignal = options?.signal;
+          signalEvaluationStarted();
+          return new Promise((resolve) => {
+            releaseEvaluation = () => resolve({ effect: "allow", reason: "allowed" });
+          });
+        }
+      }
+    });
+    const operation = engine.registerProtectedOperation({
+      id: "shutdown.pending-policy",
+      action: "record.write",
+      resource: "record:shutdown",
+      validateInput: (value: unknown): value is undefined => value === undefined,
+      handler: () => {
+        handlerCalls += 1;
+        return "must-not-run";
+      }
+    });
+
+    await engine.initialize();
+    await engine.start();
+    const execution = engine.protectedOperations.execute(
+      operation, { actorId: "shutdown-policy-test" }, undefined
+    );
+    await evaluationStarted;
+
+    let shutdownSettled = false;
+    const stopping = engine.stop().then(() => {
+      shutdownSettled = true;
+    });
+
+    expect(evaluatorSignal?.aborted).toBe(true);
+    await Promise.resolve();
+    expect(shutdownSettled).toBe(false);
+    expect(handlerCalls).toBe(0);
+
+    releaseEvaluation();
+    await stopping;
+    expect(await execution).toMatchObject({ status: "denied" });
+    expect(handlerCalls).toBe(0);
+    expect(engine.state).toBe("stopped");
+  });
+});
