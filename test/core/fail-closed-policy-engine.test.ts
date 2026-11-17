@@ -325,3 +325,76 @@ describe("FailClosedPolicyEngine caller and parent cancellation", () => {
   });
 
 });
+
+
+describe("untrusted policy decision descriptors", () => {
+  it("denies accessor-backed decisions without invoking getters", async () => {
+    let getterCalls = 0;
+    const output = Object.defineProperties({}, {
+      effect: {
+        enumerable: true,
+        get() {
+          getterCalls += 1;
+          throw new Error("getter must not execute");
+        }
+      },
+      reason: { enumerable: true, value: "apparently valid" }
+    });
+    const policy = new FailClosedPolicyEngine({
+      evaluate: async () => output as never
+    });
+
+    await expect(policy.evaluate(request)).resolves.toMatchObject({ effect: "deny" });
+    expect(getterCalls).toBe(0);
+  });
+
+  it("snapshots a data-only Proxy without invoking its get trap", async () => {
+    let getCalls = 0;
+    const output = new Proxy(
+      { effect: "allow" as const, reason: "descriptor snapshot" },
+      {
+        get() {
+          getCalls += 1;
+          throw new Error("property get trap must not execute");
+        }
+      }
+    );
+    const policy = new FailClosedPolicyEngine({
+      evaluate: async () => output
+    });
+
+    await expect(policy.evaluate(request)).resolves.toEqual({
+      effect: "allow",
+      reason: "descriptor snapshot"
+    });
+    expect(getCalls).toBe(0);
+  });
+
+  it("denies when a Proxy reflection trap throws", async () => {
+    const output = new Proxy(
+      { effect: "allow" as const, reason: "must not be trusted" },
+      {
+        ownKeys() {
+          throw new Error("untrusted reflection trap");
+        }
+      }
+    );
+    const policy = new FailClosedPolicyEngine({
+      evaluate: async () => output
+    });
+
+    await expect(policy.evaluate(request)).resolves.toMatchObject({ effect: "deny" });
+  });
+
+  it("rejects decision objects with unexpected own properties", async () => {
+    const policy = new FailClosedPolicyEngine({
+      evaluate: async () => ({
+        effect: "allow",
+        reason: "unexpected property",
+        privilegeEscalation: true
+      } as never)
+    });
+
+    await expect(policy.evaluate(request)).resolves.toMatchObject({ effect: "deny" });
+  });
+});
