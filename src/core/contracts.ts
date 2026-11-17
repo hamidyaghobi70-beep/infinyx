@@ -137,6 +137,8 @@ export interface PolicyEngine {
   evaluate(request: PolicyRequest, options?: PolicyEvaluationOptions): Promise<PolicyDecision>;
   /** Stop accepting work and request termination of active policy evaluations. */
   shutdown?(): Promise<void>;
+  /** Wait for actual policy delegate settlement; false means deadline expiry. */
+  drain?(deadlineAt: number): Promise<boolean>;
 }
 
 /** Caller-supplied authorization attributes. actorId is not authenticated by Core. */
