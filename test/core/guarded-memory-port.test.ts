@@ -512,39 +512,41 @@ describe("GuardedMemoryPort — input validation", () => {
     expect(backing.size).toBe(0);
   });
 
-  it("reads address properties once, so accessor-based addresses cannot change after validation", async () => {
-    let keyReads = 0;
-    const shifting = {
-      namespace: "n",
-      get key() {
-        keyReads += 1;
-        return keyReads === 1 ? "valid" : "bad\u0000key";
-      }
-    };
-    const evaluate = vi.fn(async () => ({ effect: "allow" as const, reason: "ok" }));
-    const { guard, memoryStore } = setup({ policy: { evaluate } });
-
-    await guard.write(shifting, 1);
-
-    expect(keyReads).toBe(1);
-    expect(memoryStore.addresses().map((address) => address.key)).toEqual(["valid"]);
-    expect(evaluate).toHaveBeenCalledWith(
-      expect.objectContaining({ resource: "memory://tenant-a/n/valid" })
-    );
-  });
-
-  it("treats an address whose accessor throws as an invalid address", async () => {
+  it("rejects accessor-backed addresses without invoking getters", async () => {
+    let getterCalls = 0;
     const evaluate = vi.fn(async () => ({ effect: "allow" as const, reason: "ok" }));
     const { guard, memoryStore } = setup({ policy: { evaluate } });
     const hostile = {
       namespace: "n",
       get key(): string {
-        throw new Error("accessor exploded");
+        getterCalls += 1;
+        return "k";
       }
     };
 
     expect(await codeOf(guard.write(hostile, 1))).toBe("MEMORY_INVALID_ADDRESS");
     expect(await codeOf(guard.read(hostile))).toBe("MEMORY_INVALID_ADDRESS");
+    expect(await codeOf(guard.delete(hostile))).toBe("MEMORY_INVALID_ADDRESS");
+    expect(getterCalls).toBe(0);
+    expect(evaluate).not.toHaveBeenCalled();
+    expect(memoryStore.size).toBe(0);
+  });
+
+  it("rejects hostile Proxy address reflection without invoking property getters", async () => {
+    const evaluate = vi.fn(async () => ({ effect: "allow" as const, reason: "ok" }));
+    const { guard, memoryStore } = setup({ policy: { evaluate } });
+    const hostile = new Proxy(
+      { namespace: "n", key: "k" },
+      {
+        ownKeys() {
+          throw new Error("hostile ownKeys trap");
+        }
+      }
+    );
+
+    expect(await codeOf(guard.write(hostile, 1))).toBe("MEMORY_INVALID_ADDRESS");
+    expect(await codeOf(guard.read(hostile))).toBe("MEMORY_INVALID_ADDRESS");
+    expect(await codeOf(guard.delete(hostile))).toBe("MEMORY_INVALID_ADDRESS");
     expect(evaluate).not.toHaveBeenCalled();
     expect(memoryStore.size).toBe(0);
   });
