@@ -1249,6 +1249,43 @@ describe("CoreEngine bounded rollback memory drain", () => {
 
 
 describe("CoreEngine rollback and shutdown concurrency", () => {
+  it("joins an in-flight initialization rollback and finalizes the engine as stopped", async () => {
+    const engine = new CoreEngine({
+      protectedOperationShutdown: { drainDeadlineMs: 1000 }
+    });
+    let releaseStop!: () => void;
+    let signalStopStarted!: () => void;
+    const stopStarted = new Promise<void>((resolve) => { signalStopStarted = resolve; });
+    const stopGate = new Promise<void>((resolve) => { releaseStop = resolve; });
+    let stopCalls = 0;
+
+    engine.register({
+      id: "initialization-worker",
+      version: "1.0.0",
+      initialize: () => { throw new Error("initialization failed"); },
+      stop: async () => {
+        stopCalls += 1;
+        signalStopStarted();
+        await stopGate;
+      }
+    });
+
+    const initialization = engine.initialize();
+    await stopStarted;
+
+    expect(engine.state).toBe("failed");
+    const shutdown = engine.stop();
+    expect(stopCalls).toBe(1);
+
+    releaseStop();
+    await expect(initialization).rejects.toThrow("MODULE_INITIALIZATION_FAILED");
+    await shutdown;
+
+    expect(stopCalls).toBe(1);
+    expect(engine.getModuleStates().get("initialization-worker")).toBe("stopped");
+    expect(engine.state).toBe("stopped");
+  });
+
   it("shares a failed rollback cleanup with shutdown and permits a clean retry", async () => {
     const engine = new CoreEngine({
       protectedOperationShutdown: { drainDeadlineMs: 1000 }
