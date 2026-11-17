@@ -119,6 +119,8 @@ function reasonFromSignal(signal: AbortSignal, fallback: PolicyStopReason): Poli
 export class FailClosedPolicyEngine implements PolicyEngine {
   private shuttingDown = false;
   private readonly activeStops = new Set<(reason: PolicyStopReason) => void>();
+  /** Actual delegate settlements, including delegates that ignore cancellation. */
+  private readonly activeDelegates = new Set<Promise<void>>();
 
   constructor(
     private readonly delegate: PolicyEngine,
@@ -208,6 +210,16 @@ export class FailClosedPolicyEngine implements PolicyEngine {
           candidateFrozen = true;
           return decision;
         });
+      // The caller-facing race may finish on cancellation while the delegate
+      // keeps running. Track the underlying evaluation until its real settlement.
+      let delegateSettlement!: Promise<void>;
+      delegateSettlement = evaluation.then(
+        () => undefined,
+        () => undefined
+      ).then(() => {
+        this.activeDelegates.delete(delegateSettlement);
+      });
+      this.activeDelegates.add(delegateSettlement);
       const result = await Promise.race([evaluation, aborted]);
       if (stopReason !== undefined) return deny(cancellationMessage(stopReason));
       return result ?? deny("Policy evaluator returned an invalid decision; access denied.");
@@ -225,6 +237,30 @@ export class FailClosedPolicyEngine implements PolicyEngine {
         options.parentSignal.removeEventListener("abort", parentAbort);
       }
     }
+  }
+
+  /**
+   * Wait for real delegate settlement. A timeout reports unresolved work;
+   * it never converts an ignored AbortSignal into successful cancellation.
+   */
+  async drain(deadlineAt: number): Promise<boolean> {
+    while (this.activeDelegates.size > 0) {
+      const remaining = deadlineAt - Date.now();
+      if (remaining <= 0) return false;
+      let timeout: ReturnType<typeof setTimeout> | undefined;
+      const settled = Promise.all([...this.activeDelegates]).then(() => true);
+      const timedOut = new Promise<false>((resolve) => {
+        timeout = setTimeout(() => resolve(false), remaining);
+      });
+      const completed = await Promise.race([settled, timedOut]);
+      if (timeout !== undefined) clearTimeout(timeout);
+      if (!completed) return false;
+    }
+    return true;
+  }
+
+  get activeDelegateCount(): number {
+    return this.activeDelegates.size;
   }
 
   async shutdown(): Promise<void> {
