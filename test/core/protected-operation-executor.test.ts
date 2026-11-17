@@ -1014,3 +1014,48 @@ describe("protected-operation child activity resource bounds", () => {
     await engine.stop();
   });
 });
+
+
+describe("global protected-operation admission bound", () => {
+  it("caps admitted handlers across the entire Core Engine", async () => {
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    let allStarted!: () => void;
+    const started = new Promise<void>((resolve) => { allStarted = resolve; });
+    let startedCount = 0;
+    const handler = async () => {
+      startedCount += 1;
+      if (startedCount === 256) allStarted();
+      await gate;
+      return "complete";
+    };
+    const engine = new CoreEngine({ policy: { evaluate: async () => allow } });
+    const operation = engine.registerProtectedOperation({
+      id: "records.global-limit",
+      action: "record.write",
+      resource: "record:global",
+      validateInput: (value: unknown): value is undefined => value === undefined,
+      handler
+    });
+    await ensureStarted(engine);
+
+    const active = Array.from({ length: 256 }, (_, index) =>
+      engine.protectedOperations.execute(
+        operation, { actorId: "global-limit-" + index }, undefined
+      )
+    );
+    await started;
+
+    const overflow = await engine.protectedOperations.execute(
+      operation, { actorId: "global-limit-overflow" }, undefined
+    );
+    expect(overflow).toMatchObject({ status: "denied" });
+    expect(startedCount).toBe(256);
+
+    release();
+    const results = await Promise.all(active);
+    expect(results).toHaveLength(256);
+    expect(results.every((result) => result.status === "executed")).toBe(true);
+    await engine.stop();
+  });
+});
