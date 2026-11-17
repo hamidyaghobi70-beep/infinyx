@@ -1069,7 +1069,6 @@ describe("child registration after cancellation", () => {
     let childStarted!: () => void;
     const started = new Promise<void>((resolve) => { childStarted = resolve; });
     const nestedHandler = vi.fn(async () => "must-not-run");
-    let nestedRejected = false;
 
     const engine = new CoreEngine({ policy: { evaluate: async () => allow } });
     const operation = engine.registerProtectedOperation({
