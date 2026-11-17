@@ -325,3 +325,26 @@ describe("FailClosedPolicyEngine caller and parent cancellation", () => {
   });
 
 });
+
+describe("FailClosedPolicyEngine actual delegate drain", () => {
+  it("keeps a cancelled but unsettled delegate tracked until its real promise settles", async () => {
+    let release!: (decision: PolicyDecision) => void;
+    const caller = new AbortController();
+    const policy = new FailClosedPolicyEngine({
+      evaluate: () => new Promise<PolicyDecision>((resolve) => { release = resolve; })
+    });
+
+    const evaluation = policy.evaluate(request, { signal: caller.signal });
+    await Promise.resolve();
+    caller.abort();
+    await expect(evaluation).resolves.toMatchObject({ effect: "deny" });
+
+    expect(policy.activeDelegateCount).toBe(1);
+    await expect(policy.drain(Date.now() + 5)).resolves.toBe(false);
+    expect(policy.activeDelegateCount).toBe(1);
+
+    release({ effect: "allow", reason: "delegate actually settled" });
+    await expect(policy.drain(Date.now() + 100)).resolves.toBe(true);
+    expect(policy.activeDelegateCount).toBe(0);
+  });
+});
