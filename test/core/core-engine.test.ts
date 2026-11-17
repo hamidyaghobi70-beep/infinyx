@@ -919,6 +919,43 @@ describe("CoreEngine module memory capability lifetime", () => {
 });
 
 
+describe("CoreEngine rejects and revokes mismatched memory capabilities", () => {
+  it("revokes a scope-mismatched capability before initialization rollback", async () => {
+    const { GuardedMemoryPort } = await import("../../src/core/guarded-memory-port.js");
+    const { InMemoryMemoryStore } = await import("../../src/core/in-memory-memory-store.js");
+    const { DefaultDenyPolicyEngine } = await import("../../src/core/default-policy-engine.js");
+    let capability!: InstanceType<typeof GuardedMemoryPort>;
+    const engine = new CoreEngine({
+      memory: (moduleId) => {
+        capability = new GuardedMemoryPort({
+          store: new InMemoryMemoryStore(),
+          policy: new DefaultDenyPolicyEngine(),
+          audit: { publishDecision: async () => true, publishFailure: async () => undefined },
+          scope: { tenantId: "tenant", actorId: "actor", moduleId: moduleId + "-wrong" }
+        });
+        return capability;
+      }
+    });
+    engine.register({
+      id: "mismatched-memory",
+      version: "1.0.0",
+      initialize: () => undefined
+    });
+
+    await expect(engine.initialize()).rejects.toMatchObject({
+      code: "MODULE_INITIALIZATION_FAILED"
+    });
+    await expect(capability.read({ namespace: "n", key: "late" })).rejects.toMatchObject({
+      code: "MEMORY_CAPABILITY_REVOKED"
+    });
+    expect(engine.state).toBe("failed");
+
+    await engine.stop();
+    expect(engine.state).toBe("stopped");
+  });
+});
+
+
 describe("CoreEngine injected Event Bus capability boundary", () => {
   it("pins injected Event Bus methods and preserves the adapter receiver", async () => {
     const adapter = {
