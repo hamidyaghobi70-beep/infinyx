@@ -1170,3 +1170,40 @@ describe("GuardedMemoryPort memory value snapshot boundary", () => {
     expect(toJSONCalls).toBe(0);
   });
 });
+
+
+describe("GuardedMemoryPort — bounded backing-store reads", () => {
+  it("rejects a stored string that exceeds the configured byte limit before parsing", async () => {
+    const read = vi.fn(async () => JSON.stringify("x".repeat(128)));
+    const store: MemoryPort = {
+      read,
+      write: async () => undefined,
+      delete: async () => undefined
+    };
+    const { guard, failed } = setup({ store, maxValueBytes: 64 });
+
+    expect(await codeOf(guard.read({ namespace: "n", key: "oversized" })))
+      .toBe("MEMORY_BACKEND_FAILED");
+    expect(read).toHaveBeenCalledTimes(1);
+    expect(failed).toHaveLength(1);
+    expect(failed[0]).toMatchObject({ operation: "read", errorName: "TypeError" });
+  });
+
+  it("rejects valid JSON that exceeds the structured-data depth bound", async () => {
+    let stored = "null";
+    for (let depth = 0; depth < 34; depth += 1) {
+      stored = `{"nested":${stored}}`;
+    }
+    const store: MemoryPort = {
+      read: async () => stored,
+      write: async () => undefined,
+      delete: async () => undefined
+    };
+    const { guard, failed } = setup({ store });
+
+    expect(await codeOf(guard.read({ namespace: "n", key: "deep" })))
+      .toBe("MEMORY_BACKEND_FAILED");
+    expect(failed).toHaveLength(1);
+    expect(failed[0]).toMatchObject({ operation: "read", errorName: "TypeError" });
+  });
+});
