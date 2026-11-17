@@ -60,10 +60,23 @@ function snapshotDependencies(value: unknown): readonly string[] {
     throw invalidModule();
   }
 
+  // Treat the dependency array as an exact data record: no hidden slots,
+  // sparse entries, symbols, or caller-defined side properties are accepted.
+  const expectedKeys = new Set<string>(["length"]);
+  for (let index = 0; index < lengthDescriptor.value; index += 1) {
+    expectedKeys.add(String(index));
+  }
+  const ownKeys = Reflect.ownKeys(value);
+  if (ownKeys.length !== expectedKeys.size ||
+      ownKeys.some((key) => typeof key !== "string" || !expectedKeys.has(key))) {
+    throw invalidModule();
+  }
+
   const dependencies: string[] = [];
   for (let index = 0; index < lengthDescriptor.value; index += 1) {
     const descriptor = Object.getOwnPropertyDescriptor(value, String(index));
     if (!descriptor ||
+        descriptor.enumerable !== true ||
         !Object.prototype.hasOwnProperty.call(descriptor, "value") ||
         typeof descriptor.value !== "string" ||
         descriptor.value.length > MAX_MODULE_ID_LENGTH ||
