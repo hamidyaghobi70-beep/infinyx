@@ -1250,6 +1250,43 @@ describe("CoreEngine bounded module stop hooks", () => {
   });
 });
 
+describe("CoreEngine concurrent stop single-flight", () => {
+  it("returns the same shutdown promise and invokes each module stop hook once", async () => {
+    const engine = new CoreEngine({
+      protectedOperationShutdown: { drainDeadlineMs: 1000 }
+    });
+    let releaseStop!: () => void;
+    let signalStopStarted!: () => void;
+    const stopStarted = new Promise<void>((resolve) => { signalStopStarted = resolve; });
+    const stopGate = new Promise<void>((resolve) => { releaseStop = resolve; });
+    let stopCalls = 0;
+
+    engine.register({
+      id: "single-flight-worker",
+      version: "1.0.0",
+      stop: async () => {
+        stopCalls += 1;
+        signalStopStarted();
+        await stopGate;
+      }
+    });
+
+    await engine.initialize();
+    await engine.start();
+
+    const firstStop = engine.stop();
+    const secondStop = engine.stop();
+    expect(secondStop).toBe(firstStop);
+    await stopStarted;
+    expect(stopCalls).toBe(1);
+
+    releaseStop();
+    await Promise.all([firstStop, secondStop]);
+    expect(stopCalls).toBe(1);
+    expect(engine.state).toBe("stopped");
+  });
+});
+
 describe("CoreEngine stop-hook deadline boundary", () => {
   it("does not turn a completed stop hook into a timeout because its continuation resumes later", async () => {
     const engine = new CoreEngine({
