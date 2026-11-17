@@ -19,6 +19,7 @@ on:
       - main
       - feat/gap-002-protected-operation-executor
       - fix/policy-terminal-authorization
+      - fix/policy-hard-termination-escalation
 
 permissions:
   contents: read
