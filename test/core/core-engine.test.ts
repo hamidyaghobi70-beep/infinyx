@@ -538,6 +538,63 @@ describe("CoreEngine policy shutdown integration", () => {
     expect(handlerCalls).toBe(0);
     expect(engine.state).toBe("stopped");
   });
+
+  it("blocks module cleanup until a non-cooperative protected handler actually settles", async () => {
+    let releaseHandler!: () => void;
+    let signalHandlerStarted!: () => void;
+    const handlerStarted = new Promise<void>((resolve) => {
+      signalHandlerStarted = resolve;
+    });
+    const handlerGate = new Promise<string>((resolve) => {
+      releaseHandler = () => resolve("completed");
+    });
+    let moduleStops = 0;
+    const engine = new CoreEngine({
+      policy: {
+        evaluate: async () => ({ effect: "allow", reason: "allowed" })
+      },
+      protectedOperationShutdown: { drainDeadlineMs: 15 }
+    });
+    const operation = engine.registerProtectedOperation({
+      id: "shutdown.non-cooperative-handler",
+      action: "record.write",
+      resource: "record:shutdown",
+      validateInput: (value: unknown): value is undefined => value === undefined,
+      handler: async () => {
+        signalHandlerStarted();
+        // Deliberately ignore the operation AbortSignal until released.
+        return handlerGate;
+      }
+    });
+    engine.register({
+      id: "shutdown-dependent-module",
+      version: "1.0.0",
+      stop: () => { moduleStops += 1; }
+    });
+
+    await engine.initialize();
+    await engine.start();
+    const execution = engine.protectedOperations.execute(
+      operation, { actorId: "shutdown-handler-test" }, undefined
+    );
+    await handlerStarted;
+
+    await expect(engine.stop()).rejects.toMatchObject({
+      code: "PROTECTED_OPERATION_DRAIN_TIMEOUT"
+    });
+    expect(engine.state).toBe("stopping");
+    expect(moduleStops).toBe(0);
+
+    releaseHandler();
+    await expect(execution).resolves.toMatchObject({
+      status: "executed",
+      value: "completed"
+    });
+    await engine.stop();
+
+    expect(moduleStops).toBe(1);
+    expect(engine.state).toBe("stopped");
+  });
 });
 
 describe("CoreEngine module memory capability lifetime", () => {
