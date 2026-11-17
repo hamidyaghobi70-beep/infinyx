@@ -614,6 +614,11 @@ export class CoreEngine {
               }
             }).then(() => {
               this.moduleStopCompleted.add(module.id);
+              // Once the hook has actually settled, do not retain its completed
+              // promise (and the module/context closure) for the engine lifetime.
+              if (this.moduleStopInFlight.get(module.id) === trackedStopWork) {
+                this.moduleStopInFlight.delete(module.id);
+              }
             }, (error: unknown) => {
               if (this.moduleStopInFlight.get(module.id) === trackedStopWork) {
                 this.moduleStopInFlight.delete(module.id);
