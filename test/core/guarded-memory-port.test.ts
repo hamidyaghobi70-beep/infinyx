@@ -167,6 +167,39 @@ describe("GuardedMemoryPort lifecycle revocation", () => {
     await revocation;
     expect(revoked).toBe(true);
   });
+
+  it("rejects a drain that settles after its deadline even if the timer callback has not run", async () => {
+    let releaseRead!: () => void;
+    let markReadStarted!: () => void;
+    const readStarted = new Promise<void>((resolve) => { markReadStarted = resolve; });
+    const readGate = new Promise<void>((resolve) => { releaseRead = resolve; });
+    const store: MemoryPort = {
+      read: async () => { markReadStarted(); await readGate; return null; },
+      write: async () => undefined,
+      delete: async () => undefined
+    };
+    const { guard } = setup({ store });
+    const operation = guard.read({ namespace: "n", key: "k" });
+    await readStarted;
+
+    const monotonicNow = vi.spyOn(performance, "now").mockReturnValue(100);
+    const revocation = revokeGuardedMemoryPort(guard, 150);
+    monotonicNow.mockReturnValue(200);
+    releaseRead();
+    await operation;
+
+    await expect(revocation).rejects.toThrow(/did not drain before the shutdown deadline/i);
+    monotonicNow.mockRestore();
+  });
+
+  it("allows an already-empty drain even when its deadline has elapsed", async () => {
+    const { guard } = setup();
+    const monotonicNow = vi.spyOn(performance, "now").mockReturnValue(200);
+
+    await expect(revokeGuardedMemoryPort(guard, 100)).resolves.toBeUndefined();
+
+    monotonicNow.mockRestore();
+  });
 });
 
 describe("GuardedMemoryPort dependency method integrity", () => {
