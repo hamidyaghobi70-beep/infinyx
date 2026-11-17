@@ -157,6 +157,8 @@ export class CoreEngine {
   private readonly moduleStates = new Map<string, ModuleLifecycleState>();
   private initializedModules: CoreModule[] = [];
   private readonly cleanupInFlight = new Map<string, Promise<void>>();
+  /** Successful stop hooks are not repeated when a later memory drain needs retry. */
+  private readonly moduleStopCompleted = new Set<string>();
   private readonly cleanupContext = new AsyncLocalStorage<CleanupExecutionContext>();
   private stopPromise: Promise<void> | undefined;
   private readonly drainDeadlineMs: number;
@@ -501,7 +503,7 @@ export class CoreEngine {
       );
     }
 
-    const errors = await this.cleanupInitializedModules();
+    const errors = await this.cleanupInitializedModules(new Set(), deadline);
     this.lifecycle = errors.length ? "failed" : "stopped";
     if (errors.length) {
       throw new CoreError(
@@ -536,7 +538,8 @@ export class CoreEngine {
   }
 
   private async cleanupInitializedModules(
-    preserveFailureIds: ReadonlySet<string> = new Set()
+    preserveFailureIds: ReadonlySet<string> = new Set(),
+    deadlineAt?: number
   ): Promise<unknown[]> {
     const errors: unknown[] = [];
     for (const module of [...this.initializedModules].reverse()) {
@@ -556,7 +559,7 @@ export class CoreEngine {
         continue;
       }
       try {
-        await this.cleanupModule(module, preserveFailureIds.has(module.id));
+        await this.cleanupModule(module, preserveFailureIds.has(module.id), deadlineAt);
       } catch (error) {
         errors.push(error);
       }
@@ -564,7 +567,7 @@ export class CoreEngine {
     return errors;
   }
 
-  private async cleanupModule(module: CoreModule, preserveFailure: boolean): Promise<void> {
+  private async cleanupModule(module: CoreModule, preserveFailure: boolean, deadlineAt?: number): Promise<void> {
     const inFlight = this.cleanupInFlight.get(module.id);
     if (inFlight) {
       await inFlight;
@@ -574,15 +577,19 @@ export class CoreEngine {
       this.moduleStates.set(module.id, "cleaning");
       const context: CleanupExecutionContext = { engine: this, active: true };
       try {
-        await this.cleanupContext.run(context, async () => {
-          await module.stop?.(this.createContext(module.id));
-        });
+        if (!this.moduleStopCompleted.has(module.id)) {
+          await this.cleanupContext.run(context, async () => {
+            await module.stop?.(this.createContext(module.id));
+          });
+          this.moduleStopCompleted.add(module.id);
+        }
         const memory = this.moduleMemory.get(module.id);
-        if (memory) await revokeGuardedMemoryPort(memory);
+        if (memory) await revokeGuardedMemoryPort(memory, deadlineAt);
         this.moduleStates.set(module.id, preserveFailure ? "failed" : "stopped");
         // Release the module-scoped capability only after its cleanup succeeds.
         // Failed hooks retain it so an explicit cleanup retry sees the same context.
         this.moduleMemory.delete(module.id);
+        this.moduleStopCompleted.delete(module.id);
         // Successful hooks leave the retry queue. Failed hooks remain queued
         // for an explicit later stop() call; successful siblings never rerun.
         this.initializedModules = this.initializedModules.filter(
