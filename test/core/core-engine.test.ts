@@ -1628,3 +1628,58 @@ describe("CoreEngine stop-hook tracking release", () => {
     expect(internals.moduleStopInFlight.size).toBe(0);
   });
 });
+
+
+describe("CoreEngine dependency cleanup overlap", () => {
+  it("keeps a dependency alive while shutdown joins an in-flight rollback of its dependent", async () => {
+    const engine = new CoreEngine({
+      protectedOperationShutdown: { drainDeadlineMs: 1000 }
+    });
+    let releaseDependentStop!: () => void;
+    let signalDependentStopStarted!: () => void;
+    const dependentStopStarted = new Promise<void>((resolve) => {
+      signalDependentStopStarted = resolve;
+    });
+    const dependentStopGate = new Promise<void>((resolve) => {
+      releaseDependentStop = resolve;
+    });
+    const stopCalls: string[] = [];
+
+    engine.register({
+      id: "foundation",
+      version: "1.0.0",
+      stop: () => { stopCalls.push("foundation"); }
+    });
+    engine.register({
+      id: "dependent",
+      version: "1.0.0",
+      dependencies: ["foundation"],
+      initialize: () => { throw new Error("dependent initialization failed"); },
+      stop: async () => {
+        stopCalls.push("dependent");
+        signalDependentStopStarted();
+        await dependentStopGate;
+      }
+    });
+
+    const initialization = engine.initialize();
+    await dependentStopStarted;
+
+    expect(engine.state).toBe("failed");
+    expect(stopCalls).toEqual(["dependent"]);
+
+    const shutdown = engine.stop();
+    expect(stopCalls).toEqual(["dependent"]);
+
+    releaseDependentStop();
+    await expect(initialization).rejects.toMatchObject({
+      code: "MODULE_INITIALIZATION_FAILED"
+    });
+    await shutdown;
+
+    expect(stopCalls).toEqual(["dependent", "foundation"]);
+    expect(engine.getModuleStates().get("dependent")).toBe("stopped");
+    expect(engine.getModuleStates().get("foundation")).toBe("stopped");
+    expect(engine.state).toBe("stopped");
+  });
+});
