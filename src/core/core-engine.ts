@@ -159,6 +159,8 @@ export class CoreEngine {
   private readonly cleanupInFlight = new Map<string, Promise<void>>();
   /** Successful stop hooks are not repeated when a later memory drain needs retry. */
   private readonly moduleStopCompleted = new Set<string>();
+  /** Stop hooks remain pinned while running past a deadline, so retries never invoke them twice. */
+  private readonly moduleStopInFlight = new Map<string, Promise<void>>();
   private readonly cleanupContext = new AsyncLocalStorage<CleanupExecutionContext>();
   private stopPromise: Promise<void> | undefined;
   private readonly drainDeadlineMs: number;
@@ -585,10 +587,58 @@ export class CoreEngine {
       const context: CleanupExecutionContext = { engine: this, active: true };
       try {
         if (!this.moduleStopCompleted.has(module.id)) {
-          await this.cleanupContext.run(context, async () => {
-            await module.stop?.(this.createContext(module.id));
-          });
-          this.moduleStopCompleted.add(module.id);
+          let stopWork = this.moduleStopInFlight.get(module.id);
+          if (!stopWork) {
+            if (deadlineAt !== undefined && performance.now() >= deadlineAt && module.stop) {
+              throw new CoreError(
+                "MODULE_STOP_TIMEOUT",
+                "Module stop hook could not start before the shutdown deadline."
+              );
+            }
+            const stopContext: CleanupExecutionContext = { engine: this, active: true };
+            let trackedStopWork!: Promise<void>;
+            trackedStopWork = this.cleanupContext.run(stopContext, async () => {
+              try {
+                await module.stop?.(this.createContext(module.id));
+              } finally {
+                // Keep re-entrant-stop protection active until the actual hook settles,
+                // even if the caller's bounded wait has already timed out.
+                stopContext.active = false;
+              }
+            }).then(() => {
+              this.moduleStopCompleted.add(module.id);
+            }, (error: unknown) => {
+              if (this.moduleStopInFlight.get(module.id) === trackedStopWork) {
+                this.moduleStopInFlight.delete(module.id);
+              }
+              throw error;
+            });
+            this.moduleStopInFlight.set(module.id, trackedStopWork);
+            stopWork = trackedStopWork;
+          }
+          if (deadlineAt === undefined) {
+            await stopWork;
+          } else {
+            const remainingMs = Math.max(0, deadlineAt - performance.now());
+            let stopTimer: ReturnType<typeof setTimeout> | undefined;
+            try {
+              const timedOut = new Promise<false>((resolve) => {
+                stopTimer = setTimeout(() => resolve(false), remainingMs);
+              });
+              const completed = await Promise.race([
+                stopWork.then(() => true as const),
+                timedOut
+              ]);
+              if (!completed || performance.now() > deadlineAt) {
+                throw new CoreError(
+                  "MODULE_STOP_TIMEOUT",
+                  "Module stop hook did not settle before the shutdown deadline."
+                );
+              }
+            } finally {
+              if (stopTimer !== undefined) clearTimeout(stopTimer);
+            }
+          }
         }
         const memory = this.moduleMemory.get(module.id);
         if (memory) {
