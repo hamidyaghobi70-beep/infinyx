@@ -132,6 +132,52 @@ describe("GuardedMemoryPort — data handling", () => {
 });
 
 describe("GuardedMemoryPort dependency method integrity", () => {
+  it("rejects hostile constructor option accessors without invoking them", () => {
+    let getterCalls = 0;
+    const options = Object.defineProperties({}, {
+      store: { enumerable: true, value: new InMemoryMemoryStore() },
+      policy: { enumerable: true, value: allowAll },
+      audit: {
+        enumerable: true,
+        get() {
+          getterCalls += 1;
+          throw new Error("hostile audit option getter");
+        }
+      },
+      scope: { enumerable: true, value: scopeA }
+    });
+
+    expect(() => new GuardedMemoryPort(options as GuardedMemoryPortOptions))
+      .toThrow(/stable data properties/i);
+    expect(getterCalls).toBe(0);
+  });
+
+  it("rejects hostile scope accessors without invoking them", () => {
+    let getterCalls = 0;
+    const scope = Object.defineProperties({}, {
+      tenantId: {
+        enumerable: true,
+        get() {
+          getterCalls += 1;
+          throw new Error("hostile tenant getter");
+        }
+      },
+      actorId: { enumerable: true, value: "actor-1" },
+      moduleId: { enumerable: true, value: "module-x" }
+    });
+
+    expect(() => new GuardedMemoryPort({
+      store: new InMemoryMemoryStore(),
+      policy: allowAll,
+      audit: {
+        publishDecision: async () => true,
+        publishFailure: async () => undefined
+      },
+      scope: scope as MemoryScope
+    })).toThrow(/MEMORY_INVALID_SCOPE|tenantId, actorId/i);
+    expect(getterCalls).toBe(0);
+  });
+
   it("pins backing-store methods so later mutation cannot bypass the guarded boundary", async () => {
     const store = new InMemoryMemoryStore();
     const guard = new GuardedMemoryPort({
