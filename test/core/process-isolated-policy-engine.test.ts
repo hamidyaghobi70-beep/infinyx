@@ -38,9 +38,31 @@ describe("ProcessIsolatedPolicyEngine", () => {
   it("reports reduced containment capability on Windows", () => {
     const engine = new ProcessIsolatedPolicyEngine({ moduleUrl: fixtureUrl });
     expect(engine.containmentCapability).toBe(
-      process.platform === "win32" ? "DIRECT_CHILD_ONLY" : "POSIX_PROCESS_GROUP"
+      process.platform === "win32" ? "DIRECT_CHILD_ONLY" : "POSIX_PROCESS_GROUP_BEST_EFFORT"
     );
   });
+
+  it.skipIf(process.platform === "win32")(
+    "demonstrates that a detached session can escape POSIX process-group cleanup",
+    async () => {
+      const directory = mkdtempSync(join(tmpdir(), "infinyx-detached-escape-"));
+      const pidFile = join(directory, "detached.pid");
+      let detachedPid: number | undefined;
+      try {
+        const engine = new ProcessIsolatedPolicyEngine({ moduleUrl: fixtureUrl });
+        const result = await engine.evaluateDetailed(request("detached-descendant", pidFile));
+        detachedPid = Number(readFileSync(pidFile, "utf8"));
+        expect(result.outcome).toBe("COMPLETED");
+        expect(engine.containmentCapability).toBe("POSIX_PROCESS_GROUP_BEST_EFFORT");
+        expect(() => process.kill(detachedPid!, 0)).not.toThrow();
+      } finally {
+        if (detachedPid !== undefined) {
+          try { process.kill(detachedPid, "SIGKILL"); } catch { /* already exited */ }
+        }
+        rmSync(directory, { recursive: true, force: true });
+      }
+    }
+  );
 
   it.skipIf(process.platform === "win32")(
     "terminates a surviving evaluator descendant before releasing capacity or allowing",
