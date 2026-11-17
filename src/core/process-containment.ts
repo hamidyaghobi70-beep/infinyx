@@ -1,7 +1,7 @@
 import { setTimeout as delay } from "node:timers/promises";
 
 export type ProcessContainmentCapability =
-  | "POSIX_PROCESS_GROUP"
+  | "POSIX_PROCESS_GROUP_BEST_EFFORT"
   | "DIRECT_CHILD_ONLY";
 
 export function getProcessContainmentCapability(): ProcessContainmentCapability {
