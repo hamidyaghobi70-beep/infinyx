@@ -187,6 +187,10 @@ export class ProcessIsolatedPolicyEngine implements PolicyEngine {
     return this.active.size;
   }
 
+  get containmentCapability() {
+    return getProcessContainmentCapability();
+  }
+
   async evaluate(
     request: PolicyRequest,
     options?: PolicyEvaluationOptions
