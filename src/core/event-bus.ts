@@ -27,7 +27,7 @@ export class InMemoryEventBus implements EventBusPort {
     const bucket = this.handlers.get(type) ?? new Set<EventHandler<unknown>>();
     const registeredHandler = handler as EventHandler<unknown>;
     if (bucket.has(registeredHandler)) {
-      return () => this.removeSubscriber(type, bucket, registeredHandler);
+      return () => undefined;
     }
     if (bucket.size >= MAX_SUBSCRIBERS_PER_TYPE ||
         this.totalSubscribers >= MAX_TOTAL_SUBSCRIBERS) {
