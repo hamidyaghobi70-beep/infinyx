@@ -539,3 +539,61 @@ describe("CoreEngine policy shutdown integration", () => {
     expect(engine.state).toBe("stopped");
   });
 });
+
+describe("CoreEngine module memory capability lifetime", () => {
+  it("releases a module memory capability after successful cleanup", async () => {
+    const { GuardedMemoryPort } = await import("../../src/core/guarded-memory-port.js");
+    const { InMemoryMemoryStore } = await import("../../src/core/in-memory-memory-store.js");
+    const { DefaultDenyPolicyEngine } = await import("../../src/core/default-policy-engine.js");
+    const engine = new CoreEngine({
+      memory: (moduleId) => new GuardedMemoryPort({
+        store: new InMemoryMemoryStore(),
+        policy: new DefaultDenyPolicyEngine(),
+        audit: { publishDecision: async () => true, publishFailure: async () => undefined },
+        scope: { tenantId: "tenant", actorId: "actor", moduleId }
+      })
+    });
+    engine.register({ id: "memory-worker", version: "1.0.0", initialize: () => undefined });
+    await engine.initialize();
+
+    const internals = engine as unknown as { moduleMemory: Map<string, unknown> };
+    expect(internals.moduleMemory.size).toBe(1);
+
+    await engine.stop();
+    expect(internals.moduleMemory.size).toBe(0);
+  });
+
+  it("retains a module memory capability after failed cleanup and releases it on retry", async () => {
+    const { GuardedMemoryPort } = await import("../../src/core/guarded-memory-port.js");
+    const { InMemoryMemoryStore } = await import("../../src/core/in-memory-memory-store.js");
+    const { DefaultDenyPolicyEngine } = await import("../../src/core/default-policy-engine.js");
+    let attempts = 0;
+    const engine = new CoreEngine({
+      memory: (moduleId) => new GuardedMemoryPort({
+        store: new InMemoryMemoryStore(),
+        policy: new DefaultDenyPolicyEngine(),
+        audit: { publishDecision: async () => true, publishFailure: async () => undefined },
+        scope: { tenantId: "tenant", actorId: "actor", moduleId }
+      })
+    });
+    engine.register({
+      id: "retry-memory-worker",
+      version: "1.0.0",
+      initialize: () => undefined,
+      stop: () => {
+        attempts += 1;
+        if (attempts === 1) throw new Error("temporary cleanup failure");
+      }
+    });
+    await engine.initialize();
+
+    const internals = engine as unknown as { moduleMemory: Map<string, unknown> };
+    expect(internals.moduleMemory.size).toBe(1);
+    await expect(engine.stop()).rejects.toThrow(/failed to stop/i);
+    expect(internals.moduleMemory.size).toBe(1);
+
+    await engine.stop();
+    expect(internals.moduleMemory.size).toBe(0);
+    expect(attempts).toBe(2);
+  });
+});
