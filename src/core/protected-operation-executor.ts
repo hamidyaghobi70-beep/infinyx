@@ -187,14 +187,13 @@ export class ProtectedOperationExecutor implements ProtectedOperationPort {
     if (!registration) return this.denied("Unknown or unregistered protected operation.");
     if (!caller || typeof caller !== "object") return this.denied("Protected operation caller request is invalid.");
 
-    let actorId: unknown;
-    let callerContext: unknown;
-    try {
-      actorId = caller.actorId;
-      callerContext = caller.context;
-    } catch {
-      return this.denied("Protected operation caller request could not be read.");
+    const callerSnapshotResult = snapshotBoundedPolicyData(caller);
+    if (!callerSnapshotResult.ok || !isPlainRecord(callerSnapshotResult.value)) {
+      return this.denied("Protected operation caller request could not be safely snapshotted.");
     }
+    const callerSnapshot = callerSnapshotResult.value as Record<string, unknown>;
+    const actorId = callerSnapshot.actorId;
+    const callerContext = callerSnapshot.context;
 
     let snapshot: PolicyRequest["context"] | undefined;
     try {
