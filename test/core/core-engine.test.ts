@@ -889,3 +889,49 @@ describe("CoreEngine bounded rollback memory drain", () => {
     expect(engine.state).toBe("stopped");
   });
 });
+
+
+describe("CoreEngine bounded module stop hooks", () => {
+  it("times out a pending dependent stop hook and resumes without invoking it twice", async () => {
+    const engine = new CoreEngine({
+      protectedOperationShutdown: { drainDeadlineMs: 25 }
+    });
+    let releaseDependent!: () => void;
+    let signalDependentStarted!: () => void;
+    const dependentStarted = new Promise<void>((resolve) => { signalDependentStarted = resolve; });
+    const calls: string[] = [];
+    engine.register({
+      id: "foundation",
+      version: "1.0.0",
+      stop: () => { calls.push("foundation"); }
+    });
+    engine.register({
+      id: "dependent",
+      version: "1.0.0",
+      dependencies: ["foundation"],
+      stop: () => {
+        calls.push("dependent");
+        signalDependentStarted();
+        return new Promise<void>((resolve) => { releaseDependent = resolve; });
+      }
+    });
+
+    await engine.initialize();
+    await engine.start();
+    const stopping = engine.stop();
+    await dependentStarted;
+    await expect(stopping).rejects.toThrow(/failed to stop/i);
+
+    expect(engine.state).toBe("failed");
+    expect(calls).toEqual(["dependent"]);
+    expect(engine.getModuleStates().get("foundation")).toBe("initialized");
+
+    releaseDependent();
+    await engine.stop();
+
+    expect(calls).toEqual(["dependent", "foundation"]);
+    expect(engine.getModuleStates().get("dependent")).toBe("stopped");
+    expect(engine.getModuleStates().get("foundation")).toBe("stopped");
+    expect(engine.state).toBe("stopped");
+  });
+});
