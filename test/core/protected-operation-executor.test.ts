@@ -497,12 +497,15 @@ describe("ProtectedOperationExecutor", () => {
   });
 
 
-  it("keeps an already-admitted handler in flight during shutdown without claiming cancellation", async () => {
+  it("keeps an already-admitted handler tracked through shutdown timeout until actual settlement", async () => {
     let release!: (value: string) => void;
     let signalHandlerStarted!: () => void;
     const handlerStarted = new Promise<void>((resolve) => { signalHandlerStarted = resolve; });
     let handlerSignal: AbortSignal | undefined;
-    const engine = new CoreEngine({ policy: { evaluate: async () => allow } });
+    const engine = new CoreEngine({
+      shutdownTimeoutMs: 25,
+      policy: { evaluate: async () => allow }
+    });
     const handler = vi.fn((_input: string, context: { operationId: string; signal: AbortSignal }) => {
       handlerSignal = context.signal;
       signalHandlerStarted();
@@ -519,11 +522,12 @@ describe("ProtectedOperationExecutor", () => {
     const pending = engine.protectedOperations.execute(operation, { actorId: "in-flight" }, "work");
     await handlerStarted;
     expect(handler).toHaveBeenCalledTimes(1);
-    const stopping = engine.stop();
-    await stopping;
-    expect(handlerSignal?.aborted).toBe(false);
+    await expect(engine.stop()).rejects.toMatchObject({ code: "SHUTDOWN_TIMEOUT" });
+    expect(handlerSignal?.aborted).toBe(true);
     release("completed");
     expect(await pending).toEqual({ status: "executed", value: "completed" });
+    await engine.stop();
+    expect(engine.state).toBe("stopped");
   });
 
   it("fails closed for non-cloneable context values before PolicyEngine", async () => {
