@@ -1249,6 +1249,52 @@ describe("CoreEngine bounded rollback memory drain", () => {
 
 
 describe("CoreEngine rollback and shutdown concurrency", () => {
+  it("shares a failed rollback cleanup with shutdown and permits a clean retry", async () => {
+    const engine = new CoreEngine({
+      protectedOperationShutdown: { drainDeadlineMs: 1000 }
+    });
+    let releaseFirstStop!: () => void;
+    let signalFirstStopStarted!: () => void;
+    const firstStopStarted = new Promise<void>((resolve) => { signalFirstStopStarted = resolve; });
+    const firstStopGate = new Promise<void>((_resolve, reject) => {
+      releaseFirstStop = () => reject(new Error("first cleanup attempt failed"));
+    });
+    let stopCalls = 0;
+
+    engine.register({
+      id: "worker",
+      version: "1.0.0",
+      start: () => { throw new Error("startup failed"); },
+      stop: async () => {
+        stopCalls += 1;
+        if (stopCalls === 1) {
+          signalFirstStopStarted();
+          await firstStopGate;
+        }
+      }
+    });
+
+    await engine.initialize();
+    const startup = engine.start();
+    await firstStopStarted;
+
+    const shutdown = engine.stop();
+    expect(stopCalls).toBe(1);
+
+    releaseFirstStop();
+    await expect(startup).rejects.toThrow("Startup and rollback failed");
+    await expect(shutdown).rejects.toMatchObject({ code: "MODULE_STOP_FAILED" });
+
+    expect(stopCalls).toBe(1);
+    expect(engine.getModuleStates().get("worker")).toBe("failed");
+
+    await engine.stop();
+
+    expect(stopCalls).toBe(2);
+    expect(engine.getModuleStates().get("worker")).toBe("stopped");
+    expect(engine.state).toBe("stopped");
+  });
+
   it("joins an in-flight startup rollback without invoking module cleanup twice", async () => {
     const engine = new CoreEngine({
       protectedOperationShutdown: { drainDeadlineMs: 1000 }
