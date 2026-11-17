@@ -1370,6 +1370,71 @@ describe("CoreEngine concurrent stop single-flight", () => {
   });
 });
 
+describe("CoreEngine dependency memory capability recovery", () => {
+  it("revokes successful dependents but preserves failed dependents and their dependencies until retry", async () => {
+    const { GuardedMemoryPort } = await import("../../src/core/guarded-memory-port.js");
+    const { InMemoryMemoryStore } = await import("../../src/core/in-memory-memory-store.js");
+    const store = new InMemoryMemoryStore();
+    const capabilities = new Map<string, InstanceType<typeof GuardedMemoryPort>>();
+    const calls: string[] = [];
+    let alphaAttempts = 0;
+    const engine = new CoreEngine({
+      memory: (moduleId) => {
+        const capability = new GuardedMemoryPort({
+          store,
+          policy: { evaluate: async () => ({ effect: "allow" as const, reason: "dependency cleanup test" }) },
+          audit: { publishDecision: async () => true, publishFailure: async () => undefined },
+          scope: { tenantId: "tenant", actorId: "actor", moduleId }
+        });
+        capabilities.set(moduleId, capability);
+        return capability;
+      }
+    });
+    engine.register({
+      id: "foundation",
+      version: "1.0.0",
+      stop: async () => { calls.push("foundation"); }
+    });
+    engine.register({
+      id: "alpha",
+      version: "1.0.0",
+      dependencies: ["foundation"],
+      stop: async () => {
+        alphaAttempts += 1;
+        calls.push("alpha:" + alphaAttempts);
+        if (alphaAttempts === 1) throw new Error("temporary alpha cleanup failure");
+      }
+    });
+    engine.register({
+      id: "beta",
+      version: "1.0.0",
+      dependencies: ["foundation"],
+      stop: async () => { calls.push("beta"); }
+    });
+
+    await engine.initialize();
+    await engine.stop();
+
+    expect(calls).toEqual(["beta", "alpha:1"]);
+    await expect(capabilities.get("beta")!.read({ namespace: "probe", key: "x" }))
+      .rejects.toMatchObject({ code: "MEMORY_CAPABILITY_REVOKED" });
+    await expect(capabilities.get("alpha")!.read({ namespace: "probe", key: "x" }))
+      .resolves.toBeNull();
+    await expect(capabilities.get("foundation")!.read({ namespace: "probe", key: "x" }))
+      .resolves.toBeNull();
+
+    await engine.stop();
+
+    expect(calls).toEqual(["beta", "alpha:1", "alpha:2", "foundation"]);
+    for (const capability of capabilities.values()) {
+      await expect(capability.read({ namespace: "probe", key: "after-retry" }))
+        .rejects.toMatchObject({ code: "MEMORY_CAPABILITY_REVOKED" });
+    }
+    expect(engine.state).toBe("stopped");
+  });
+});
+
+
 describe("CoreEngine stop-hook timeout recovery", () => {
   it("waits for the original timed-out stop hook before revoking its memory capability", async () => {
     const { GuardedMemoryPort } = await import("../../src/core/guarded-memory-port.js");
