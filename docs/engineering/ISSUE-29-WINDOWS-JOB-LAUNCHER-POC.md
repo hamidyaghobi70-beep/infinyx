@@ -1,6 +1,6 @@
 # Issue #29 — Windows Job Object Launcher IPC Proof of Concept
 
-Status: **EXPERIMENTAL POC — NOT PRODUCTION-INTEGRATED / NOT SECURITY-APPROVED**
+Status: **EXPERIMENTAL POC — IPC PASS-THROUGH FAILED / NOT PRODUCTION-INTEGRATED / NOT SECURITY-APPROVED**
 
 ## Scope
 
@@ -20,20 +20,18 @@ It does not change `ProcessIsolatedPolicyEngine`, its Windows capability label, 
 
 The Job handle is not included in the inherited-handle allow-list. The launcher remains the owner of that handle. Any setup or process-creation failure returns a nonzero status; there is no direct-child fallback.
 
-## Executable IPC/stdio proof
+## Executable IPC/stdio compatibility diagnostic
 
-The Windows-only Node test checks the following message directions through the unchanged IPC channel:
+The Windows-only diagnostic test starts the evaluator through the native launcher and observes its first attempt to send a message over the inherited Node IPC endpoint. The evaluator reports `process.connected === true`, but its first `process.send()` fails with `EPIPE`; the parent receives no IPC message and the evaluator exits with code 1. This is a reproducible negative result: **the inherited handle is not a functioning transparent Node IPC pass-through**.
 
-- Parent to evaluator: `evaluate`, `cancel`, and `finalize`.
-- Evaluator to parent: `started`, `cancelled`, and `finalized`.
-
-It also checks that stdout and stderr remain separately observable. The fixture deliberately waits for cancellation and finalization so the test covers more than a one-way startup message.
-
-The test is run only on Windows after CI compiles the C source with MSVC. On non-Windows platforms it is skipped; a skipped test is not evidence of IPC compatibility.
+The test intentionally asserts this failure signature so future changes cannot silently treat the raw inherited handle as a compatible channel. It does not claim that the intended `evaluate`/`cancel`/`finalize` protocol or stdio limits are preserved. The test is run only on Windows after CI compiles the C source with MSVC. On non-Windows platforms it is skipped; a skipped test is not evidence of IPC compatibility.
 
 ## Explicitly not proven by this POC
 
 - No production engine integration or capability upgrade.
+- Raw inherited Node IPC is incompatible in this experiment: the evaluator sees a connected channel but `process.send()` fails with `EPIPE`.
+- No successful parent-to-evaluator or evaluator-to-parent IPC proof.
+- No stdout/stderr pass-through acceptance test result; these channels are not used as a control-protocol fallback.
 - No descendant-spawn/termination or launcher-crash fault-injection test yet.
 - No exhaustive validation of handle inheritance, Job accounting races, resume failure, or incompatible outer Job behavior.
 - No proof of the narrow interrupted-`CreateProcessW` crash window described in the design proposal.
@@ -44,7 +42,7 @@ If the Windows IPC test fails, do not work around it by parsing Node's private I
 
 ## CI
 
-The Windows matrix job compiles the native source and runs `npm run test:windows-launcher-poc`. The exact workflow run and tested commit SHA must be recorded before claiming the IPC proof passed.
+The Windows matrix job compiles the native source and runs `npm run test:windows-launcher-ipc-diagnostic`. A passing diagnostic means the known `EPIPE` incompatibility was reproduced, **not** that IPC pass-through succeeded. Record the exact workflow run and tested commit SHA.
 
 ## References
 
