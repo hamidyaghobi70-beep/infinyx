@@ -694,7 +694,16 @@ describe("CoreEngine policy shutdown retry alignment", () => {
 
     await engine.initialize();
     await engine.start();
-    await expect(engine.stop()).rejects.toMatchObject({ code: "POLICY_SHUTDOWN_FAILED" });
+    await expect(engine.stop()).rejects.toMatchObject({
+      code: "POLICY_SHUTDOWN_FAILED",
+      shutdownBlockers: [{
+        code: "POLICY_SHUTDOWN_FAILED",
+        subsystem: "policy",
+        state: "failed"
+      }]
+    });
+    expect(engine.state).toBe("stopping");
+    expect(engine.getModuleStates().get("policy-layer-alignment-module")).toBe("initialized");
     await expect(engine.policy.evaluate({
       action: "record.read",
       resource: "record:retry",
@@ -705,7 +714,14 @@ describe("CoreEngine policy shutdown retry alignment", () => {
     expect(shutdownCalls).toBe(2);
     expect(moduleStops).toBe(0);
     releaseSecond(new Error("second transient failure"));
-    await expect(retry).rejects.toMatchObject({ code: "POLICY_SHUTDOWN_FAILED" });
+    await expect(retry).rejects.toMatchObject({
+      code: "POLICY_SHUTDOWN_FAILED",
+      shutdownBlockers: [{
+        code: "POLICY_SHUTDOWN_FAILED",
+        subsystem: "policy",
+        state: "failed"
+      }]
+    });
     expect(engine.state).toBe("stopping");
     expect(moduleStops).toBe(0);
 
