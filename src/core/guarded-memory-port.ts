@@ -159,14 +159,21 @@ export class GuardedMemoryPort implements MemoryPort {
     } catch {
       throw new TypeError("GuardedMemoryPort dependencies must be readable values.");
     }
-    if (!hasMethods(store, ["read", "write", "delete"])) {
-      throw new TypeError("GuardedMemoryPort requires a MemoryPort store.");
-    }
-    if (!hasMethods(policy, ["evaluate"])) {
-      throw new TypeError("GuardedMemoryPort requires a PolicyEngine.");
-    }
-    if (!hasMethods(audit, ["publishDecision", "publishFailure"])) {
-      throw new TypeError("GuardedMemoryPort requires a dedicated MemoryAuditPort.");
+    let storeRead: (address: MemoryAddress) => Promise<unknown | null>;
+    let storeWrite: (address: MemoryAddress, value: unknown) => Promise<void>;
+    let storeDelete: (address: MemoryAddress) => Promise<void>;
+    let policyEvaluate: PolicyEngine["evaluate"];
+    let auditPublishDecision: MemoryAuditPort["publishDecision"];
+    let auditPublishFailure: MemoryAuditPort["publishFailure"];
+    try {
+      storeRead = captureTrustedMethod(store, "read");
+      storeWrite = captureTrustedMethod(store, "write");
+      storeDelete = captureTrustedMethod(store, "delete");
+      policyEvaluate = captureTrustedMethod(policy, "evaluate");
+      auditPublishDecision = captureTrustedMethod(audit, "publishDecision");
+      auditPublishFailure = captureTrustedMethod(audit, "publishFailure");
+    } catch {
+      throw new TypeError("GuardedMemoryPort dependencies must expose stable data methods.");
     }
 
     const maxValueBytes = options.maxValueBytes ?? DEFAULT_MAX_MEMORY_VALUE_BYTES;
@@ -206,12 +213,12 @@ export class GuardedMemoryPort implements MemoryPort {
       );
     }
 
-    this.#storeRead = captureTrustedMethod(store, "read");
-    this.#storeWrite = captureTrustedMethod(store, "write");
-    this.#storeDelete = captureTrustedMethod(store, "delete");
-    this.#policyEvaluate = captureTrustedMethod(policy, "evaluate");
-    this.#auditPublishDecision = captureTrustedMethod(audit, "publishDecision");
-    this.#auditPublishFailure = captureTrustedMethod(audit, "publishFailure");
+    this.#storeRead = storeRead!;
+    this.#storeWrite = storeWrite!;
+    this.#storeDelete = storeDelete!;
+    this.#policyEvaluate = policyEvaluate!;
+    this.#auditPublishDecision = auditPublishDecision!;
+    this.#auditPublishFailure = auditPublishFailure!;
     this.#maxValueBytes = maxValueBytes;
     this.#policyTimeoutMs = policyTimeoutMs;
     this.#auditTimeoutMs = auditTimeoutMs;
