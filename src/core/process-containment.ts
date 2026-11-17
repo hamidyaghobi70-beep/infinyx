@@ -5,7 +5,7 @@ export type ProcessContainmentCapability =
   | "DIRECT_CHILD_ONLY";
 
 export function getProcessContainmentCapability(): ProcessContainmentCapability {
-  return process.platform === "win32" ? "DIRECT_CHILD_ONLY" : "POSIX_PROCESS_GROUP";
+  return process.platform === "win32" ? "DIRECT_CHILD_ONLY" : "POSIX_PROCESS_GROUP_BEST_EFFORT";
 }
 
 export function signalProcessGroup(
