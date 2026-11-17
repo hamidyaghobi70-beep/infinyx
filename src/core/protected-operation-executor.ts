@@ -87,7 +87,11 @@ function createChildActivityContext(
       active.childFailed = true;
       active.pendingChildren -= 1;
       settleHandlerIfComplete(active);
-      return Promise.reject(error);
+      const rejected = Promise.reject<T>(error);
+      // Match the asynchronous path: detached child failures are tracked here,
+      // while the returned promise remains rejected for callers that await it.
+      void rejected.catch(() => undefined);
+      return rejected;
     }
 
     const tracked = Promise.resolve(started).then(
