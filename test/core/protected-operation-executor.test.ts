@@ -1132,3 +1132,44 @@ describe("child registration after cancellation", () => {
     await engine.stop();
   });
 });
+
+
+describe("protected-operation registration trust boundary", () => {
+  it("rejects accessor-backed registration fields without invoking getters", () => {
+    let getterCalls = 0;
+    const definition = {
+      id: "security.accessor-registration",
+      action: "record.read",
+      resource: "record:accessor",
+      validateInput: (value: unknown): value is string => typeof value === "string",
+      get handler() {
+        getterCalls += 1;
+        throw new Error("handler getter must not run");
+      }
+    };
+    const executor = new ProtectedOperationExecutor({ evaluate: async () => allow }, () => true);
+    expect(() => executor.register(definition as never)).toThrow(/registration is invalid/i);
+    expect(getterCalls).toBe(0);
+  });
+
+  it("pins registration fields against mutation after registration", async () => {
+    const executor = new ProtectedOperationExecutor({ evaluate: async () => allow }, () => true);
+    const originalHandler = vi.fn(async () => "original");
+    const replacementHandler = vi.fn(async () => "replacement");
+    const definition = {
+      id: "security.pinned-registration",
+      action: "record.read",
+      resource: "record:pinned",
+      validateInput: (value: unknown): value is string => typeof value === "string",
+      handler: originalHandler
+    };
+    const operation = executor.register(definition);
+    definition.action = "admin.delete";
+    definition.resource = "record:mutated";
+    definition.handler = replacementHandler;
+    const result = await executor.execute(operation, { actorId: "pinned" }, "input");
+    expect(result).toEqual({ status: "executed", value: "original" });
+    expect(originalHandler).toHaveBeenCalledTimes(1);
+    expect(replacementHandler).not.toHaveBeenCalled();
+  });
+});
