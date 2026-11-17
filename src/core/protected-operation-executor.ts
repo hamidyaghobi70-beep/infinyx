@@ -262,9 +262,13 @@ export class ProtectedOperationExecutor implements ProtectedOperationPort {
     } catch {
       try {
         if (callerSignal && callerAbortListener) callerSignal.removeEventListener("abort", callerAbortListener);
+      } catch {
+        // A malformed caller signal must not escape the deny boundary.
+      }
+      try {
         if (parentSignal && parentAbortListener) parentSignal.removeEventListener("abort", parentAbortListener);
       } catch {
-        // A malformed cancellation capability must not escape the deny boundary.
+        // A malformed parent signal must not escape the deny boundary.
       }
       return this.denied("Protected operation cancellation options are invalid.");
     }
