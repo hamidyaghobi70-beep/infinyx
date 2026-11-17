@@ -12,7 +12,7 @@
     "typecheck": "tsc --noEmit -p tsconfig.json",
     "test": "vitest run",
     "test:process": "node --test test/integration/process-signals.test.mjs",
-    "test:windows-launcher-poc": "node --test test/windows/job-launcher-ipc-poc.test.mjs",
+    "test:windows-launcher-ipc-diagnostic": "node --test test/windows/job-launcher-ipc-poc.test.mjs",
     "start": "node dist/server.js"
   },
   "dependencies": {
