@@ -338,6 +338,52 @@ describe("CoreEngine", () => {
 });
 
 
+describe("multi-level intermediate cleanup failure recovery", () => {
+  it("does not rerun a cleaned leaf when its intermediate dependency fails", async () => {
+    const engine = new CoreEngine();
+    const calls: string[] = [];
+    let serviceAttempts = 0;
+
+    engine.register({
+      id: "foundation",
+      version: "1.0.0",
+      stop: () => { calls.push("foundation"); }
+    });
+    engine.register({
+      id: "service",
+      version: "1.0.0",
+      dependencies: ["foundation"],
+      stop: () => {
+        serviceAttempts += 1;
+        calls.push("service:" + serviceAttempts);
+        if (serviceAttempts === 1) throw new Error("temporary service cleanup failure");
+      }
+    });
+    engine.register({
+      id: "worker",
+      version: "1.0.0",
+      dependencies: ["service"],
+      stop: () => { calls.push("worker"); }
+    });
+
+    await engine.initialize();
+    await expect(engine.stop()).rejects.toThrow(/failed to stop/i);
+
+    expect(calls).toEqual(["worker", "service:1"]);
+    expect(engine.getModuleStates().get("worker")).toBe("stopped");
+    expect(engine.getModuleStates().get("service")).toBe("failed");
+    expect(engine.getModuleStates().get("foundation")).toBe("initialized");
+
+    await engine.stop();
+    expect(calls).toEqual(["worker", "service:1", "service:2", "foundation"]);
+    expect(engine.getModuleStates().get("worker")).toBe("stopped");
+    expect(engine.getModuleStates().get("service")).toBe("stopped");
+    expect(engine.getModuleStates().get("foundation")).toBe("stopped");
+    expect(engine.state).toBe("stopped");
+  });
+});
+
+
 describe("multi-level dependency cleanup retry", () => {
   it("preserves dependencies after a leaf cleanup failure and retries in dependent-first order", async () => {
     const engine = new CoreEngine();
