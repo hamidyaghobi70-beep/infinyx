@@ -127,6 +127,21 @@ describe("snapshotBoundedPolicyData", () => {
     });
   });
 
+
+  it("snapshots array length through its descriptor without invoking Proxy get traps", () => {
+    let getCalls = 0;
+    const source = new Proxy([{ safe: true }], {
+      get() {
+        getCalls += 1;
+        throw new Error("array property reads must not execute");
+      }
+    });
+
+    const result = snapshotBoundedPolicyData(source);
+    expect(result).toEqual({ ok: true, value: [{ safe: true }] });
+    expect(getCalls).toBe(0);
+  });
+
   it("rejects sparse arrays and arrays with custom properties", () => {
     expect(snapshotBoundedPolicyData(new Array(2))).toEqual({
       ok: false, reason: "RESOURCE_LIMIT"
