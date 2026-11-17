@@ -16,7 +16,7 @@ import type {
 import { DefaultDenyPolicyEngine } from "./default-policy-engine.js";
 import { FailClosedPolicyEngine } from "./fail-closed-policy-engine.js";
 import { InMemoryEventBus } from "./event-bus.js";
-import { CoreError, type CoreShutdownBlocker, type CoreShutdownBlockerCode } from "./core-error.js";
+import { CoreError, type CoreErrorCode, type CoreShutdownBlocker, type CoreShutdownBlockerCode } from "./core-error.js";
 import { ModuleRegistry } from "./module-registry.js";
 import { ProtectedOperationExecutor } from "./protected-operation-executor.js";
 
@@ -40,7 +40,7 @@ export interface CoreEngineOptions {
 function snapshotOptionRecord(
   value: unknown,
   allowedKeys: readonly string[],
-  code: string,
+  code: CoreErrorCode,
   message: string
 ): Record<string, unknown> {
   try {
