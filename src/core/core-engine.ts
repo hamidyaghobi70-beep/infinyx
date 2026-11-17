@@ -520,6 +520,16 @@ export class CoreEngine {
     }
 
     const errors = await this.cleanupInitializedModules(new Set(), deadline);
+    if (errors.length === 0) {
+      // Rollback may have completed a module's resource cleanup while preserving
+      // its failed initialization/start state. A later successful shutdown is
+      // the terminal lifecycle transition and must normalize those states.
+      for (const [moduleId, state] of this.moduleStates) {
+        if (state === "failed" && !this.initializedModules.some((module) => module.id === moduleId)) {
+          this.moduleStates.set(moduleId, "stopped");
+        }
+      }
+    }
     this.lifecycle = errors.length ? "failed" : "stopped";
     if (errors.length) {
       throw new CoreError(
