@@ -11,7 +11,7 @@ import type {
   ProtectedOperationPort,
   ProtectedOperationResult
 } from "./contracts.js";
-import { isValidPolicyDecision, isValidPolicyRequest } from "./fail-closed-policy-engine.js";
+import { isValidPolicyRequest, snapshotPolicyDecision } from "./fail-closed-policy-engine.js";
 import { snapshotBoundedPolicyData } from "./policy-input-snapshot.js";
 
 const handleBrand: unique symbol = Symbol("ProtectedOperationHandle");
@@ -270,8 +270,9 @@ export class ProtectedOperationExecutor implements ProtectedOperationPort {
       // there is no await between these checks and invoking the handler.
       if (!this.isCoreReady() || this.admissionClosed) return this.denied("Core Engine is stopping; protected operation denied.");
       if (operationController.signal.aborted) return this.denied("Protected operation was cancelled during authorization.");
-      if (!isValidPolicyDecision(decision)) return this.denied("Policy returned an invalid decision; protected operation denied.");
-      if (decision.effect !== "allow") return this.denied(decision.reason);
+      const safeDecision = snapshotPolicyDecision(decision);
+      if (!safeDecision) return this.denied("Policy returned an invalid decision; protected operation denied.");
+      if (safeDecision.effect !== "allow") return this.denied(safeDecision.reason);
       if (!this.isCoreReady() || this.admissionClosed) return this.denied("Core Engine is stopping; protected operation denied.");
 
       const operationId = randomUUID();
