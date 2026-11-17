@@ -221,6 +221,40 @@ describe("CoreEngine", () => {
     expect(engine.state).toBe("stopped");
   });
 
+  it("does not clean up modules after a drain timeout and retries after blockers settle", async () => {
+    let releasePolicyShutdown!: () => void;
+    const policyShutdownGate = new Promise<void>((resolve) => {
+      releasePolicyShutdown = resolve;
+    });
+    let moduleStops = 0;
+    const engine = new CoreEngine({
+      policy: {
+        evaluate: async () => ({ effect: "allow", reason: "test" }),
+        shutdown: () => policyShutdownGate
+      },
+      protectedOperationShutdown: { drainDeadlineMs: 10 }
+    });
+    engine.register({
+      id: "timeout-protected-module",
+      version: "1.0.0",
+      stop: () => { moduleStops += 1; }
+    });
+    await engine.initialize();
+    await engine.start();
+
+    await expect(engine.stop()).rejects.toMatchObject({
+      code: "POLICY_EVALUATION_DRAIN_TIMEOUT"
+    });
+    expect(engine.state).toBe("stopping");
+    expect(moduleStops).toBe(0);
+
+    releasePolicyShutdown();
+    await engine.stop();
+
+    expect(moduleStops).toBe(1);
+    expect(engine.state).toBe("stopped");
+  });
+
   it("does not authorize actions without an explicit policy", async () => {
     const engine = new CoreEngine();
     const decision = await engine.policy.evaluate({
