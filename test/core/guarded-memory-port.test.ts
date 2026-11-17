@@ -10,6 +10,7 @@ import { DefaultDenyPolicyEngine } from "../../src/core/default-policy-engine.js
 import { InMemoryEventBus } from "../../src/core/event-bus.js";
 import {
   GuardedMemoryPort,
+  revokeGuardedMemoryPort,
   MEMORY_ACCESS_DECIDED_EVENT,
   MEMORY_ACCESS_FAILED_EVENT
 } from "../../src/core/guarded-memory-port.js";
@@ -128,6 +129,43 @@ describe("GuardedMemoryPort — data handling", () => {
 
     const raw = await backing.read(backing.addresses()[0]!);
     expect(raw).toBe('{"a":1}');
+  });
+});
+
+describe("GuardedMemoryPort lifecycle revocation", () => {
+  it("rejects new operations after the composition root revokes the capability", async () => {
+    const { guard } = setup();
+
+    await revokeGuardedMemoryPort(guard);
+
+    expect(await codeOf(guard.read({ namespace: "n", key: "k" }))).toBe("MEMORY_CAPABILITY_REVOKED");
+    expect(await codeOf(guard.write({ namespace: "n", key: "k" }, "v"))).toBe("MEMORY_CAPABILITY_REVOKED");
+    expect(await codeOf(guard.delete({ namespace: "n", key: "k" }))).toBe("MEMORY_CAPABILITY_REVOKED");
+  });
+
+  it("closes admission immediately and waits for already-admitted operations to settle", async () => {
+    let releaseRead!: () => void;
+    let markReadStarted!: () => void;
+    const readStarted = new Promise<void>((resolve) => { markReadStarted = resolve; });
+    const readGate = new Promise<void>((resolve) => { releaseRead = resolve; });
+    const store: MemoryPort = {
+      read: async () => { markReadStarted(); await readGate; return null; },
+      write: async () => undefined,
+      delete: async () => undefined
+    };
+    const { guard } = setup({ store });
+    const operation = guard.read({ namespace: "n", key: "k" });
+    await readStarted;
+
+    let revoked = false;
+    const revocation = revokeGuardedMemoryPort(guard).then(() => { revoked = true; });
+    expect(await codeOf(guard.read({ namespace: "n", key: "later" }))).toBe("MEMORY_CAPABILITY_REVOKED");
+    expect(revoked).toBe(false);
+
+    releaseRead();
+    await operation;
+    await revocation;
+    expect(revoked).toBe(true);
   });
 });
 
