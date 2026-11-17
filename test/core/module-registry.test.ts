@@ -175,6 +175,31 @@ describe("ModuleRegistry trust-boundary snapshots", () => {
     expect(registry.list()).toHaveLength(0);
   });
 
+  it("does not invoke a caller-controlled bind getter on lifecycle hooks", async () => {
+    const registry = new ModuleRegistry();
+    let bindGetterCalls = 0;
+    let hookCalls = 0;
+    const hook = function () { hookCalls += 1; };
+    Object.defineProperty(hook, "bind", {
+      configurable: true,
+      get() {
+        bindGetterCalls += 1;
+        throw new Error("hostile bind getter");
+      }
+    });
+
+    registry.register({
+      id: "hostile-bind",
+      version: "1.0.0",
+      stop: hook as CoreModule["stop"]
+    });
+
+    expect(bindGetterCalls).toBe(0);
+    await registry.get("hostile-bind")?.stop?.({} as never);
+    expect(bindGetterCalls).toBe(0);
+    expect(hookCalls).toBe(1);
+  });
+
   it("captures a lifecycle hook descriptor only once", async () => {
     const registry = new ModuleRegistry();
     let descriptorReads = 0;
