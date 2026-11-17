@@ -306,8 +306,11 @@ export class CoreEngine {
       const failedModule = [...this.moduleStates.entries()]
         .find(([, state]) => state === "starting")?.[0];
       this.lifecycle = "failed";
+      // Startup rollback shares the same bounded memory-drain contract as initialization rollback.
+      const rollbackDeadline = performance.now() + this.drainDeadlineMs;
       const cleanupErrors = await this.cleanupInitializedModules(
-        failedModule ? new Set([failedModule]) : new Set()
+        failedModule ? new Set([failedModule]) : new Set(),
+        rollbackDeadline
       );
       const failure = new CoreError(
         "MODULE_START_FAILED",
