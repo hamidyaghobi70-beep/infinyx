@@ -42,8 +42,14 @@ If the Windows IPC test fails, do not work around it by parsing Node's private I
 
 ## CI
 
-The Windows matrix job compiles the native source and runs `npm run test:windows-launcher-ipc-diagnostic`. A passing diagnostic means the known `EPIPE` incompatibility was reproduced, **not** that IPC pass-through succeeded. Record the exact workflow run and tested commit SHA.
+The Windows matrix job compiles the native source and runs `npm run test:windows-launcher-ipc-diagnostic`. A passing diagnostic means the known `EPIPE` incompatibility was reproduced, **not** that IPC pass-through succeeded.
+
+- Workflow run: [43992140904](https://github.com/hamidyaghobi70-beep/infinyx/actions/runs/43992140904)
+- Exact tested SHA: `f88ecc20467ab0e973f2a49e7043a3181b4c1799`
+- Ubuntu, macOS, Windows, and Dependency Security Audit jobs: all successful.
+- Windows native compile: successful.
+- Windows inherited-IPC incompatibility diagnostic: successful (expected negative finding).
 
 ## References
 
-See [Windows Job Object Launcher Design](./ISSUE-29-WINDOWS-JOB-LAUNCHER-DESIGN.md) for the full acceptance gates and Microsoft API references.
+See [Windows Job Object Launcher Design](./ISSUE-29-WINDOWS-JOB-LAUNCHER-DESIGN.md) for the full acceptance gates and Microsoft API references. The failed raw IPC experiment is followed by the [Named-Pipe Control Transport Design](./ISSUE-29-WINDOWS-NAMED-PIPE-TRANSPORT-DESIGN.md), which remains a proposal only.
