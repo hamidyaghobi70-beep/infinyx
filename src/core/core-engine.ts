@@ -404,7 +404,15 @@ export class CoreEngine {
     }
     void this.executorDrainPromise.catch(() => undefined);
 
-    // Always attempt policy shutdown, even if executor shutdown initiation failed.
+  }
+
+  /** Retry a failed policy shutdown on a later stop() attempt, but share any in-flight attempt. */
+  private beginPolicyShutdown(): void {
+    if (this.policyShutdownPromise && !this.policyShutdownFailure) return;
+    this.policyShutdownFailure = undefined;
+    this.policyShutdownSettled = false;
+    this.policyShutdownSettledAt = undefined;
+
     try {
       this.policyShutdownPromise = Promise.resolve(this.policy.shutdown?.()).catch(() => {
         const failure = new CoreError(
@@ -434,6 +442,7 @@ export class CoreEngine {
     // Start the shared monotonic budget before initiating either shutdown path.
     const deadline = performance.now() + this.drainDeadlineMs;
     this.beginShutdownInitiation();
+    this.beginPolicyShutdown();
 
     const executorDrain = this.executorDrainPromise ?? Promise.resolve();
     const policyShutdown = this.policyShutdownPromise ?? Promise.resolve();
