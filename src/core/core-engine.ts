@@ -541,14 +541,24 @@ export class CoreEngine {
     let memory = this.moduleMemory.get(moduleId);
     if (!memory) {
       const candidate = this.options.memory(moduleId);
-      if (!(candidate instanceof GuardedMemoryPort) || candidate.scopeModuleId !== moduleId) {
+      if (!(candidate instanceof GuardedMemoryPort)) {
         throw new CoreError(
           "INVALID_MEMORY_CAPABILITY",
           "Core Engine requires a GuardedMemoryPort bound to the receiving module."
         );
       }
+      // Retain even a scope-mismatched capability before rejecting it so the
+      // module rollback path can revoke and drain it. Revoke immediately to
+      // prevent the rejected capability from admitting work in the meantime.
       memory = candidate;
       this.moduleMemory.set(moduleId, memory);
+      if (candidate.scopeModuleId !== moduleId) {
+        void revokeGuardedMemoryPort(candidate).catch(() => undefined);
+        throw new CoreError(
+          "INVALID_MEMORY_CAPABILITY",
+          "Core Engine requires a GuardedMemoryPort bound to the receiving module."
+        );
+      }
     }
     return Object.freeze({ ...base, memory });
   }
