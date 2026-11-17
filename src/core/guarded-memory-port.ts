@@ -287,7 +287,15 @@ export class GuardedMemoryPort implements MemoryPort {
         if (typeof stored !== "string") {
           throw new TypeError("Backing store returned a value that is not a serialized string.");
         }
-        return JSON.parse(stored) as unknown;
+        if (Buffer.byteLength(stored, "utf8") > this.#maxValueBytes) {
+          throw new TypeError("Backing store value exceeds the configured byte limit.");
+        }
+        const parsed = JSON.parse(stored) as unknown;
+        const snapshot = snapshotBoundedPolicyData(parsed);
+        if (!snapshot.ok) {
+          throw new TypeError("Backing store value exceeds bounded structured-data limits.");
+        }
+        return parsed;
       });
     });
   }
