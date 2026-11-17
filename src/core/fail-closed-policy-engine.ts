@@ -198,8 +198,8 @@ export class FailClosedPolicyEngine implements PolicyEngine {
     if (!Number.isFinite(timeoutMs) || timeoutMs <= 0) {
       throw new RangeError("Policy evaluation timeout must be a positive finite number.");
     }
-    this.delegateEvaluate = capturePolicyMethod(delegate, "evaluate")!;
-    this.delegateShutdown = capturePolicyMethod(delegate, "shutdown", true);
+    this.delegateEvaluate = capturePolicyMethod<PolicyEngine["evaluate"]>(delegate, "evaluate")!;
+    this.delegateShutdown = capturePolicyMethod<NonNullable<PolicyEngine["shutdown"]>>(delegate, "shutdown", true);
   }
 
   async evaluate(
