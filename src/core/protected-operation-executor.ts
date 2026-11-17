@@ -49,8 +49,14 @@ function snapshotPolicyContext(value: unknown): PolicyRequest["context"] | undef
 type ActiveExecutionPhase = "AUTHORIZING" | "RUNNING";
 
 interface ActiveExecution {
+  readonly id: string;
   readonly controller: AbortController;
+  readonly parent?: ActiveExecution;
+  readonly childExecutionIds: Set<string>;
+  readonly childPromises: Set<Promise<ProtectedOperationResult<unknown>>>;
   phase: ActiveExecutionPhase;
+  childScopeOpen: boolean;
+  childFailed: boolean;
 }
 
 export class ProtectedOperationExecutor implements ProtectedOperationPort {
@@ -101,11 +107,21 @@ export class ProtectedOperationExecutor implements ProtectedOperationPort {
     return handle;
   }
 
-  async execute<TInput, TOutput>(
+  execute<TInput, TOutput>(
     operation: ProtectedOperationHandle<TInput, TOutput>,
     caller: ProtectedOperationCaller,
     input: TInput,
     options?: PolicyEvaluationOptions
+  ): Promise<ProtectedOperationResult<TOutput>> {
+    return this.executeInternal(operation, caller, input, options);
+  }
+
+  private async executeInternal<TInput, TOutput>(
+    operation: ProtectedOperationHandle<TInput, TOutput>,
+    caller: ProtectedOperationCaller,
+    input: TInput,
+    options?: PolicyEvaluationOptions,
+    parentExecution?: ActiveExecution
   ): Promise<ProtectedOperationResult<TOutput>> {
     if (!this.admissionOpen || !this.isCoreReady()) {
       return this.denied("Protected operation admission is closed or Core Engine is not running.");
@@ -150,7 +166,7 @@ export class ProtectedOperationExecutor implements ProtectedOperationPort {
     }
 
     const callerSignal = options?.signal;
-    const parentSignal = options?.parentSignal;
+    const parentSignal = parentExecution?.controller.signal ?? options?.parentSignal;
     if (callerSignal?.aborted || parentSignal?.aborted) {
       return this.denied("Protected operation was cancelled before authorization.");
     }
@@ -168,7 +184,17 @@ export class ProtectedOperationExecutor implements ProtectedOperationPort {
     }
     const executionId = randomUUID();
     const operationController = new AbortController();
-    const activeExecution: ActiveExecution = { controller: operationController, phase: "AUTHORIZING" };
+    const activeExecution: ActiveExecution = {
+      id: executionId,
+      controller: operationController,
+      ...(parentExecution ? { parent: parentExecution } : {}),
+      childExecutionIds: new Set<string>(),
+      childPromises: new Set<Promise<ProtectedOperationResult<unknown>>>(),
+      phase: "AUTHORIZING",
+      childScopeOpen: true,
+      childFailed: false
+    };
+    if (parentExecution) parentExecution.childExecutionIds.add(executionId);
     this.activeExecutions.set(executionId, activeExecution);
     let callerAbortListener: (() => void) | undefined;
     let parentAbortListener: (() => void) | undefined;
@@ -206,11 +232,61 @@ export class ProtectedOperationExecutor implements ProtectedOperationPort {
       if (!this.isCoreReady()) return this.denied("Core Engine is stopping; protected operation denied.");
 
       activeExecution.phase = "RUNNING";
-      const value = await registration.handler(inputSnapshot as TInput, Object.freeze({
-        operationId: executionId,
-        registrationId: registration.id,
-        signal: operationController.signal
-      }));
+      let value: TOutput;
+      try {
+        value = await registration.handler(inputSnapshot as TInput, Object.freeze({
+          operationId: executionId,
+          registrationId: registration.id,
+          ...(parentExecution ? { parentOperationId: parentExecution.id } : {}),
+          signal: operationController.signal,
+          runChild: <TChildInput, TChildOutput>(
+            childOperation: ProtectedOperationHandle<TChildInput, TChildOutput>,
+            childCaller: ProtectedOperationCaller,
+            childInput: TChildInput,
+            childOptions?: Omit<PolicyEvaluationOptions, "parentSignal">
+          ): Promise<ProtectedOperationResult<TChildOutput>> => {
+            if (!activeExecution.childScopeOpen) {
+              return Promise.resolve(this.denied("Parent execution child scope is closed."));
+            }
+            const child = this.executeInternal(
+              childOperation,
+              childCaller,
+              childInput,
+              childOptions,
+              activeExecution
+            );
+            const tracked = child.then(
+              (result) => {
+                if (result.status === "failed") activeExecution.childFailed = true;
+                return result;
+              },
+              () => {
+                activeExecution.childFailed = true;
+                return { status: "failed", reason: "Child protected operation failed." } as const;
+              }
+            );
+            activeExecution.childPromises.add(
+              tracked as Promise<ProtectedOperationResult<unknown>>
+            );
+            return tracked;
+          }
+        }));
+      } catch {
+        activeExecution.childScopeOpen = false;
+        if (!operationController.signal.aborted) {
+          operationController.abort("parent_handler_failed");
+        }
+        await Promise.all([...activeExecution.childPromises]);
+        return { status: "failed", reason: "Protected operation handler failed." };
+      }
+
+      // Close synchronously when the parent handler settles. Already-started
+      // children remain tracked and must settle before this execution completes.
+      activeExecution.childScopeOpen = false;
+      await Promise.all([...activeExecution.childPromises]);
+      if (activeExecution.childFailed) {
+        return { status: "failed", reason: "A child protected operation failed." };
+      }
       return { status: "executed", value };
     } catch {
       return { status: "failed", reason: "Protected operation handler failed." };
@@ -218,6 +294,7 @@ export class ProtectedOperationExecutor implements ProtectedOperationPort {
       if (callerSignal && callerAbortListener) callerSignal.removeEventListener("abort", callerAbortListener);
       if (parentSignal && parentAbortListener) parentSignal.removeEventListener("abort", parentAbortListener);
       this.activeExecutions.delete(executionId);
+      parentExecution?.childExecutionIds.delete(executionId);
     }
   }
 
