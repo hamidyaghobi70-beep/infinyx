@@ -226,6 +226,9 @@ export class ProtectedOperationExecutor implements ProtectedOperationPort {
       callerSignal = options?.signal;
       parentSignal = options?.parentSignal;
       deadlineAt = options?.deadlineAt;
+      if (deadlineAt !== undefined && !Number.isFinite(deadlineAt)) {
+        return this.denied("Protected operation deadline is invalid.");
+      }
       if (callerSignal?.aborted || parentSignal?.aborted) {
         return this.denied("Protected operation was cancelled before authorization.");
       }
@@ -341,11 +344,19 @@ export class ProtectedOperationExecutor implements ProtectedOperationPort {
     } catch {
       return { status: "failed", reason: "Protected operation handler failed." };
     } finally {
-      try {
-        if (callerSignal && callerAbortListener) callerSignal.removeEventListener("abort", callerAbortListener);
-        if (parentSignal && parentAbortListener) parentSignal.removeEventListener("abort", parentAbortListener);
-      } catch {
-        // Listener cleanup is best-effort for malformed caller-supplied signal objects.
+      if (callerSignal && callerAbortListener) {
+        try {
+          callerSignal.removeEventListener("abort", callerAbortListener);
+        } catch {
+          // Caller cleanup failure must not prevent parent listener cleanup.
+        }
+      }
+      if (parentSignal && parentAbortListener) {
+        try {
+          parentSignal.removeEventListener("abort", parentAbortListener);
+        } catch {
+          // Parent cleanup is independent and best-effort.
+        }
       }
     }
   }
