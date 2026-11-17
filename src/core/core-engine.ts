@@ -577,6 +577,8 @@ export class CoreEngine {
         await this.cleanupContext.run(context, async () => {
           await module.stop?.(this.createContext(module.id));
         });
+        const memory = this.moduleMemory.get(module.id);
+        if (memory) await revokeGuardedMemoryPort(memory);
         this.moduleStates.set(module.id, preserveFailure ? "failed" : "stopped");
         // Release the module-scoped capability only after its cleanup succeeds.
         // Failed hooks retain it so an explicit cleanup retry sees the same context.
