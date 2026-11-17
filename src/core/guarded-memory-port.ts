@@ -203,7 +203,8 @@ export class GuardedMemoryPort implements MemoryPort {
     }
 
     const maxValueBytes = safeOptions.maxValueBytes ?? DEFAULT_MAX_MEMORY_VALUE_BYTES;
-    if (!Number.isSafeInteger(maxValueBytes) || maxValueBytes <= 0) {
+    if (typeof maxValueBytes !== "number" ||
+        !Number.isSafeInteger(maxValueBytes) || maxValueBytes <= 0) {
       throw new TypeError("maxValueBytes must be a positive safe integer.");
     }
 
