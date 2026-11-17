@@ -172,18 +172,18 @@ export class ProtectedOperationExecutor implements ProtectedOperationPort {
     this.activeExecutions.set(executionId, activeExecution);
     let callerAbortListener: (() => void) | undefined;
     let parentAbortListener: (() => void) | undefined;
-    if (callerSignal) {
-      callerAbortListener = () => operationController.abort();
-      callerSignal.addEventListener("abort", callerAbortListener, { once: true });
-      if (callerSignal.aborted) operationController.abort();
-    }
-    if (parentSignal) {
-      parentAbortListener = () => operationController.abort();
-      parentSignal.addEventListener("abort", parentAbortListener, { once: true });
-      if (parentSignal.aborted) operationController.abort();
-    }
-
     try {
+      if (callerSignal) {
+        callerAbortListener = () => operationController.abort();
+        callerSignal.addEventListener("abort", callerAbortListener, { once: true });
+        if (callerSignal.aborted) operationController.abort();
+      }
+      if (parentSignal) {
+        parentAbortListener = () => operationController.abort();
+        parentSignal.addEventListener("abort", parentAbortListener, { once: true });
+        if (parentSignal.aborted) operationController.abort();
+      }
+
       if (!this.isCoreReady()) return this.denied("Core Engine is stopping or not running; protected operation denied.");
       if (operationController.signal.aborted) return this.denied("Protected operation was cancelled before authorization.");
 
