@@ -676,4 +676,41 @@ describe("CoreEngine injected Event Bus capability boundary", () => {
     expect(delivered).toBe(1);
     expect(Object.isFrozen(moduleEvents)).toBe(true);
   });
+  it("keeps memory available during module cleanup, then revokes retained references", async () => {
+    const { GuardedMemoryPort } = await import("../../src/core/guarded-memory-port.js");
+    const { InMemoryMemoryStore } = await import("../../src/core/in-memory-memory-store.js");
+    const { DefaultDenyPolicyEngine } = await import("../../src/core/default-policy-engine.js");
+    const store = new InMemoryMemoryStore();
+    const audit = { publishDecision: async () => true, publishFailure: async () => undefined };
+    const engine = new CoreEngine({
+      memory: (moduleId) => new GuardedMemoryPort({
+        store,
+        policy: new DefaultDenyPolicyEngine(),
+        audit,
+        scope: { tenantId: "tenant", actorId: "actor", moduleId }
+      })
+    });
+    let retained: import("../../src/core/contracts.js").MemoryPort | undefined;
+    engine.register({
+      id: "worker",
+      version: "1.0.0",
+      initialize: (context) => { retained = context.memory; },
+      stop: async (context) => {
+        await context.memory?.write({ namespace: "shutdown", key: "final" }, "persisted");
+      }
+    });
+
+    await engine.initialize();
+    await engine.start();
+    await engine.stop();
+
+    expect(await store.read({ namespace: "tenant/shutdown", key: "final" })).toBe('"persisted"');
+    await expect(retained!.read({ namespace: "shutdown", key: "final" })).rejects.toMatchObject({
+      code: "MEMORY_CAPABILITY_REVOKED"
+    });
+    await expect(retained!.write({ namespace: "shutdown", key: "late" }, "x")).rejects.toMatchObject({
+      code: "MEMORY_CAPABILITY_REVOKED"
+    });
+  });
+
 });
