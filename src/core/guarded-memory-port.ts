@@ -5,6 +5,7 @@ import type {
   PolicyRequest
 } from "./contracts.js";
 import { snapshotPolicyDecision } from "./fail-closed-policy-engine.js";
+import { snapshotBoundedPolicyData } from "./policy-input-snapshot.js";
 import { MemoryAccessError } from "./memory-error.js";
 
 /** Published before every memory operation is executed or refused. */
@@ -392,9 +393,20 @@ export class GuardedMemoryPort implements MemoryPort {
   }
 
   private serialize(value: unknown): string {
+    // Never pass caller-owned values directly to JSON.stringify: getters and
+    // toJSON methods execute during serialization. First create a bounded,
+    // detached data-only snapshot that rejects accessors, cycles and Proxies.
+    const snapshot = snapshotBoundedPolicyData(value);
+    if (!snapshot.ok) {
+      throw new MemoryAccessError(
+        "MEMORY_INVALID_VALUE",
+        "Memory value must be safe, bounded structured data."
+      );
+    }
+
     let serialized: unknown;
     try {
-      serialized = JSON.stringify(value);
+      serialized = JSON.stringify(snapshot.value);
     } catch (cause) {
       throw new MemoryAccessError(
         "MEMORY_INVALID_VALUE",
