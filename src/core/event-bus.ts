@@ -98,7 +98,7 @@ export class InMemoryEventBus implements EventBusPort {
       type,
       payload: snapshot.value,
       get occurredAt(): Date { return new Date(occurredAt); }
-    }) as EventEnvelope<TPayload>;
+    }) as unknown as EventEnvelope<TPayload>;
 
     try {
       const results = await Promise.allSettled(
