@@ -46,9 +46,18 @@ function snapshotPolicyContext(value: unknown): PolicyRequest["context"] | undef
  * Central authorization-and-execution boundary. The lifecycle predicate is
  * owned by CoreEngine; only a running Core may admit protected operations.
  */
+type ActiveExecutionPhase = "AUTHORIZING" | "RUNNING";
+
+interface ActiveExecution {
+  readonly controller: AbortController;
+  phase: ActiveExecutionPhase;
+}
+
 export class ProtectedOperationExecutor implements ProtectedOperationPort {
   private readonly registrations = new WeakMap<object, RegisteredOperation>();
   private readonly operationIds = new Set<string>();
+  private readonly activeExecutions = new Map<string, ActiveExecution>();
+  private admissionOpen = true;
   // This is in-memory, per-process object-identity duplicate suppression only.
   // It is not durable replay protection and does not provide exactly-once semantics.
   private readonly usedRequests = new WeakMap<object, WeakSet<object>>();
@@ -57,6 +66,22 @@ export class ProtectedOperationExecutor implements ProtectedOperationPort {
     private readonly policy: PolicyEngine,
     private readonly isCoreReady: () => boolean
   ) {}
+
+  /** Close admission synchronously and cooperatively cancel every accepted execution. */
+  closeAdmission(): void {
+    if (!this.admissionOpen) return;
+    this.admissionOpen = false;
+    for (const execution of this.activeExecutions.values()) {
+      if (!execution.controller.signal.aborted) {
+        execution.controller.abort("protected_operation_admission_closed");
+      }
+    }
+  }
+
+  /** Number of accepted executions that have not actually settled yet. */
+  get activeExecutionCount(): number {
+    return this.activeExecutions.size;
+  }
 
   register<TInput, TOutput>(definition: ProtectedOperationDefinition<TInput, TOutput>): ProtectedOperationHandle<TInput, TOutput> {
     if (!definition || typeof definition.id !== "string" || !definition.id.trim() ||
@@ -82,7 +107,9 @@ export class ProtectedOperationExecutor implements ProtectedOperationPort {
     input: TInput,
     options?: PolicyEvaluationOptions
   ): Promise<ProtectedOperationResult<TOutput>> {
-    if (!this.isCoreReady()) return this.denied("Core Engine is not running; protected operation denied.");
+    if (!this.admissionOpen || !this.isCoreReady()) {
+      return this.denied("Protected operation admission is closed or Core Engine is not running.");
+    }
     const registration = operation && typeof operation === "object"
       ? this.registrations.get(operation as object) as RegisteredOperation<TInput, TOutput> | undefined
       : undefined;
@@ -134,7 +161,15 @@ export class ProtectedOperationExecutor implements ProtectedOperationPort {
     // Reservation is synchronous. A new object identity is a distinct in-memory request.
     used.add(caller as object);
 
+    // Admission and registry insertion are synchronous: closeAdmission() cannot
+    // interleave between the final gate and registration on this JS execution turn.
+    if (!this.admissionOpen || !this.isCoreReady()) {
+      return this.denied("Protected operation admission is closed or Core Engine is stopping.");
+    }
+    const executionId = randomUUID();
     const operationController = new AbortController();
+    const activeExecution: ActiveExecution = { controller: operationController, phase: "AUTHORIZING" };
+    this.activeExecutions.set(executionId, activeExecution);
     let callerAbortListener: (() => void) | undefined;
     let parentAbortListener: (() => void) | undefined;
     if (callerSignal) {
@@ -170,7 +205,7 @@ export class ProtectedOperationExecutor implements ProtectedOperationPort {
       if (decision.effect !== "allow") return this.denied(decision.reason);
       if (!this.isCoreReady()) return this.denied("Core Engine is stopping; protected operation denied.");
 
-      const executionId = randomUUID();
+      activeExecution.phase = "RUNNING";
       const value = await registration.handler(inputSnapshot as TInput, Object.freeze({
         operationId: executionId,
         registrationId: registration.id,
@@ -182,6 +217,7 @@ export class ProtectedOperationExecutor implements ProtectedOperationPort {
     } finally {
       if (callerSignal && callerAbortListener) callerSignal.removeEventListener("abort", callerAbortListener);
       if (parentSignal && parentAbortListener) parentSignal.removeEventListener("abort", parentAbortListener);
+      this.activeExecutions.delete(executionId);
     }
   }
 
