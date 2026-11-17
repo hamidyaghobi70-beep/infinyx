@@ -324,5 +324,47 @@ describe("ModuleRegistry resource bounds", () => {
     expect(engine.getModules().map((module) => module.id)).toEqual(["stable-module"]);
     expect(engine.getModuleStates().get("stable-module")).toBe("registered");
   });
+  it("rejects dependency arrays with hidden, symbolic, or extra own properties", () => {
+    const registry = new ModuleRegistry();
+
+    const withExtra = ["platform"];
+    Object.defineProperty(withExtra, "metadata", {
+      configurable: true,
+      enumerable: false,
+      value: "ignored-by-ordinary-iteration"
+    });
+    expect(() => registry.register({
+      id: "extra-dependency-key",
+      version: "1.0.0",
+      dependencies: withExtra
+    })).toThrowError(CoreError);
+
+    const withSymbol = ["platform"];
+    Object.defineProperty(withSymbol, Symbol("metadata"), {
+      configurable: true,
+      enumerable: true,
+      value: "hidden-metadata"
+    });
+    expect(() => registry.register({
+      id: "symbol-dependency-key",
+      version: "1.0.0",
+      dependencies: withSymbol
+    })).toThrowError(CoreError);
+
+    const withHiddenIndex = ["platform"];
+    Object.defineProperty(withHiddenIndex, "0", {
+      configurable: true,
+      enumerable: false,
+      value: "platform"
+    });
+    expect(() => registry.register({
+      id: "hidden-dependency-index",
+      version: "1.0.0",
+      dependencies: withHiddenIndex
+    })).toThrowError(CoreError);
+
+    expect(registry.list()).toHaveLength(0);
+  });
+
 });
 
