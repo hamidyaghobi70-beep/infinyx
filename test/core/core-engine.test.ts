@@ -668,6 +668,55 @@ describe("CoreEngine policy shutdown integration", () => {
   });
 });
 
+describe("CoreEngine policy shutdown retry alignment", () => {
+  it("keeps CoreEngine and policy shutdown retry state aligned across repeated failures", async () => {
+    let shutdownCalls = 0;
+    let releaseSecond!: (error?: Error) => void;
+    const secondAttempt = new Promise<void>((resolve, reject) => {
+      releaseSecond = (error) => error ? reject(error) : resolve();
+    });
+    let moduleStops = 0;
+    const engine = new CoreEngine({
+      policy: {
+        evaluate: async () => ({ effect: "allow", reason: "allowed" }),
+        shutdown: () => {
+          shutdownCalls += 1;
+          if (shutdownCalls === 1) throw new Error("first transient failure");
+          if (shutdownCalls === 2) return secondAttempt;
+        }
+      }
+    });
+    engine.register({
+      id: "policy-layer-alignment-module",
+      version: "1.0.0",
+      stop: () => { moduleStops += 1; }
+    });
+
+    await engine.initialize();
+    await engine.start();
+    await expect(engine.stop()).rejects.toMatchObject({ code: "POLICY_SHUTDOWN_FAILED" });
+    await expect(engine.policy.evaluate({
+      action: "record.read",
+      resource: "record:retry",
+      actorId: "retry-test"
+    })).resolves.toMatchObject({ effect: "deny" });
+
+    const retry = engine.stop();
+    expect(shutdownCalls).toBe(2);
+    expect(moduleStops).toBe(0);
+    releaseSecond(new Error("second transient failure"));
+    await expect(retry).rejects.toMatchObject({ code: "POLICY_SHUTDOWN_FAILED" });
+    expect(engine.state).toBe("stopping");
+    expect(moduleStops).toBe(0);
+
+    await engine.stop();
+    expect(shutdownCalls).toBe(3);
+    expect(moduleStops).toBe(1);
+    expect(engine.state).toBe("stopped");
+  });
+});
+
+
 describe("CoreEngine module memory capability lifetime", () => {
   it("releases a module memory capability after successful cleanup", async () => {
     const { GuardedMemoryPort } = await import("../../src/core/guarded-memory-port.js");
