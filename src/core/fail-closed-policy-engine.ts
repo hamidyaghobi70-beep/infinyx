@@ -34,7 +34,7 @@ function isSafeData(value: unknown, ancestors = new Set<object>()): boolean {
   for (const key of Reflect.ownKeys(descriptors)) {
     if (typeof key === "symbol" || (Array.isArray(value) && key === "length")) continue;
     const descriptor = descriptors[key as keyof typeof descriptors];
-    if (!descriptor || !("value" in descriptor) ||
+    if (!descriptor || !descriptor.enumerable || !("value" in descriptor) ||
         !isSafeData(descriptor.value, ancestors)) {
       ancestors.delete(value);
       return false;
