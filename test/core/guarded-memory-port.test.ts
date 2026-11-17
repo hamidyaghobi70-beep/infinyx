@@ -801,6 +801,33 @@ describe("GuardedMemoryPort — deadlines", () => {
     expect(decided[0]).toMatchObject({ decision: "deny", reason: "Policy evaluation timed out." });
   });
 
+  it("never applies a late allow decision after the policy deadline and capability revocation", async () => {
+    let resolvePolicy!: (decision: { effect: "allow"; reason: string }) => void;
+    const policy: PolicyEngine = {
+      evaluate: () => new Promise((resolve) => { resolvePolicy = resolve; })
+    };
+    const store = new InMemoryMemoryStore();
+    const write = vi.spyOn(store, "write");
+    const { guard, decided } = setup({ store, policy, policyTimeoutMs: 10 });
+
+    const operation = guard.write(deadlineAddress, "must-not-persist");
+    expect(await codeOf(operation)).toBe("MEMORY_ACCESS_DENIED");
+    await revokeGuardedMemoryPort(guard);
+    expect(write).not.toHaveBeenCalled();
+
+    resolvePolicy({ effect: "allow", reason: "late allow must be ignored" });
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(write).not.toHaveBeenCalled();
+    expect(decided[0]).toMatchObject({
+      decision: "deny",
+      reason: "Policy evaluation timed out."
+    });
+    expect(await codeOf(guard.write(deadlineAddress, "after-revocation"))).toBe("MEMORY_CAPABILITY_REVOKED");
+    expect(write).not.toHaveBeenCalled();
+  });
+
   it("applies the policy deadline to reads and deletes", async () => {
     const policy: PolicyEngine = { evaluate: () => new Promise(() => undefined) };
     const { guard } = setup({ policy, policyTimeoutMs: 15 });
