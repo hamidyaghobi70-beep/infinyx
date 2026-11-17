@@ -65,7 +65,9 @@ function snapshotDependencies(value: unknown): readonly string[] {
     const descriptor = Object.getOwnPropertyDescriptor(value, String(index));
     if (!descriptor ||
         !Object.prototype.hasOwnProperty.call(descriptor, "value") ||
-        typeof descriptor.value !== "string") {
+        typeof descriptor.value !== "string" ||
+        descriptor.value.length > MAX_MODULE_ID_LENGTH ||
+        !/^[a-z][a-z0-9-]*$/.test(descriptor.value)) {
       throw invalidModule();
     }
     dependencies.push(descriptor.value);
