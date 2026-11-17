@@ -678,4 +678,193 @@ describe("ProtectedOperationExecutor", () => {
     }));
   });
 
+
+  it("tracks a detached child until its handler actually settles", async () => {
+    let releaseChild!: (value: string) => void;
+    let childStarted!: () => void;
+    const started = new Promise<void>((resolve) => { childStarted = resolve; });
+    const engine = new CoreEngine({ policy: { evaluate: async () => allow } });
+    const child = engine.registerProtectedOperation({
+      id: "records.child.detached",
+      action: "record.read",
+      resource: "record:child",
+      validateInput: (value: unknown): value is string => typeof value === "string",
+      handler: () => {
+        childStarted();
+        return new Promise<string>((resolve) => { releaseChild = resolve; });
+      }
+    });
+    const parent = engine.registerProtectedOperation({
+      id: "records.parent.detached",
+      action: "record.read",
+      resource: "record:parent",
+      validateInput: (value: unknown): value is string => typeof value === "string",
+      handler: (_input, context) => {
+        void context.runChild(child, { actorId: "child-caller" }, "child");
+        return "parent";
+      }
+    });
+    await ensureStarted(engine);
+
+    const pending = engine.protectedOperations.execute(parent, { actorId: "parent-caller" }, "parent");
+    await started;
+    expect(engine["protectedOperationExecutor"].activeExecutionCount).toBe(2);
+    let settled = false;
+    void pending.then(() => { settled = true; });
+    await Promise.resolve();
+    expect(settled).toBe(false);
+
+    releaseChild("child-complete");
+    await expect(pending).resolves.toEqual({ status: "executed", value: "parent" });
+    expect(engine["protectedOperationExecutor"].activeExecutionCount).toBe(0);
+  });
+
+  it("supports nested child executions and records explicit parent identities", async () => {
+    const identities: Array<{ id: string; parentId?: string }> = [];
+    const engine = new CoreEngine({ policy: { evaluate: async () => allow } });
+    const grandchild = engine.registerProtectedOperation({
+      id: "records.grandchild",
+      action: "record.read",
+      resource: "record:grandchild",
+      validateInput: (value: unknown): value is string => typeof value === "string",
+      handler: (_input, context) => {
+        identities.push({ id: context.operationId, parentId: context.parentOperationId });
+        return "grandchild";
+      }
+    });
+    const child = engine.registerProtectedOperation({
+      id: "records.child.nested",
+      action: "record.read",
+      resource: "record:child",
+      validateInput: (value: unknown): value is string => typeof value === "string",
+      handler: async (_input, context) => {
+        identities.push({ id: context.operationId, parentId: context.parentOperationId });
+        const result = await context.runChild(grandchild, { actorId: "grandchild-caller" }, "nested");
+        expect(result).toMatchObject({ status: "executed" });
+        return "child";
+      }
+    });
+    const parent = engine.registerProtectedOperation({
+      id: "records.parent.nested",
+      action: "record.read",
+      resource: "record:parent",
+      validateInput: (value: unknown): value is string => typeof value === "string",
+      handler: async (_input, context) => {
+        const result = await context.runChild(child, { actorId: "child-caller" }, "nested");
+        expect(result).toMatchObject({ status: "executed" });
+        identities.push({ id: context.operationId });
+        return "parent";
+      }
+    });
+    await ensureStarted(engine);
+
+    await expect(engine.protectedOperations.execute(
+      parent, { actorId: "parent-caller" }, "root"
+    )).resolves.toMatchObject({ status: "executed" });
+
+    expect(identities).toHaveLength(3);
+    expect(identities[0]?.parentId).toBe(identities[2]?.id);
+    expect(identities[1]?.parentId).toBe(identities[0]?.id);
+  });
+
+  it("denies child registration after the parent handler has settled", async () => {
+    let lateRunChild!: (
+      operation: ProtectedOperationHandle<string, string>
+    ) => Promise<{ readonly status: string }>;
+    const engine = new CoreEngine({ policy: { evaluate: async () => allow } });
+    const child = engine.registerProtectedOperation({
+      id: "records.child.late",
+      action: "record.read",
+      resource: "record:child",
+      validateInput: (value: unknown): value is string => typeof value === "string",
+      handler: (value) => value
+    });
+    const parent = engine.registerProtectedOperation({
+      id: "records.parent.late",
+      action: "record.read",
+      resource: "record:parent",
+      validateInput: (value: unknown): value is string => typeof value === "string",
+      handler: (_input, context) => {
+        lateRunChild = (operation) => context.runChild(
+          operation, { actorId: "late-caller" }, "late"
+        );
+        return "done";
+      }
+    });
+    await ensureStarted(engine);
+    await engine.protectedOperations.execute(parent, { actorId: "parent-caller" }, "root");
+
+    await expect(lateRunChild(child)).resolves.toMatchObject({ status: "denied" });
+    expect(engine["protectedOperationExecutor"].activeExecutionCount).toBe(0);
+  });
+
+  it("fails the parent operation when a child handler fails", async () => {
+    const engine = new CoreEngine({ policy: { evaluate: async () => allow } });
+    const child = engine.registerProtectedOperation({
+      id: "records.child.failure",
+      action: "record.write",
+      resource: "record:child",
+      validateInput: (value: unknown): value is string => typeof value === "string",
+      handler: () => { throw new Error("child failure"); }
+    });
+    const parent = engine.registerProtectedOperation({
+      id: "records.parent.child-failure",
+      action: "record.write",
+      resource: "record:parent",
+      validateInput: (value: unknown): value is string => typeof value === "string",
+      handler: async (_input, context) => {
+        await context.runChild(child, { actorId: "child-caller" }, "child");
+        return "must-not-be-reported-as-success";
+      }
+    });
+    await ensureStarted(engine);
+
+    await expect(engine.protectedOperations.execute(
+      parent, { actorId: "parent-caller" }, "root"
+    )).resolves.toMatchObject({ status: "failed" });
+  });
+
+  it("cascades parent cancellation to child execution signals", async () => {
+    const controller = new AbortController();
+    let childSignal: AbortSignal | undefined;
+    let releaseChild!: () => void;
+    const childGate = new Promise<void>((resolve) => { releaseChild = resolve; });
+    const engine = new CoreEngine({ policy: { evaluate: async () => allow } });
+    const child = engine.registerProtectedOperation({
+      id: "records.child.cancel",
+      action: "record.read",
+      resource: "record:child",
+      validateInput: (value: unknown): value is string => typeof value === "string",
+      handler: async (_input, context) => {
+        childSignal = context.signal;
+        await childGate;
+        return "child";
+      }
+    });
+    const parent = engine.registerProtectedOperation({
+      id: "records.parent.cancel",
+      action: "record.read",
+      resource: "record:parent",
+      validateInput: (value: unknown): value is string => typeof value === "string",
+      handler: async (_input, context) => {
+        const childPromise = context.runChild(child, { actorId: "child-caller" }, "child");
+        await Promise.resolve();
+        controller.abort();
+        const result = await childPromise;
+        expect(result.status).toBe("executed");
+        return "parent";
+      }
+    });
+    await ensureStarted(engine);
+
+    const pending = engine.protectedOperations.execute(
+      parent, { actorId: "parent-caller" }, "root", { signal: controller.signal }
+    );
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(childSignal?.aborted).toBe(true);
+    releaseChild();
+    await pending;
+  });
+
 });
