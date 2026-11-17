@@ -17,6 +17,7 @@ export const DEFAULT_MEMORY_POLICY_TIMEOUT_MS = 5_000;
 export const DEFAULT_MEMORY_AUDIT_TIMEOUT_MS = 5_000;
 const MAX_TIMEOUT_MS = 2_147_483_647;
 const TIMED_OUT = Symbol("timed out");
+const memoryCapabilityRevokers = new WeakMap<object, () => Promise<void>>();
 
 const MAX_SCOPE_SEGMENT_LENGTH = 128;
 const MAX_NAMESPACE_LENGTH = 128;
@@ -168,6 +169,8 @@ export class GuardedMemoryPort implements MemoryPort {
   readonly #maxValueBytes: number;
   readonly #policyTimeoutMs: number;
   readonly #auditTimeoutMs: number;
+  #revoked = false;
+  readonly #activeOperations = new Set<Promise<void>>();
 
   /** Module identity bound to this capability by the composition root. */
   get scopeModuleId(): string {
@@ -268,34 +271,67 @@ export class GuardedMemoryPort implements MemoryPort {
     } as MemoryScope);
     // Modules receive this instance as a capability. Freeze its public surface so
     // they cannot shadow read/write/delete with unguarded replacements.
+    memoryCapabilityRevokers.set(this, () => this.revokeAndDrain());
     Object.freeze(this);
   }
 
-  async read(address: MemoryAddress): Promise<unknown | null> {
-    const target = this.resolve(address);
-    await this.authorize("read", target);
-
-    return this.callStore("read", target, async () => {
-      const stored = await this.#storeRead(target.inner);
-      if (stored === null) return null;
-      if (typeof stored !== "string") {
-        throw new TypeError("Backing store returned a value that is not a serialized string.");
-      }
-      return JSON.parse(stored) as unknown;
+  read(address: MemoryAddress): Promise<unknown | null> {
+    return this.trackOperation(async () => {
+      const target = this.resolve(address);
+      await this.authorize("read", target);
+      return this.callStore("read", target, async () => {
+        const stored = await this.#storeRead(target.inner);
+        if (stored === null) return null;
+        if (typeof stored !== "string") {
+          throw new TypeError("Backing store returned a value that is not a serialized string.");
+        }
+        return JSON.parse(stored) as unknown;
+      });
     });
   }
 
-  async write(address: MemoryAddress, value: unknown): Promise<void> {
-    const target = this.resolve(address);
-    const serialized = this.serialize(value);
-    await this.authorize("write", target);
-    await this.callStore("write", target, () => this.#storeWrite(target.inner, serialized));
+  write(address: MemoryAddress, value: unknown): Promise<void> {
+    return this.trackOperation(async () => {
+      const target = this.resolve(address);
+      const serialized = this.serialize(value);
+      await this.authorize("write", target);
+      await this.callStore("write", target, () => this.#storeWrite(target.inner, serialized));
+    });
   }
 
-  async delete(address: MemoryAddress): Promise<void> {
-    const target = this.resolve(address);
-    await this.authorize("delete", target);
-    await this.callStore("delete", target, () => this.#storeDelete(target.inner));
+  delete(address: MemoryAddress): Promise<void> {
+    return this.trackOperation(async () => {
+      const target = this.resolve(address);
+      await this.authorize("delete", target);
+      await this.callStore("delete", target, () => this.#storeDelete(target.inner));
+    });
+  }
+
+  private trackOperation<T>(action: () => Promise<T>): Promise<T> {
+    if (this.#revoked) {
+      return Promise.reject(new MemoryAccessError(
+        "MEMORY_CAPABILITY_REVOKED",
+        "Memory capability is closed and no longer accepts operations."
+      ));
+    }
+    let settle!: () => void;
+    const settled = new Promise<void>((resolve) => { settle = resolve; });
+    this.#activeOperations.add(settled);
+    return (async () => {
+      try {
+        return await action();
+      } finally {
+        this.#activeOperations.delete(settled);
+        settle();
+      }
+    })();
+  }
+
+  private async revokeAndDrain(): Promise<void> {
+    this.#revoked = true;
+    while (this.#activeOperations.size > 0) {
+      await Promise.all([...this.#activeOperations]);
+    }
   }
 
   private resolve(address: MemoryAddress): ResolvedTarget {
@@ -520,4 +556,12 @@ function normalizeDecision(result: unknown): NormalizedDecision {
     return { effect: "deny", reason: "Policy returned an invalid decision." };
   }
   return { effect, reason };
+}
+
+
+/** Internal composition-root hook: close a module capability and await all admitted operations. */
+export async function revokeGuardedMemoryPort(port: GuardedMemoryPort): Promise<void> {
+  const revoke = memoryCapabilityRevokers.get(port);
+  if (!revoke) throw new TypeError("Unknown guarded memory capability.");
+  await revoke();
 }
