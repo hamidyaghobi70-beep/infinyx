@@ -1249,3 +1249,24 @@ describe("CoreEngine bounded module stop hooks", () => {
     expect(engine.state).toBe("stopped");
   });
 });
+
+describe("CoreEngine stop-hook tracking release", () => {
+  it("releases a settled successful stop-hook promise after cleanup", async () => {
+    const engine = new CoreEngine();
+    engine.register({
+      id: "settled-stop-hook",
+      version: "1.0.0",
+      stop: async () => undefined
+    });
+
+    await engine.initialize();
+    await engine.start();
+    await engine.stop();
+
+    const internals = engine as unknown as {
+      moduleStopInFlight: Map<string, Promise<void>>;
+    };
+    expect(internals.moduleStopInFlight.has("settled-stop-hook")).toBe(false);
+    expect(internals.moduleStopInFlight.size).toBe(0);
+  });
+});
