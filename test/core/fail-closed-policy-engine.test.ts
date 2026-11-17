@@ -398,3 +398,26 @@ describe("untrusted policy decision descriptors", () => {
     await expect(policy.evaluate(request)).resolves.toMatchObject({ effect: "deny" });
   });
 });
+
+
+describe("policy request snapshot descriptor integrity", () => {
+  it("denies requests containing non-enumerable data that structuredClone would omit", async () => {
+    const attributes = { visible: "value" };
+    Object.defineProperty(attributes, "hidden", {
+      configurable: true,
+      enumerable: false,
+      value: "must not be silently discarded"
+    });
+    const evaluator = vi.fn(async () => ({
+      effect: "allow" as const,
+      reason: "must not be reached"
+    }));
+    const policy = new FailClosedPolicyEngine({ evaluate: evaluator });
+
+    await expect(policy.evaluate({
+      ...request,
+      context: { attributes }
+    })).resolves.toMatchObject({ effect: "deny" });
+    expect(evaluator).not.toHaveBeenCalled();
+  });
+});
