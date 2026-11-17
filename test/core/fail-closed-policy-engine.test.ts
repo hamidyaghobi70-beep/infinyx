@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { CoreEngine } from "../../src/core/core-engine.js";
 import { FailClosedPolicyEngine } from "../../src/core/fail-closed-policy-engine.js";
-import type { PolicyRequest } from "../../src/core/contracts.js";
+import type { PolicyEngine, PolicyRequest } from "../../src/core/contracts.js";
 
 const request: PolicyRequest = {
   actorId: "test-actor",
@@ -17,7 +17,7 @@ describe("FailClosedPolicyEngine delegate method integrity", () => {
   it("pins evaluator and shutdown methods against later delegate mutation", async () => {
     const originalEvaluate = vi.fn(async () => ({ effect: "allow" as const, reason: "pinned" }));
     const originalShutdown = vi.fn(async () => undefined);
-    const delegate = { evaluate: originalEvaluate, shutdown: originalShutdown };
+    const delegate: PolicyEngine = { evaluate: originalEvaluate, shutdown: originalShutdown };
     const policy = new FailClosedPolicyEngine(delegate);
     const replacementEvaluate = vi.fn(async () => ({ effect: "deny" as const, reason: "replaced" }));
     const replacementShutdown = vi.fn(async () => { throw new Error("replacement shutdown"); });
