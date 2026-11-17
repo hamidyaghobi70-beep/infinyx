@@ -1061,6 +1061,34 @@ describe("global protected-operation admission bound", () => {
 });
 
 
+describe("synchronous child callback failure", () => {
+  it("observes a detached child rejection when its callback throws synchronously", async () => {
+    const engine = new CoreEngine({ policy: { evaluate: async () => allow } });
+    const operation = engine.registerProtectedOperation({
+      id: "records.sync-child-throw",
+      action: "record.write",
+      resource: "record:sync-child-throw",
+      validateInput: isRecordInput,
+      handler: (_input, context) => {
+        void context.runChild(() => {
+          throw new Error("synchronous child failure");
+        });
+        return "handler-completed";
+      }
+    });
+    await ensureStarted(engine);
+
+    await expect(engine.protectedOperations.execute(
+      operation, { actorId: "sync-child-throw" }, { value: "ok" }
+    )).resolves.toEqual({
+      status: "failed",
+      reason: "Protected operation handler or child activity failed."
+    });
+    await engine.stop();
+  });
+});
+
+
 describe("child registration after cancellation", () => {
   it("rejects new descendants after the parent operation is cancelled", async () => {
     const callerController = new AbortController();
