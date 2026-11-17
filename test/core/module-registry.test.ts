@@ -148,24 +148,35 @@ describe("ModuleRegistry trust-boundary snapshots", () => {
     expect(registry.list()).toHaveLength(0);
   });
 
-  it("captures changing lifecycle hook descriptors only once", async () => {
+  it("captures a lifecycle hook descriptor only once", async () => {
     const registry = new ModuleRegistry();
-    let reads = 0;
-    const first = () => { reads += 1; };
-    const second = () => { reads += 100; };
-    const module = {
+    let descriptorReads = 0;
+    let calls = 0;
+    const first = () => { calls += 1; };
+    const second = () => { calls += 100; };
+    const target = {
       id: "changing-hook",
-      version: "1.0.0"
+      version: "1.0.0",
+      stop: first
     } as CoreModule;
-    Object.defineProperty(module, "stop", {
-      configurable: true,
-      get: undefined,
-      value: first
+    const module = new Proxy(target, {
+      getOwnPropertyDescriptor(object, key) {
+        if (key === "stop") {
+          descriptorReads += 1;
+          return {
+            configurable: true,
+            enumerable: true,
+            writable: true,
+            value: descriptorReads === 1 ? first : second
+          };
+        }
+        return Reflect.getOwnPropertyDescriptor(object, key);
+      }
     });
 
     registry.register(module);
-    const registered = registry.get("changing-hook");
-    await registered?.stop?.({} as never);
-    expect(reads).toBe(1);
+    await registry.get("changing-hook")?.stop?.({} as never);
+    expect(descriptorReads).toBe(1);
+    expect(calls).toBe(1);
   });
 });
