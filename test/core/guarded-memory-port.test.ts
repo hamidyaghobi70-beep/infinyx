@@ -131,6 +131,54 @@ describe("GuardedMemoryPort — data handling", () => {
   });
 });
 
+describe("GuardedMemoryPort dependency method integrity", () => {
+  it("pins backing-store methods so later mutation cannot bypass the guarded boundary", async () => {
+    const store = new InMemoryMemoryStore();
+    const guard = new GuardedMemoryPort({
+      store,
+      policy: allowAll,
+      audit: {
+        publishDecision: async () => true,
+        publishFailure: async () => undefined
+      },
+      scope: scopeA
+    });
+
+    await guard.write({ namespace: "notes", key: "pinned" }, "trusted");
+    const replacementRead = vi.fn(async () => "tampered");
+    store.read = replacementRead as typeof store.read;
+
+    await expect(guard.read({ namespace: "notes", key: "pinned" })).resolves.toBe("trusted");
+    expect(replacementRead).not.toHaveBeenCalled();
+  });
+
+  it("rejects accessor-backed dependency methods without invoking their getters", () => {
+    let getterCalls = 0;
+    const store = {
+      write: async () => undefined,
+      delete: async () => undefined
+    };
+    Object.defineProperty(store, "read", {
+      configurable: true,
+      get() {
+        getterCalls += 1;
+        throw new Error("hostile store method getter");
+      }
+    });
+
+    expect(() => new GuardedMemoryPort({
+      store: store as unknown as MemoryPort,
+      policy: allowAll,
+      audit: {
+        publishDecision: async () => true,
+        publishFailure: async () => undefined
+      },
+      scope: scopeA
+    })).toThrow(/stable data methods/i);
+    expect(getterCalls).toBe(0);
+  });
+});
+
 describe("GuardedMemoryPort — tenant isolation", () => {
   it("keeps identical namespace/key pairs separate across tenants sharing one store", async () => {
     const shared = new InMemoryMemoryStore();
