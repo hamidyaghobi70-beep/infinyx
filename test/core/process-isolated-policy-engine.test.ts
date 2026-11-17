@@ -443,7 +443,7 @@ describe("ProcessIsolatedPolicyEngine", () => {
     expect(engine.activeExecutionCount).toBe(0);
   });
 
-  it("escalates POSIX process-group SIGTERM to SIGKILL", async () => {
+  it.skipIf(process.platform === "win32")("escalates POSIX process-group SIGTERM to SIGKILL", async () => {
     const observer = stateObserver("RUNNING");
     const controller = new AbortController();
     const signals: Array<NodeJS.Signals | number | undefined> = [];
@@ -477,7 +477,7 @@ describe("ProcessIsolatedPolicyEngine", () => {
     }
   });
 
-  it("retains capacity until an unconfirmed process group actually becomes empty", async () => {
+  it.skipIf(process.platform === "win32")("retains capacity until an unconfirmed process group actually becomes empty", async () => {
     const observer = stateObserver("RUNNING");
     const controller = new AbortController();
     const originalKill = process.kill;
