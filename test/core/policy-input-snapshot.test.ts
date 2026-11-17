@@ -1,3 +1,4 @@
+import { Buffer } from "node:buffer";
 import { describe, expect, it } from "vitest";
 import { snapshotBoundedPolicyData } from "../../src/core/policy-input-snapshot.js";
 
@@ -49,6 +50,39 @@ describe("snapshotBoundedPolicyData", () => {
     });
   });
 
+  it("counts four-byte UTF-8 code points at the exact per-string boundary", () => {
+    expect(snapshotBoundedPolicyData("😀".repeat(4_096)).ok).toBe(true);
+    expect(snapshotBoundedPolicyData("😀".repeat(4_097))).toEqual({
+      ok: false, reason: "RESOURCE_LIMIT"
+    });
+  });
+
+  it("rejects oversized input without invoking TextEncoder", () => {
+    const originalTextEncoder = globalThis.TextEncoder;
+    class ForbiddenTextEncoder {
+      constructor() {
+        throw new Error("TextEncoder must not be used by the bounded byte counter");
+      }
+    }
+    Object.defineProperty(globalThis, "TextEncoder", {
+      configurable: true,
+      writable: true,
+      value: ForbiddenTextEncoder
+    });
+    try {
+      expect(snapshotBoundedPolicyData("x".repeat(16_385))).toEqual({
+        ok: false,
+        reason: "RESOURCE_LIMIT"
+      });
+    } finally {
+      Object.defineProperty(globalThis, "TextEncoder", {
+        configurable: true,
+        writable: true,
+        value: originalTextEncoder
+      });
+    }
+  });
+
   it("accepts the maximum supported depth and rejects one level deeper", () => {
     let accepted: unknown = "leaf";
     for (let index = 0; index < 32; index += 1) accepted = { child: accepted };
@@ -71,7 +105,7 @@ describe("snapshotBoundedPolicyData", () => {
 
   it("accepts exactly the aggregate byte limit and rejects one byte over", () => {
     const indexBytes = Array.from({ length: 16 }, (_, index) =>
-      new TextEncoder().encode(String(index)).byteLength
+      Buffer.byteLength(String(index), "utf8")
     ).reduce((total, bytes) => total + bytes, 0);
     const atLimit = Array.from({ length: 16 }, (_, index) =>
       "x".repeat(index === 15 ? 16_384 - indexBytes : 16_384)
