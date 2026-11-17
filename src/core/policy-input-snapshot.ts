@@ -2,8 +2,11 @@
  * Creates a bounded, detached, deeply immutable snapshot of structured data.
  *
  * This helper rejects accessors without invoking them. Reflective operations can
- * still trigger Proxy traps; callers must use a controlled data/serialization
- * boundary when input may contain hostile in-process Proxy objects.
+ * still trigger Proxy traps. Reflect.ownKeys must materialize an object's own-key
+ * list before the entry limit can be checked, so this same-process traversal is
+ * not a hard memory boundary for hostile objects or Proxies. Callers must use a
+ * controlled data/serialization boundary and OS memory limits where hostile
+ * in-process objects are in scope.
  */
 
 const MAX_DEPTH = 32;
