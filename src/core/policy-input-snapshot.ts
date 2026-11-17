@@ -104,8 +104,8 @@ export function snapshotBoundedPolicyData<T>(input: T): SnapshotResult<T> {
 
         // Read the intrinsic length from its own data descriptor. A Proxy get
         // trap must not be able to vary array length between validation and copy.
-        const lengthDescriptor = Object.getOwnPropertyDescriptor(value, "length");
-        if (!lengthDescriptor) reject("INVALID_STRUCTURE");
+        const lengthDescriptor =
+          Object.getOwnPropertyDescriptor(value, "length") ?? reject("INVALID_STRUCTURE");
         if (!("value" in lengthDescriptor) ||
             lengthDescriptor.enumerable || !Number.isSafeInteger(lengthDescriptor.value) ||
             (lengthDescriptor.value as number) < 0) {
