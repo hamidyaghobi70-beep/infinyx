@@ -16,6 +16,11 @@ import { snapshotBoundedPolicyData } from "./policy-input-snapshot.js";
 
 const handleBrand: unique symbol = Symbol("ProtectedOperationHandle");
 
+// Bound outstanding child work and nesting to prevent one authorized operation
+// from exhausting process resources through unbounded detached descendants.
+const MAX_PENDING_CHILD_ACTIVITIES = 1024;
+const MAX_CHILD_ACTIVITY_DEPTH = 64;
+
 interface InternalHandle extends ProtectedOperationHandle {
   readonly [handleBrand]: true;
 }
@@ -31,6 +36,7 @@ interface ActiveHandler {
 
 interface ChildActivityScope {
   open: boolean;
+  depth: number;
 }
 
 function settleHandlerIfComplete(active: ActiveHandler): void {
@@ -53,9 +59,19 @@ function createChildActivityContext(
       void rejected.catch(() => undefined);
       return rejected;
     }
+    if (active.pendingChildren >= MAX_PENDING_CHILD_ACTIVITIES) {
+      const rejected = Promise.reject<T>(new Error("Child activity concurrency limit exceeded."));
+      void rejected.catch(() => undefined);
+      return rejected;
+    }
+    if (scope.depth >= MAX_CHILD_ACTIVITY_DEPTH) {
+      const rejected = Promise.reject<T>(new Error("Child activity nesting limit exceeded."));
+      void rejected.catch(() => undefined);
+      return rejected;
+    }
 
     active.pendingChildren += 1;
-    const childScope: ChildActivityScope = { open: true };
+    const childScope: ChildActivityScope = { open: true, depth: scope.depth + 1 };
     let started: T | Promise<T>;
     try {
       started = start(createChildActivityContext(active, childScope));
@@ -311,7 +327,7 @@ export class ProtectedOperationExecutor implements ProtectedOperationPort {
         childFailed: false
       };
       this.activeHandlers.set(operationId, active);
-      const rootScope: ChildActivityScope = { open: true };
+      const rootScope: ChildActivityScope = { open: true, depth: 0 };
       let value: TOutput | undefined;
       let handlerFailed = false;
       try {
