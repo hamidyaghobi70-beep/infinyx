@@ -258,6 +258,43 @@ describe("FailClosedPolicyEngine caller and parent cancellation", () => {
     expect(observedSignal?.aborted).toBe(true);
   });
 
+
+  it("fails closed when a caller abort reason has hostile reflection traps", async () => {
+    const reason = new Proxy({}, {
+      has() { throw new Error("hostile has trap"); },
+      get() { throw new Error("hostile get trap"); },
+      getOwnPropertyDescriptor() { throw new Error("hostile descriptor trap"); }
+    });
+    const controller = new AbortController();
+    controller.abort(reason);
+    const evaluator = vi.fn(async () => ({
+      effect: "allow" as const,
+      reason: "must not execute"
+    }));
+    const policy = new FailClosedPolicyEngine({ evaluate: evaluator });
+
+    await expect(policy.evaluate(request, { signal: controller.signal }))
+      .resolves.toMatchObject({ effect: "deny" });
+    expect(evaluator).not.toHaveBeenCalled();
+  });
+
+  it("handles hostile abort reasons during active cancellation", async () => {
+    const reason = new Proxy({}, {
+      getOwnPropertyDescriptor() { throw new Error("hostile descriptor trap"); }
+    });
+    const controller = new AbortController();
+    let evaluatorStarted!: () => void;
+    const started = new Promise<void>((resolve) => { evaluatorStarted = resolve; });
+    const policy = new FailClosedPolicyEngine({
+      evaluate: () => new Promise(() => { evaluatorStarted(); })
+    });
+
+    const pending = policy.evaluate(request, { signal: controller.signal });
+    await started;
+    controller.abort(reason);
+    await expect(pending).resolves.toMatchObject({ effect: "deny" });
+  });
+
   it("does not allow cancellation after a settled result to rewrite that result", async () => {
     const controller = new AbortController();
     const policy = new FailClosedPolicyEngine({
