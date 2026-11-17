@@ -1,5 +1,19 @@
+import { spawn } from "node:child_process";
+import { writeFileSync } from "node:fs";
+
 export default {
   async evaluate(request, options) {
+    if (request.action === "orphan-descendant") {
+      const descendant = spawn(process.execPath, [
+        "-e",
+        "process.on('SIGTERM', () => {}); setInterval(() => {}, 1000);"
+      ], { stdio: "ignore" });
+      descendant.unref();
+      if (!descendant.pid) throw new Error("Descendant process did not start.");
+      writeFileSync(request.resource, String(descendant.pid), "utf8");
+      return { effect: "allow", reason: "Descendant fixture started." };
+    }
+
     if (request.action === "hang") {
       return new Promise(() => undefined);
     }
