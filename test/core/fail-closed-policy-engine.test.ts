@@ -401,6 +401,41 @@ describe("FailClosedPolicyEngine caller and parent cancellation", () => {
     });
   });
 
+  it("shares repeated shutdown retries and remains closed after transient failures", async () => {
+    let shutdownCalls = 0;
+    let releaseSecond!: (error?: Error) => void;
+    const secondAttempt = new Promise<void>((resolve, reject) => {
+      releaseSecond = (error) => error ? reject(error) : resolve();
+    });
+    const delegate: PolicyEngine = {
+      evaluate: async () => ({ effect: "allow", reason: "allowed" }),
+      shutdown: () => {
+        shutdownCalls += 1;
+        if (shutdownCalls === 1) throw new Error("first transient failure");
+        if (shutdownCalls === 2) return secondAttempt;
+        return Promise.resolve();
+      }
+    };
+    const policy = new FailClosedPolicyEngine(delegate);
+
+    await expect(policy.shutdown()).rejects.toThrow();
+    await expect(policy.evaluate(request)).resolves.toMatchObject({ effect: "deny" });
+
+    const retryA = policy.shutdown();
+    const retryB = policy.shutdown();
+    expect(retryB).toBe(retryA);
+    expect(shutdownCalls).toBe(2);
+
+    releaseSecond(new Error("second transient failure"));
+    await expect(retryA).rejects.toThrow();
+    expect(shutdownCalls).toBe(2);
+    await expect(policy.evaluate(request)).resolves.toMatchObject({ effect: "deny" });
+
+    await expect(policy.shutdown()).resolves.toBeUndefined();
+    expect(shutdownCalls).toBe(3);
+    await expect(policy.evaluate(request)).resolves.toMatchObject({ effect: "deny" });
+  });
+
 });
 
 
