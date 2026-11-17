@@ -714,3 +714,64 @@ describe("CoreEngine injected Event Bus capability boundary", () => {
   });
 
 });
+
+
+describe("CoreEngine bounded module memory drain", () => {
+  it("times out a stuck memory drain, revokes admission, and retries without rerunning a successful stop hook", async () => {
+    const { GuardedMemoryPort } = await import("../../src/core/guarded-memory-port.js");
+    let releaseRead!: (value: string) => void;
+    let signalReadStarted!: () => void;
+    const readStarted = new Promise<void>((resolve) => {
+      signalReadStarted = resolve;
+    });
+    const store: import("../../src/core/contracts.js").MemoryPort = {
+      read: () => {
+        signalReadStarted();
+        return new Promise<string>((resolve) => { releaseRead = resolve; });
+      },
+      write: async () => undefined,
+      delete: async () => undefined
+    };
+    const memoryByModule = new Map<string, InstanceType<typeof GuardedMemoryPort>>();
+    const engine = new CoreEngine({
+      protectedOperationShutdown: { drainDeadlineMs: 25 },
+      memory: (moduleId) => {
+        const memory = new GuardedMemoryPort({
+          store,
+          policy: { evaluate: async () => ({ effect: "allow" as const, reason: "test allow" }) },
+          audit: { publishDecision: async () => true, publishFailure: async () => undefined },
+          scope: { tenantId: "tenant", actorId: "actor", moduleId }
+        });
+        memoryByModule.set(moduleId, memory);
+        return memory;
+      }
+    });
+    let stopCalls = 0;
+    engine.register({
+      id: "memory-drain-worker",
+      version: "1.0.0",
+      initialize: () => undefined,
+      stop: () => { stopCalls += 1; }
+    });
+
+    await engine.initialize();
+    await engine.start();
+    const memory = memoryByModule.get("memory-drain-worker")!;
+    const pendingRead = memory.read({ namespace: "shutdown", key: "pending" });
+    await readStarted;
+
+    await expect(engine.stop()).rejects.toThrow(/failed to stop/i);
+    expect(engine.state).toBe("failed");
+    expect(stopCalls).toBe(1);
+    await expect(memory.read({ namespace: "shutdown", key: "late" })).rejects.toMatchObject({
+      code: "MEMORY_CAPABILITY_REVOKED"
+    });
+
+    releaseRead('"settled"');
+    await expect(pendingRead).resolves.toBe("settled");
+
+    await engine.stop();
+    expect(stopCalls).toBe(1);
+    expect(engine.state).toBe("stopped");
+  });
+});
