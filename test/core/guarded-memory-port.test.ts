@@ -424,6 +424,42 @@ describe("GuardedMemoryPort — authorization", () => {
     expect(requests[1]?.action).toBe("memory.read");
   });
 
+  it("enforces actor-specific policy within one tenant sharing the same backing store", async () => {
+    const shared = new InMemoryMemoryStore();
+    const read = vi.spyOn(shared, "read");
+    const requests: PolicyRequest[] = [];
+    const policy: PolicyEngine = {
+      evaluate: async (request) => {
+        requests.push(request);
+        return request.actorId === "actor-1"
+          ? { effect: "allow", reason: "actor is authorized" }
+          : { effect: "deny", reason: "actor is not authorized" };
+      }
+    };
+    const actorA = setup({ store: shared, scope: scopeA, policy });
+    const actorB = setup({
+      store: shared,
+      scope: { ...scopeA, actorId: "actor-2" },
+      policy
+    });
+    const address = { namespace: "private", key: "profile" };
+
+    await actorA.guard.write(address, { owner: "actor-1" });
+    expect(await codeOf(actorB.guard.read(address))).toBe("MEMORY_ACCESS_DENIED");
+
+    expect(read).not.toHaveBeenCalled();
+    expect(await actorA.guard.read(address)).toEqual({ owner: "actor-1" });
+    expect(requests.map((request) => request.actorId)).toEqual([
+      "actor-1", "actor-2", "actor-1"
+    ]);
+    expect(actorB.decided[0]).toMatchObject({
+      tenantId: "tenant-a",
+      actorId: "actor-1",
+      moduleId: "module-x",
+      decision: "deny"
+    });
+  });
+
   it("allows only what the policy explicitly allows", async () => {
     const policy: PolicyEngine = {
       evaluate: async (request) =>
