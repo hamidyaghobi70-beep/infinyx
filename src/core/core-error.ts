@@ -1,4 +1,5 @@
 export type CoreErrorCode =
+  | "CORE_ENGINE_OPTIONS_INVALID"
   | "INVALID_MODULE"
   | "DUPLICATE_MODULE"
   | "UNKNOWN_DEPENDENCY"
