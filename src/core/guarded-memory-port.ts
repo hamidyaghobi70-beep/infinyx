@@ -19,7 +19,7 @@ export const DEFAULT_MEMORY_POLICY_TIMEOUT_MS = 5_000;
 export const DEFAULT_MEMORY_AUDIT_TIMEOUT_MS = 5_000;
 const MAX_TIMEOUT_MS = 2_147_483_647;
 const TIMED_OUT = Symbol("timed out");
-const memoryCapabilityRevokers = new WeakMap<object, () => Promise<void>>();
+const memoryCapabilityRevokers = new WeakMap<object, (deadlineAt?: number) => Promise<void>>();
 
 const MAX_SCOPE_SEGMENT_LENGTH = 128;
 const MAX_NAMESPACE_LENGTH = 128;
@@ -273,7 +273,7 @@ export class GuardedMemoryPort implements MemoryPort {
     } as MemoryScope);
     // Modules receive this instance as a capability. Freeze its public surface so
     // they cannot shadow read/write/delete with unguarded replacements.
-    memoryCapabilityRevokers.set(this, () => this.revokeAndDrain());
+    memoryCapabilityRevokers.set(this, (deadlineAt) => this.revokeAndDrain(deadlineAt));
     Object.freeze(this);
   }
 
@@ -337,10 +337,27 @@ export class GuardedMemoryPort implements MemoryPort {
     })();
   }
 
-  private async revokeAndDrain(): Promise<void> {
+  private async revokeAndDrain(deadlineAt?: number): Promise<void> {
+    // Revoke is immediate and permanent, even when the drain exceeds its budget.
     this.#revoked = true;
-    while (this.#activeOperations.size > 0) {
-      await Promise.all([...this.#activeOperations]);
+    const drain = (async () => {
+      while (this.#activeOperations.size > 0) {
+        await Promise.all([...this.#activeOperations]);
+      }
+    })();
+    if (deadlineAt === undefined) {
+      await drain;
+      return;
+    }
+    const remainingMs = Math.max(0, deadlineAt - performance.now());
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      const timedOut = new Promise<never>((_, reject) => {
+        timer = setTimeout(() => reject(new Error("Module memory operations did not drain before the shutdown deadline.")), remainingMs);
+      });
+      await Promise.race([drain, timedOut]);
+    } finally {
+      if (timer !== undefined) clearTimeout(timer);
     }
   }
 
@@ -580,8 +597,8 @@ function normalizeDecision(result: unknown): NormalizedDecision {
 
 
 /** Internal composition-root hook: close a module capability and await all admitted operations. */
-export async function revokeGuardedMemoryPort(port: GuardedMemoryPort): Promise<void> {
+export async function revokeGuardedMemoryPort(port: GuardedMemoryPort, deadlineAt?: number): Promise<void> {
   const revoke = memoryCapabilityRevokers.get(port);
   if (!revoke) throw new TypeError("Unknown guarded memory capability.");
-  await revoke();
+  await revoke(deadlineAt);
 }
