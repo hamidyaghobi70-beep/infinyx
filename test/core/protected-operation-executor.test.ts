@@ -866,3 +866,30 @@ describe("ProtectedOperationExecutor", () => {
   });
 
 });
+
+describe("ProtectedOperationExecutor drain", () => {
+  it("reports unresolved active handler work at deadline and succeeds after actual settlement", async () => {
+    let release!: (value: string) => void;
+    const executor = new ProtectedOperationExecutor({ evaluate: async () => allow }, () => true);
+    const operation = executor.register({
+      id: "drain.unresolved-handler",
+      action: "record.read",
+      resource: "record:drain",
+      validateInput: (value: unknown): value is string => typeof value === "string",
+      handler: () => new Promise<string>((resolve) => { release = resolve; })
+    });
+
+    const execution = executor.execute(operation, { actorId: "drain-caller" }, "input");
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(executor.activeExecutionCount).toBe(1);
+    await expect(executor.drain(Date.now() + 5)).resolves.toBe(false);
+    expect(executor.activeExecutionCount).toBe(1);
+
+    release("completed");
+    await expect(execution).resolves.toMatchObject({ status: "executed", value: "completed" });
+    await expect(executor.drain(Date.now() + 100)).resolves.toBe(true);
+    expect(executor.activeExecutionCount).toBe(0);
+  });
+});
