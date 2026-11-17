@@ -8,6 +8,7 @@ import type {
 } from "./contracts.js";
 
 const DEFAULT_POLICY_TIMEOUT_MS = 5_000;
+const MAX_ACTIVE_POLICY_EVALUATIONS = 512;
 
 function deny(reason: string): PolicyDecision {
   return Object.freeze({ effect: "deny", reason });
@@ -213,6 +214,10 @@ export class FailClosedPolicyEngine implements PolicyEngine {
       ? this.timeoutMs
       : deadlineAt - Date.now();
     if (remainingDeadlineMs <= 0) return deny(cancellationMessage("POLICY_TIMEOUT"));
+
+    if (this.activeEvaluations.size >= MAX_ACTIVE_POLICY_EVALUATIONS) {
+      return deny("Policy evaluation concurrency limit exceeded; access denied.");
+    }
 
     const effectiveTimeoutMs = Math.min(this.timeoutMs, remainingDeadlineMs);
     const controller = new AbortController();
