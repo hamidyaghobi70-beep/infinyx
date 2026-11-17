@@ -595,6 +595,39 @@ describe("CoreEngine policy shutdown integration", () => {
     expect(moduleStops).toBe(1);
     expect(engine.state).toBe("stopped");
   });
+
+  it("retries a transient policy shutdown failure without rerunning successful cleanup", async () => {
+    let shutdownCalls = 0;
+    let moduleStops = 0;
+    const engine = new CoreEngine({
+      policy: {
+        evaluate: async () => ({ effect: "allow", reason: "allowed" }),
+        shutdown: () => {
+          shutdownCalls += 1;
+          if (shutdownCalls === 1) throw new Error("temporary policy shutdown failure");
+        }
+      }
+    });
+    engine.register({
+      id: "policy-retry-module",
+      version: "1.0.0",
+      stop: () => { moduleStops += 1; }
+    });
+
+    await engine.initialize();
+    await engine.start();
+    await expect(engine.stop()).rejects.toMatchObject({
+      code: "POLICY_SHUTDOWN_FAILED"
+    });
+    expect(engine.state).toBe("stopping");
+    expect(moduleStops).toBe(0);
+    expect(shutdownCalls).toBe(1);
+
+    await engine.stop();
+    expect(shutdownCalls).toBe(2);
+    expect(moduleStops).toBe(1);
+    expect(engine.state).toBe("stopped");
+  });
 });
 
 describe("CoreEngine module memory capability lifetime", () => {
