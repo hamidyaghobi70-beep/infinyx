@@ -523,6 +523,9 @@ export class CoreEngine {
           await module.stop?.(this.createContext(module.id));
         });
         this.moduleStates.set(module.id, preserveFailure ? "failed" : "stopped");
+        // Release the module-scoped capability only after its cleanup succeeds.
+        // Failed hooks retain it so an explicit cleanup retry sees the same context.
+        this.moduleMemory.delete(module.id);
         // Successful hooks leave the retry queue. Failed hooks remain queued
         // for an explicit later stop() call; successful siblings never rerun.
         this.initializedModules = this.initializedModules.filter(
