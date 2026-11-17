@@ -3,6 +3,17 @@ import { writeFileSync } from "node:fs";
 
 export default {
   async evaluate(request, options) {
+    if (request.action === "detached-descendant") {
+      const descendant = spawn(process.execPath, [
+        "-e",
+        "setInterval(() => {}, 1000);"
+      ], { stdio: "ignore", detached: true });
+      descendant.unref();
+      if (!descendant.pid) throw new Error("Detached descendant process did not start.");
+      writeFileSync(request.resource, String(descendant.pid), "utf8");
+      return { effect: "allow", reason: "Detached descendant fixture started." };
+    }
+
     if (request.action === "orphan-descendant") {
       const descendant = spawn(process.execPath, [
         "-e",
