@@ -175,16 +175,43 @@ export class FailClosedPolicyEngine implements PolicyEngine {
     if (!input) return deny("Policy request cannot be safely snapshotted; access denied.");
     if (!isValidPolicyRequest(input)) return deny("Policy request is invalid; access denied.");
 
-    if (options?.signal?.aborted) {
-      return deny(cancellationMessage(reasonFromSignal(options.signal, "CALLER_CANCELLED")));
-    }
-    if (options?.parentSignal?.aborted) {
-      return deny(cancellationMessage("PARENT_CANCELLED"));
+    // Capture every caller-controlled option exactly once. Accessors and Proxy
+    // traps are untrusted input and must never escape this boundary.
+    let callerSignal: AbortSignal | undefined;
+    let parentSignal: AbortSignal | undefined;
+    let deadlineAt: number | undefined;
+    try {
+      callerSignal = options?.signal;
+      parentSignal = options?.parentSignal;
+      deadlineAt = options?.deadlineAt;
+      if (deadlineAt !== undefined && !Number.isFinite(deadlineAt)) {
+        return deny("Policy evaluation deadline is invalid; access denied.");
+      }
+      if (callerSignal !== undefined &&
+          (typeof callerSignal.aborted !== "boolean" ||
+           typeof callerSignal.addEventListener !== "function" ||
+           typeof callerSignal.removeEventListener !== "function")) {
+        return deny("Caller cancellation signal is invalid; access denied.");
+      }
+      if (parentSignal !== undefined &&
+          (typeof parentSignal.aborted !== "boolean" ||
+           typeof parentSignal.addEventListener !== "function" ||
+           typeof parentSignal.removeEventListener !== "function")) {
+        return deny("Parent cancellation signal is invalid; access denied.");
+      }
+      if (callerSignal?.aborted) {
+        return deny(cancellationMessage(reasonFromSignal(callerSignal, "CALLER_CANCELLED")));
+      }
+      if (parentSignal?.aborted) {
+        return deny(cancellationMessage("PARENT_CANCELLED"));
+      }
+    } catch {
+      return deny("Policy evaluation cancellation options are invalid; access denied.");
     }
 
-    const remainingDeadlineMs = options?.deadlineAt === undefined
+    const remainingDeadlineMs = deadlineAt === undefined
       ? this.timeoutMs
-      : options.deadlineAt - Date.now();
+      : deadlineAt - Date.now();
     if (remainingDeadlineMs <= 0) return deny(cancellationMessage("POLICY_TIMEOUT"));
 
     const effectiveTimeoutMs = Math.min(this.timeoutMs, remainingDeadlineMs);
@@ -194,7 +221,6 @@ export class FailClosedPolicyEngine implements PolicyEngine {
     let timeout: ReturnType<typeof setTimeout> | undefined;
     let callerAbort: (() => void) | undefined;
     let parentAbort: (() => void) | undefined;
-
     let resolveAbort!: (decision: PolicyDecision) => void;
     const aborted = new Promise<PolicyDecision>((resolve) => {
       resolveAbort = resolve;
@@ -212,26 +238,49 @@ export class FailClosedPolicyEngine implements PolicyEngine {
       resolveAbort(deny(cause.message));
     };
 
+    const cleanup = (): void => {
+      this.activeStops.delete(stop);
+      if (timeout !== undefined) {
+        clearTimeout(timeout);
+        timeout = undefined;
+      }
+      if (callerAbort && callerSignal) {
+        try { callerSignal.removeEventListener("abort", callerAbort); } catch {
+          // Cleanup failure must not replace the fail-closed decision.
+        }
+      }
+      if (parentAbort && parentSignal) {
+        try { parentSignal.removeEventListener("abort", parentAbort); } catch {
+          // Keep caller and parent cleanup independent.
+        }
+      }
+    };
+
     this.activeStops.add(stop);
+    try {
+      if (callerSignal) {
+        callerAbort = () => stop(reasonFromSignal(callerSignal!, "CALLER_CANCELLED"));
+        callerSignal.addEventListener("abort", callerAbort, { once: true });
+      }
+      if (parentSignal) {
+        parentAbort = () => stop("PARENT_CANCELLED");
+        parentSignal.addEventListener("abort", parentAbort, { once: true });
+      }
+      timeout = setTimeout(() => stop("POLICY_TIMEOUT"), effectiveTimeoutMs);
 
-    if (options?.signal) {
-      callerAbort = () => stop(reasonFromSignal(options.signal!, "CALLER_CANCELLED"));
-      options.signal.addEventListener("abort", callerAbort, { once: true });
+      // Close the registration race: a signal may abort immediately around
+      // listener installation, so re-check both captured signals.
+      if (callerSignal?.aborted) stop(reasonFromSignal(callerSignal, "CALLER_CANCELLED"));
+      if (parentSignal?.aborted) stop("PARENT_CANCELLED");
+    } catch {
+      cleanup();
+      return deny("Policy evaluation cancellation setup failed; access denied.");
     }
-    if (options?.parentSignal) {
-      parentAbort = () => stop("PARENT_CANCELLED");
-      options.parentSignal.addEventListener("abort", parentAbort, { once: true });
-    }
-
-    timeout = setTimeout(() => stop("POLICY_TIMEOUT"), effectiveTimeoutMs);
 
     try {
-      if (options?.signal?.aborted) stop(reasonFromSignal(options.signal, "CALLER_CANCELLED"));
-      if (options?.parentSignal?.aborted) stop("PARENT_CANCELLED");
-
       const delegateOptions: PolicyEvaluationOptions = {
         signal: controller.signal,
-        ...(options?.deadlineAt === undefined ? {} : { deadlineAt: options.deadlineAt })
+        ...(deadlineAt === undefined ? {} : { deadlineAt })
       };
       const evaluation = Promise.resolve()
         .then(() => {
@@ -258,14 +307,7 @@ export class FailClosedPolicyEngine implements PolicyEngine {
         ? deny(cancellationMessage(stopReason))
         : deny("Policy evaluation failed; access denied.");
     } finally {
-      this.activeStops.delete(stop);
-      if (timeout !== undefined) clearTimeout(timeout);
-      if (callerAbort && options?.signal) {
-        options.signal.removeEventListener("abort", callerAbort);
-      }
-      if (parentAbort && options?.parentSignal) {
-        options.parentSignal.removeEventListener("abort", parentAbort);
-      }
+      cleanup();
     }
   }
 
