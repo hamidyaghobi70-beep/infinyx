@@ -94,8 +94,8 @@ export function snapshotPolicyDecision(value: unknown): PolicyDecision | undefin
 
     const effectDescriptor = descriptors.effect;
     const reasonDescriptor = descriptors.reason;
-    if (!effectDescriptor || !("value" in effectDescriptor) ||
-        !reasonDescriptor || !("value" in reasonDescriptor)) {
+    if (!effectDescriptor || !effectDescriptor.enumerable || !("value" in effectDescriptor) ||
+        !reasonDescriptor || !reasonDescriptor.enumerable || !("value" in reasonDescriptor)) {
       return undefined;
     }
 
