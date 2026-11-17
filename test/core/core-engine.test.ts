@@ -597,3 +597,83 @@ describe("CoreEngine module memory capability lifetime", () => {
     expect(attempts).toBe(2);
   });
 });
+
+
+describe("CoreEngine injected Event Bus capability boundary", () => {
+  it("pins injected Event Bus methods and preserves the adapter receiver", async () => {
+    const adapter = {
+      publishCalls: 0,
+      subscribe() {
+        return () => undefined;
+      },
+      async publish() {
+        this.publishCalls += 1;
+      }
+    };
+    const engine = new CoreEngine({
+      events: adapter as unknown as import("../../src/core/contracts.js").EventBusPort
+    });
+
+    adapter.publish = async () => {
+      throw new Error("replacement method must not run");
+    };
+    await engine.events.publish("core.test", {});
+    expect(adapter.publishCalls).toBe(1);
+    expect(Object.isFrozen(engine.events)).toBe(true);
+  });
+
+  it("rejects accessor-backed Event Bus methods without invoking getters", () => {
+    let getterCalls = 0;
+    const adapter = {
+      publish: async () => undefined
+    };
+    Object.defineProperty(adapter, "subscribe", {
+      configurable: true,
+      enumerable: true,
+      get() {
+        getterCalls += 1;
+        throw new Error("hostile subscribe getter");
+      }
+    });
+
+    expect(() => new CoreEngine({
+      events: adapter as unknown as import("../../src/core/contracts.js").EventBusPort
+    })).toThrow(/event bus capability/i);
+    expect(getterCalls).toBe(0);
+  });
+
+  it("converts hostile Event Bus prototype reflection into a controlled error", () => {
+    const adapter = new Proxy({}, {
+      getPrototypeOf() {
+        throw new Error("hostile Event Bus prototype trap");
+      }
+    });
+
+    expect(() => new CoreEngine({
+      events: adapter as import("../../src/core/contracts.js").EventBusPort
+    })).toThrow(/event bus capability/i);
+  });
+
+  it("does not expose mutable adapter method references to module contexts", async () => {
+    let delivered = 0;
+    const adapter = {
+      subscribe: () => () => undefined,
+      publish: async () => { delivered += 1; }
+    };
+    const engine = new CoreEngine({
+      events: adapter as unknown as import("../../src/core/contracts.js").EventBusPort
+    });
+    let moduleEvents: import("../../src/core/contracts.js").EventBusPort | undefined;
+    engine.register({
+      id: "event-capability-consumer",
+      version: "1.0.0",
+      initialize: (context) => { moduleEvents = context.events; }
+    });
+
+    adapter.publish = async () => { throw new Error("mutated adapter"); };
+    await engine.initialize();
+    await moduleEvents!.publish("module.test", {});
+    expect(delivered).toBe(1);
+    expect(Object.isFrozen(moduleEvents)).toBe(true);
+  });
+});
