@@ -272,8 +272,12 @@ export class CoreEngine {
       const failedModule = [...this.moduleStates.entries()]
         .find(([, state]) => state === "initializing")?.[0];
       this.lifecycle = "failed";
+      // Rollback is a shutdown path too: bound module memory draining with one
+      // monotonic budget so a failed initialize/start cannot hang indefinitely.
+      const rollbackDeadline = performance.now() + this.drainDeadlineMs;
       const cleanupErrors = await this.cleanupInitializedModules(
-        failedModule ? new Set([failedModule]) : new Set()
+        failedModule ? new Set([failedModule]) : new Set(),
+        rollbackDeadline
       );
       const failure = new CoreError(
         "MODULE_INITIALIZATION_FAILED",
