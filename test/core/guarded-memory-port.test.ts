@@ -1,3 +1,9 @@
+describe("GuardedMemoryPort public API boundary", () => {
+  it("does not expose the internal capability revoker from the public core entry point", () => {
+    expect("revokeGuardedMemoryPort" in CorePublicApi).toBe(false);
+  });
+});
+
 import { describe, expect, it, vi } from "vitest";
 import type {
   EventBusPort,
@@ -10,6 +16,7 @@ import { DefaultDenyPolicyEngine } from "../../src/core/default-policy-engine.js
 import { InMemoryEventBus } from "../../src/core/event-bus.js";
 import {
   GuardedMemoryPort,
+  revokeGuardedMemoryPort,
   MEMORY_ACCESS_DECIDED_EVENT,
   MEMORY_ACCESS_FAILED_EVENT
 } from "../../src/core/guarded-memory-port.js";
@@ -22,6 +29,7 @@ import type {
 } from "../../src/core/guarded-memory-port.js";
 import { InMemoryMemoryStore } from "../../src/core/in-memory-memory-store.js";
 import { MemoryAccessError } from "../../src/core/memory-error.js";
+import * as CorePublicApi from "../../src/core/index.js";
 
 const allowAll: PolicyEngine = {
   evaluate: async () => ({ effect: "allow", reason: "test allow" })
@@ -128,6 +136,170 @@ describe("GuardedMemoryPort — data handling", () => {
 
     const raw = await backing.read(backing.addresses()[0]!);
     expect(raw).toBe('{"a":1}');
+  });
+});
+
+describe("GuardedMemoryPort lifecycle revocation", () => {
+  it("rejects new operations after the composition root revokes the capability", async () => {
+    const { guard } = setup();
+
+    await revokeGuardedMemoryPort(guard);
+
+    expect(await codeOf(guard.read({ namespace: "n", key: "k" }))).toBe("MEMORY_CAPABILITY_REVOKED");
+    expect(await codeOf(guard.write({ namespace: "n", key: "k" }, "v"))).toBe("MEMORY_CAPABILITY_REVOKED");
+    expect(await codeOf(guard.delete({ namespace: "n", key: "k" }))).toBe("MEMORY_CAPABILITY_REVOKED");
+  });
+
+  it("closes admission immediately and waits for already-admitted operations to settle", async () => {
+    let releaseRead!: () => void;
+    let markReadStarted!: () => void;
+    const readStarted = new Promise<void>((resolve) => { markReadStarted = resolve; });
+    const readGate = new Promise<void>((resolve) => { releaseRead = resolve; });
+    const store: MemoryPort = {
+      read: async () => { markReadStarted(); await readGate; return null; },
+      write: async () => undefined,
+      delete: async () => undefined
+    };
+    const { guard } = setup({ store });
+    const operation = guard.read({ namespace: "n", key: "k" });
+    await readStarted;
+
+    let revoked = false;
+    const revocation = revokeGuardedMemoryPort(guard).then(() => { revoked = true; });
+    expect(await codeOf(guard.read({ namespace: "n", key: "later" }))).toBe("MEMORY_CAPABILITY_REVOKED");
+    expect(revoked).toBe(false);
+
+    releaseRead();
+    await operation;
+    await revocation;
+    expect(revoked).toBe(true);
+  });
+
+  it("rejects a drain that settles after its deadline even if the timer callback has not run", async () => {
+    let releaseRead!: () => void;
+    let markReadStarted!: () => void;
+    const readStarted = new Promise<void>((resolve) => { markReadStarted = resolve; });
+    const readGate = new Promise<void>((resolve) => { releaseRead = resolve; });
+    const store: MemoryPort = {
+      read: async () => { markReadStarted(); await readGate; return null; },
+      write: async () => undefined,
+      delete: async () => undefined
+    };
+    const { guard } = setup({ store });
+    const operation = guard.read({ namespace: "n", key: "k" });
+    await readStarted;
+
+    const monotonicNow = vi.spyOn(performance, "now").mockReturnValue(100);
+    const revocation = revokeGuardedMemoryPort(guard, 150);
+    monotonicNow.mockReturnValue(200);
+    releaseRead();
+    await operation;
+
+    await expect(revocation).rejects.toThrow(/did not drain before the shutdown deadline/i);
+    monotonicNow.mockRestore();
+  });
+
+  it("allows an already-empty drain even when its deadline has elapsed", async () => {
+    const { guard } = setup();
+    const monotonicNow = vi.spyOn(performance, "now").mockReturnValue(200);
+
+    await expect(revokeGuardedMemoryPort(guard, 100)).resolves.toBeUndefined();
+
+    monotonicNow.mockRestore();
+  });
+});
+
+describe("GuardedMemoryPort dependency method integrity", () => {
+  it("rejects hostile constructor option accessors without invoking them", () => {
+    let getterCalls = 0;
+    const options = Object.defineProperties({}, {
+      store: { enumerable: true, value: new InMemoryMemoryStore() },
+      policy: { enumerable: true, value: allowAll },
+      audit: {
+        enumerable: true,
+        get() {
+          getterCalls += 1;
+          throw new Error("hostile audit option getter");
+        }
+      },
+      scope: { enumerable: true, value: scopeA }
+    });
+
+    expect(() => new GuardedMemoryPort(options as GuardedMemoryPortOptions))
+      .toThrow(/stable data properties/i);
+    expect(getterCalls).toBe(0);
+  });
+
+  it("rejects hostile scope accessors without invoking them", () => {
+    let getterCalls = 0;
+    const scope = Object.defineProperties({}, {
+      tenantId: {
+        enumerable: true,
+        get() {
+          getterCalls += 1;
+          throw new Error("hostile tenant getter");
+        }
+      },
+      actorId: { enumerable: true, value: "actor-1" },
+      moduleId: { enumerable: true, value: "module-x" }
+    });
+
+    expect(() => new GuardedMemoryPort({
+      store: new InMemoryMemoryStore(),
+      policy: allowAll,
+      audit: {
+        publishDecision: async () => true,
+        publishFailure: async () => undefined
+      },
+      scope: scope as MemoryScope
+    })).toThrow(/MEMORY_INVALID_SCOPE|tenantId, actorId/i);
+    expect(getterCalls).toBe(0);
+  });
+
+  it("pins backing-store methods so later mutation cannot bypass the guarded boundary", async () => {
+    const store = new InMemoryMemoryStore();
+    const guard = new GuardedMemoryPort({
+      store,
+      policy: allowAll,
+      audit: {
+        publishDecision: async () => true,
+        publishFailure: async () => undefined
+      },
+      scope: scopeA
+    });
+
+    await guard.write({ namespace: "notes", key: "pinned" }, "trusted");
+    const replacementRead = vi.fn(async () => "tampered");
+    store.read = replacementRead as typeof store.read;
+
+    await expect(guard.read({ namespace: "notes", key: "pinned" })).resolves.toBe("trusted");
+    expect(replacementRead).not.toHaveBeenCalled();
+  });
+
+  it("rejects accessor-backed dependency methods without invoking their getters", () => {
+    let getterCalls = 0;
+    const store = {
+      write: async () => undefined,
+      delete: async () => undefined
+    };
+    Object.defineProperty(store, "read", {
+      configurable: true,
+      get() {
+        getterCalls += 1;
+        throw new Error("hostile store method getter");
+      }
+    });
+
+    expect(() => new GuardedMemoryPort({
+      store: store as unknown as MemoryPort,
+      policy: allowAll,
+      audit: {
+        publishDecision: async () => true,
+        publishFailure: async () => undefined
+      },
+      scope: scopeA
+    })).toThrow(/stable data methods/i);
+    expect(getterCalls).toBe(0);
   });
 });
 
@@ -257,6 +429,42 @@ describe("GuardedMemoryPort — authorization", () => {
       context: { attributes: { tenantId: "tenant-a", moduleId: "module-x", namespace: "my notes" } }
     });
     expect(requests[1]?.action).toBe("memory.read");
+  });
+
+  it("enforces actor-specific policy within one tenant sharing the same backing store", async () => {
+    const shared = new InMemoryMemoryStore();
+    const read = vi.spyOn(shared, "read");
+    const requests: PolicyRequest[] = [];
+    const policy: PolicyEngine = {
+      evaluate: async (request) => {
+        requests.push(request);
+        return request.actorId === "actor-1"
+          ? { effect: "allow", reason: "actor is authorized" }
+          : { effect: "deny", reason: "actor is not authorized" };
+      }
+    };
+    const actorA = setup({ store: shared, scope: scopeA, policy });
+    const actorB = setup({
+      store: shared,
+      scope: { ...scopeA, actorId: "actor-2" },
+      policy
+    });
+    const address = { namespace: "private", key: "profile" };
+
+    await actorA.guard.write(address, { owner: "actor-1" });
+    expect(await codeOf(actorB.guard.read(address))).toBe("MEMORY_ACCESS_DENIED");
+
+    expect(read).not.toHaveBeenCalled();
+    expect(await actorA.guard.read(address)).toEqual({ owner: "actor-1" });
+    expect(requests.map((request) => request.actorId)).toEqual([
+      "actor-1", "actor-2", "actor-1"
+    ]);
+    expect(actorB.decided[0]).toMatchObject({
+      tenantId: "tenant-a",
+      actorId: "actor-1",
+      moduleId: "module-x",
+      decision: "deny"
+    });
   });
 
   it("allows only what the policy explicitly allows", async () => {
@@ -418,39 +626,41 @@ describe("GuardedMemoryPort — input validation", () => {
     expect(backing.size).toBe(0);
   });
 
-  it("reads address properties once, so accessor-based addresses cannot change after validation", async () => {
-    let keyReads = 0;
-    const shifting = {
-      namespace: "n",
-      get key() {
-        keyReads += 1;
-        return keyReads === 1 ? "valid" : "bad\u0000key";
-      }
-    };
-    const evaluate = vi.fn(async () => ({ effect: "allow" as const, reason: "ok" }));
-    const { guard, memoryStore } = setup({ policy: { evaluate } });
-
-    await guard.write(shifting, 1);
-
-    expect(keyReads).toBe(1);
-    expect(memoryStore.addresses().map((address) => address.key)).toEqual(["valid"]);
-    expect(evaluate).toHaveBeenCalledWith(
-      expect.objectContaining({ resource: "memory://tenant-a/n/valid" })
-    );
-  });
-
-  it("treats an address whose accessor throws as an invalid address", async () => {
+  it("rejects accessor-backed addresses without invoking getters", async () => {
+    let getterCalls = 0;
     const evaluate = vi.fn(async () => ({ effect: "allow" as const, reason: "ok" }));
     const { guard, memoryStore } = setup({ policy: { evaluate } });
     const hostile = {
       namespace: "n",
       get key(): string {
-        throw new Error("accessor exploded");
+        getterCalls += 1;
+        return "k";
       }
     };
 
     expect(await codeOf(guard.write(hostile, 1))).toBe("MEMORY_INVALID_ADDRESS");
     expect(await codeOf(guard.read(hostile))).toBe("MEMORY_INVALID_ADDRESS");
+    expect(await codeOf(guard.delete(hostile))).toBe("MEMORY_INVALID_ADDRESS");
+    expect(getterCalls).toBe(0);
+    expect(evaluate).not.toHaveBeenCalled();
+    expect(memoryStore.size).toBe(0);
+  });
+
+  it("rejects hostile Proxy address reflection without invoking property getters", async () => {
+    const evaluate = vi.fn(async () => ({ effect: "allow" as const, reason: "ok" }));
+    const { guard, memoryStore } = setup({ policy: { evaluate } });
+    const hostile = new Proxy(
+      { namespace: "n", key: "k" },
+      {
+        ownKeys() {
+          throw new Error("hostile ownKeys trap");
+        }
+      }
+    );
+
+    expect(await codeOf(guard.write(hostile, 1))).toBe("MEMORY_INVALID_ADDRESS");
+    expect(await codeOf(guard.read(hostile))).toBe("MEMORY_INVALID_ADDRESS");
+    expect(await codeOf(guard.delete(hostile))).toBe("MEMORY_INVALID_ADDRESS");
     expect(evaluate).not.toHaveBeenCalled();
     expect(memoryStore.size).toBe(0);
   });
@@ -632,6 +842,33 @@ describe("GuardedMemoryPort — deadlines", () => {
     expect(await codeOf(guard.write(deadlineAddress, "v"))).toBe("MEMORY_ACCESS_DENIED");
     expect(write).not.toHaveBeenCalled();
     expect(decided[0]).toMatchObject({ decision: "deny", reason: "Policy evaluation timed out." });
+  });
+
+  it("never applies a late allow decision after the policy deadline and capability revocation", async () => {
+    let resolvePolicy!: (decision: { effect: "allow"; reason: string }) => void;
+    const policy: PolicyEngine = {
+      evaluate: () => new Promise((resolve) => { resolvePolicy = resolve; })
+    };
+    const store = new InMemoryMemoryStore();
+    const write = vi.spyOn(store, "write");
+    const { guard, decided } = setup({ store, policy, policyTimeoutMs: 10 });
+
+    const operation = guard.write(deadlineAddress, "must-not-persist");
+    expect(await codeOf(operation)).toBe("MEMORY_ACCESS_DENIED");
+    await revokeGuardedMemoryPort(guard);
+    expect(write).not.toHaveBeenCalled();
+
+    resolvePolicy({ effect: "allow", reason: "late allow must be ignored" });
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(write).not.toHaveBeenCalled();
+    expect(decided[0]).toMatchObject({
+      decision: "deny",
+      reason: "Policy evaluation timed out."
+    });
+    expect(await codeOf(guard.write(deadlineAddress, "after-revocation"))).toBe("MEMORY_CAPABILITY_REVOKED");
+    expect(write).not.toHaveBeenCalled();
   });
 
   it("applies the policy deadline to reads and deletes", async () => {
@@ -915,5 +1152,161 @@ describe("GuardedMemoryPort — Core Engine integration", () => {
 
     expect(observed).toEqual([{ text: "hello" }, "MEMORY_ACCESS_DENIED"]);
     expect(publicAuditSpy).not.toHaveBeenCalled();
+  });
+});
+
+
+describe("GuardedMemoryPort policy decision trust boundary", () => {
+  it("rejects accessor-backed policy decisions without invoking getters or touching the store", async () => {
+    let getterCalls = 0;
+    const decision = Object.defineProperties({}, {
+      effect: {
+        enumerable: true,
+        get() {
+          getterCalls += 1;
+          return "allow";
+        }
+      },
+      reason: {
+        enumerable: true,
+        get() {
+          getterCalls += 1;
+          return "hostile allow";
+        }
+      }
+    });
+    const store: MemoryPort = {
+      read: vi.fn(async () => null),
+      write: vi.fn(async () => undefined),
+      delete: vi.fn(async () => undefined)
+    };
+    const policy: PolicyEngine = { evaluate: async () => decision as never };
+    const { guard, decided } = setup({ store, policy });
+
+    expect(await codeOf(guard.write({ namespace: "n", key: "k" }, "v")))
+      .toBe("MEMORY_ACCESS_DENIED");
+    expect(getterCalls).toBe(0);
+    expect(store.write).not.toHaveBeenCalled();
+    expect(decided).toHaveLength(1);
+    expect(decided[0]?.decision).toBe("deny");
+  });
+
+  it("fails closed on hostile decision Proxy reflection and unexpected own keys", async () => {
+    const hostile = new Proxy(
+      { effect: "allow", reason: "must not pass" },
+      {
+        getPrototypeOf() {
+          throw new Error("hostile prototype trap");
+        }
+      }
+    );
+    const symbolDecision = Object.assign(
+      { effect: "allow", reason: "unexpected symbol" },
+      { [Symbol("extra")]: true }
+    );
+
+    for (const result of [hostile, symbolDecision]) {
+      const store: MemoryPort = {
+        read: vi.fn(async () => null),
+        write: vi.fn(async () => undefined),
+        delete: vi.fn(async () => undefined)
+      };
+      const policy: PolicyEngine = { evaluate: async () => result as never };
+      const { guard, decided } = setup({ store, policy });
+
+      expect(await codeOf(guard.write({ namespace: "n", key: "k" }, "v")))
+        .toBe("MEMORY_ACCESS_DENIED");
+      expect(store.write).not.toHaveBeenCalled();
+      expect(decided[0]?.decision).toBe("deny");
+    }
+  });
+});
+
+
+describe("GuardedMemoryPort memory value snapshot boundary", () => {
+  it("rejects accessor values without invoking getters or calling policy/backend", async () => {
+    let getterCalls = 0;
+    const value = Object.defineProperty({}, "secret", {
+      enumerable: true,
+      get() {
+        getterCalls += 1;
+        return "should never be read";
+      }
+    });
+    const evaluate = vi.fn(async () => ({ effect: "allow" as const, reason: "allow" }));
+    const store: MemoryPort = {
+      read: vi.fn(async () => null),
+      write: vi.fn(async () => undefined),
+      delete: vi.fn(async () => undefined)
+    };
+    const { guard } = setup({ store, policy: { evaluate } });
+
+    expect(await codeOf(guard.write({ namespace: "n", key: "k" }, value)))
+      .toBe("MEMORY_INVALID_VALUE");
+    expect(getterCalls).toBe(0);
+    expect(evaluate).not.toHaveBeenCalled();
+    expect(store.write).not.toHaveBeenCalled();
+  });
+
+  it("rejects hostile Proxies and executable toJSON hooks before serialization", async () => {
+    let trapCalls = 0;
+    let toJSONCalls = 0;
+    const hostile = new Proxy({}, {
+      getPrototypeOf() {
+        trapCalls += 1;
+        throw new Error("hostile value proxy");
+      }
+    });
+    const executable = {
+      toJSON() {
+        toJSONCalls += 1;
+        return { effect: "allow" };
+      }
+    };
+    const { guard } = setup();
+
+    expect(await codeOf(guard.write({ namespace: "n", key: "proxy" }, hostile)))
+      .toBe("MEMORY_INVALID_VALUE");
+    expect(await codeOf(guard.write({ namespace: "n", key: "json" }, executable)))
+      .toBe("MEMORY_INVALID_VALUE");
+    expect(trapCalls).toBeGreaterThan(0);
+    expect(toJSONCalls).toBe(0);
+  });
+});
+
+
+describe("GuardedMemoryPort — bounded backing-store reads", () => {
+  it("rejects a stored string that exceeds the configured byte limit before parsing", async () => {
+    const read = vi.fn(async () => JSON.stringify("x".repeat(128)));
+    const store: MemoryPort = {
+      read,
+      write: async () => undefined,
+      delete: async () => undefined
+    };
+    const { guard, failed } = setup({ store, maxValueBytes: 64 });
+
+    expect(await codeOf(guard.read({ namespace: "n", key: "oversized" })))
+      .toBe("MEMORY_BACKEND_FAILED");
+    expect(read).toHaveBeenCalledTimes(1);
+    expect(failed).toHaveLength(1);
+    expect(failed[0]).toMatchObject({ operation: "read", errorName: "TypeError" });
+  });
+
+  it("rejects valid JSON that exceeds the structured-data depth bound", async () => {
+    let stored = "null";
+    for (let depth = 0; depth < 34; depth += 1) {
+      stored = `{"nested":${stored}}`;
+    }
+    const store: MemoryPort = {
+      read: async () => stored,
+      write: async () => undefined,
+      delete: async () => undefined
+    };
+    const { guard, failed } = setup({ store });
+
+    expect(await codeOf(guard.read({ namespace: "n", key: "deep" })))
+      .toBe("MEMORY_BACKEND_FAILED");
+    expect(failed).toHaveLength(1);
+    expect(failed[0]).toMatchObject({ operation: "read", errorName: "TypeError" });
   });
 });

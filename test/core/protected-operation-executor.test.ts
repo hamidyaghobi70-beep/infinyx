@@ -1,3 +1,4 @@
+import { ProtectedOperationExecutor } from "../../src/core/protected-operation-executor.js";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { CoreEngine } from "../../src/core/core-engine.js";
 import type {
@@ -95,6 +96,31 @@ describe("ProtectedOperationExecutor", () => {
       operation, caller, { value: "no" }, { signal: controller.signal }
     );
     expect(result).toMatchObject({ status: "denied" });
+    expect(handler).not.toHaveBeenCalled();
+  });
+
+  it("fails closed when caller cancellation options or signals have hostile getters", async () => {
+    const { engine, operation, handler } = makeEngine();
+    await ensureStarted(engine);
+
+    const hostileOptions = new Proxy({}, {
+      get() { throw new Error("hostile options getter"); }
+    });
+    await expect(engine.protectedOperations.execute(
+      operation, caller, { value: "no" }, hostileOptions as never
+    )).resolves.toMatchObject({ status: "denied" });
+
+    const hostileSignal = new Proxy({ aborted: false }, {
+      get(target, property, receiver) {
+        if (property === "addEventListener") throw new Error("hostile signal getter");
+        return Reflect.get(target, property, receiver);
+      }
+    });
+    await expect(engine.protectedOperations.execute(
+      operation, { actorId: "hostile-signal" }, { value: "no" },
+      { signal: hostileSignal as unknown as AbortSignal }
+    )).resolves.toMatchObject({ status: "denied" });
+
     expect(handler).not.toHaveBeenCalled();
   });
 
@@ -699,4 +725,451 @@ describe("ProtectedOperationExecutor", () => {
   });
 
 
+  it("passes the same detached immutable snapshot to validation and the handler", async () => {
+    let validatedInput: unknown;
+    let handledInput: unknown;
+    const original = { value: "before", nested: { label: "stable" } };
+    const engine = new CoreEngine({ policy: { evaluate: async () => allow } });
+    const operation = engine.registerProtectedOperation({
+      id: "records.input-snapshot",
+      action: "record.write",
+      resource: "record:snapshot",
+      validateInput: (value: unknown): value is typeof original => {
+        validatedInput = value;
+        return typeof value === "object" && value !== null &&
+          "value" in value && typeof value.value === "string";
+      },
+      handler: (value) => {
+        handledInput = value;
+        return value.value;
+      }
+    });
+    await ensureStarted(engine);
+    const result = await engine.protectedOperations.execute(
+      operation, { actorId: "snapshot-input" }, original
+    );
+    original.value = "mutated";
+    original.nested.label = "mutated";
+
+    expect(result).toEqual({ status: "executed", value: "before" });
+    expect(validatedInput).toBe(handledInput);
+    expect(handledInput).not.toBe(original);
+    expect(handledInput).toEqual({ value: "before", nested: { label: "stable" } });
+    expect(Object.isFrozen(handledInput)).toBe(true);
+    expect(Object.isFrozen((handledInput as typeof original).nested)).toBe(true);
+  });
+
+  it("fails closed when the validator attempts to mutate the immutable snapshot", async () => {
+    const handler = vi.fn(async () => "must-not-run");
+    const evaluator = vi.fn(async () => allow);
+    const engine = new CoreEngine({ policy: { evaluate: evaluator } });
+    const operation = engine.registerProtectedOperation({
+      id: "records.mutating-validator",
+      action: "record.write",
+      resource: "record:mutation",
+      validateInput: (value: unknown): value is { value: string } => {
+        Object.assign(value as object, { value: "tampered" });
+        return true;
+      },
+      handler
+    });
+    await ensureStarted(engine);
+    const result = await engine.protectedOperations.execute(
+      operation, { actorId: "mutating-validator" }, { value: "original" }
+    );
+
+    expect(result).toMatchObject({ status: "denied" });
+    expect(evaluator).not.toHaveBeenCalled();
+    expect(handler).not.toHaveBeenCalled();
+  });
+
+  it("rejects a cyclic operation input before validation and policy", async () => {
+    const validator = vi.fn((value: unknown): value is object => true);
+    const evaluator = vi.fn(async () => allow);
+    const handler = vi.fn(async () => "must-not-run");
+    const engine = new CoreEngine({ policy: { evaluate: evaluator } });
+    const operation = engine.registerProtectedOperation({
+      id: "records.invalid-snapshot",
+      action: "record.write",
+      resource: "record:invalid",
+      validateInput: validator,
+      handler
+    });
+    await ensureStarted(engine);
+    const cyclic: Record<string, unknown> = {};
+    cyclic.self = cyclic;
+    const result = await engine.protectedOperations.execute(
+      operation, { actorId: "invalid-snapshot" }, cyclic
+    );
+
+    expect(result).toMatchObject({ status: "denied" });
+    expect(validator).not.toHaveBeenCalled();
+    expect(evaluator).not.toHaveBeenCalled();
+    expect(handler).not.toHaveBeenCalled();
+  });
+
+  it("preserves undefined as a valid protected-operation input", async () => {
+    const engine = new CoreEngine({ policy: { evaluate: async () => allow } });
+    const handler = vi.fn(async (value: undefined) => value === undefined ? "valid" : "invalid");
+    const operation = engine.registerProtectedOperation({
+      id: "records.undefined-input",
+      action: "record.read",
+      resource: "record:undefined",
+      validateInput: (value: unknown): value is undefined => value === undefined,
+      handler
+    });
+    await ensureStarted(engine);
+    const result = await engine.protectedOperations.execute(
+      operation, { actorId: "undefined-input" }, undefined
+    );
+    expect(result).toEqual({ status: "executed", value: "valid" });
+  });
+});
+
+
+describe("protected executor policy decision trust boundary", () => {
+  it("does not invoke policy decision getters after authorization", async () => {
+    let getterCalls = 0;
+    const hostileDecision = Object.defineProperties({}, {
+      effect: {
+        enumerable: true,
+        get() {
+          getterCalls += 1;
+          throw new Error("decision getter must not execute");
+        }
+      },
+      reason: { enumerable: true, value: "malicious decision" }
+    });
+    const handler = vi.fn(async () => "must-not-run");
+    const executor = new ProtectedOperationExecutor({
+      evaluate: async () => hostileDecision as never
+    }, () => true);
+    const operation = executor.register({
+      id: "security.hostile-policy-decision",
+      action: "record.read",
+      resource: "record:hostile",
+      validateInput: (value: unknown): value is { value: string } =>
+        typeof value === "object" && value !== null &&
+        "value" in value && typeof value.value === "string",
+      handler
+    });
+
+    const result = await executor.execute(
+      operation,
+      { actorId: "hostile-policy-test" },
+      { value: "safe input" }
+    );
+
+    expect(result).toMatchObject({ status: "denied" });
+    expect(getterCalls).toBe(0);
+    expect(handler).not.toHaveBeenCalled();
+  });
+});
+
+
+describe("protected executor caller snapshot trust boundary", () => {
+  it("rejects accessor-backed caller identity without invoking its getter", async () => {
+    let getterCalls = 0;
+    const caller = Object.defineProperty({}, "actorId", {
+      enumerable: true,
+      get() {
+        getterCalls += 1;
+        throw new Error("caller getter must not execute");
+      }
+    });
+    const policy = vi.fn(async () => allow);
+    const handler = vi.fn(async () => "must-not-run");
+    const executor = new ProtectedOperationExecutor({
+      evaluate: policy
+    }, () => true);
+    const operation = executor.register({
+      id: "security.hostile-caller",
+      action: "record.read",
+      resource: "record:caller",
+      validateInput: (value: unknown): value is { value: string } =>
+        typeof value === "object" && value !== null &&
+        "value" in value && typeof value.value === "string",
+      handler
+    });
+
+    const result = await executor.execute(operation, caller as never, { value: "input" });
+
+    expect(result).toMatchObject({ status: "denied" });
+    expect(getterCalls).toBe(0);
+    expect(policy).not.toHaveBeenCalled();
+    expect(handler).not.toHaveBeenCalled();
+  });
+});
+
+
+describe("protected-operation cancellation cleanup hardening", () => {
+  it("denies a non-finite deadline before policy evaluation", async () => {
+    const evaluator = vi.fn(async () => allow);
+    const { engine, operation, handler } = makeEngine(evaluator);
+    await ensureStarted(engine);
+
+    const result = await engine.protectedOperations.execute(
+      operation,
+      { actorId: "invalid-deadline" },
+      { value: "no" },
+      { deadlineAt: Number.POSITIVE_INFINITY }
+    );
+
+    expect(result).toMatchObject({ status: "denied" });
+    expect(evaluator).not.toHaveBeenCalled();
+    expect(handler).not.toHaveBeenCalled();
+    await engine.stop();
+  });
+
+  it("cleans up the parent listener even when caller listener cleanup throws", async () => {
+    let parentCleanupCalls = 0;
+    const callerSignal = {
+      aborted: false,
+      addEventListener: () => undefined,
+      removeEventListener: () => { throw new Error("caller cleanup failed"); }
+    } as unknown as AbortSignal;
+    const parentSignal = {
+      aborted: false,
+      addEventListener: () => undefined,
+      removeEventListener: () => { parentCleanupCalls += 1; }
+    } as unknown as AbortSignal;
+    const { engine, operation } = makeEngine();
+    await ensureStarted(engine);
+
+    const result = await engine.protectedOperations.execute(
+      operation,
+      { actorId: "independent-cleanup" },
+      { value: "ok" },
+      { signal: callerSignal, parentSignal }
+    );
+
+    expect(result).toEqual({ status: "executed", value: "OK" });
+    expect(parentCleanupCalls).toBe(1);
+    await engine.stop();
+  });
+});
+
+
+describe("protected-operation child activity resource bounds", () => {
+  it("rejects child activity beyond the per-operation concurrency limit", async () => {
+    let releaseChildren!: () => void;
+    const childGate = new Promise<void>((resolve) => { releaseChildren = resolve; });
+    let childrenRegistered!: () => void;
+    const registered = new Promise<void>((resolve) => { childrenRegistered = resolve; });
+    const engine = new CoreEngine({ policy: { evaluate: async () => allow } });
+    const operation = engine.registerProtectedOperation({
+      id: "records.child-limit",
+      action: "record.write",
+      resource: "record:bounded",
+      validateInput: isRecordInput,
+      handler: async (_input, context) => {
+        const children = Array.from({ length: 1024 }, () =>
+          context.runChild(async () => childGate)
+        );
+        await expect(context.runChild(async () => undefined))
+          .rejects.toThrow(/concurrency limit/i);
+        childrenRegistered();
+        await Promise.all(children);
+        return "bounded";
+      }
+    });
+    await ensureStarted(engine);
+
+    const pending = engine.protectedOperations.execute(
+      operation, { actorId: "child-limit" }, { value: "ok" }
+    );
+    await registered;
+    releaseChildren();
+    await expect(pending).resolves.toEqual({ status: "executed", value: "bounded" });
+    await engine.stop();
+  });
+
+  it("rejects child activity beyond the maximum nesting depth", async () => {
+    const engine = new CoreEngine({ policy: { evaluate: async () => allow } });
+    const operation = engine.registerProtectedOperation({
+      id: "records.child-depth",
+      action: "record.write",
+      resource: "record:depth",
+      validateInput: isRecordInput,
+      handler: async (_input, context) => {
+        const descend = async (scope: typeof context, depth: number): Promise<void> => {
+          await scope.runChild(async (childScope) => {
+            if (depth === 63) {
+              await expect(childScope.runChild(async () => undefined))
+                .rejects.toThrow(/nesting limit/i);
+              return;
+            }
+            await descend(childScope, depth + 1);
+          });
+        };
+        await descend(context, 0);
+        return "bounded";
+      }
+    });
+    await ensureStarted(engine);
+
+    await expect(engine.protectedOperations.execute(
+      operation, { actorId: "child-depth" }, { value: "ok" }
+    )).resolves.toEqual({ status: "executed", value: "bounded" });
+    await engine.stop();
+  });
+});
+
+
+describe("global protected-operation admission bound", () => {
+  it("caps admitted handlers across the entire Core Engine", async () => {
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    let allStarted!: () => void;
+    const started = new Promise<void>((resolve) => { allStarted = resolve; });
+    let startedCount = 0;
+    const handler = async () => {
+      startedCount += 1;
+      if (startedCount === 256) allStarted();
+      await gate;
+      return "complete";
+    };
+    const engine = new CoreEngine({ policy: { evaluate: async () => allow } });
+    const operation = engine.registerProtectedOperation({
+      id: "records.global-limit",
+      action: "record.write",
+      resource: "record:global",
+      validateInput: (value: unknown): value is undefined => value === undefined,
+      handler
+    });
+    await ensureStarted(engine);
+
+    const active = Array.from({ length: 256 }, (_, index) =>
+      engine.protectedOperations.execute(
+        operation, { actorId: "global-limit-" + index }, undefined
+      )
+    );
+    await started;
+
+    const overflow = await engine.protectedOperations.execute(
+      operation, { actorId: "global-limit-overflow" }, undefined
+    );
+    expect(overflow).toMatchObject({ status: "denied" });
+    expect(startedCount).toBe(256);
+
+    release();
+    const results = await Promise.all(active);
+    expect(results).toHaveLength(256);
+    expect(results.every((result) => result.status === "executed")).toBe(true);
+    await engine.stop();
+  });
+});
+
+
+describe("synchronous child callback failure", () => {
+  it("observes a detached child rejection when its callback throws synchronously", async () => {
+    const engine = new CoreEngine({ policy: { evaluate: async () => allow } });
+    const operation = engine.registerProtectedOperation({
+      id: "records.sync-child-throw",
+      action: "record.write",
+      resource: "record:sync-child-throw",
+      validateInput: isRecordInput,
+      handler: (_input, context) => {
+        void context.runChild(() => {
+          throw new Error("synchronous child failure");
+        });
+        return "handler-completed";
+      }
+    });
+    await ensureStarted(engine);
+
+    await expect(engine.protectedOperations.execute(
+      operation, { actorId: "sync-child-throw" }, { value: "ok" }
+    )).resolves.toEqual({
+      status: "failed",
+      reason: "Protected operation handler or child activity failed."
+    });
+    await engine.stop();
+  });
+});
+
+
+describe("child registration after cancellation", () => {
+  it("rejects new descendants after the parent operation is cancelled", async () => {
+    const callerController = new AbortController();
+    let releaseChild!: () => void;
+    const childGate = new Promise<void>((resolve) => { releaseChild = resolve; });
+    let childStarted!: () => void;
+    const started = new Promise<void>((resolve) => { childStarted = resolve; });
+    const nestedHandler = vi.fn(async () => "must-not-run");
+
+    const engine = new CoreEngine({ policy: { evaluate: async () => allow } });
+    const operation = engine.registerProtectedOperation({
+      id: "records.cancelled-child-registration",
+      action: "record.write",
+      resource: "record:cancelled",
+      validateInput: isRecordInput,
+      handler: async (_input, context) => {
+        const child = context.runChild(async (childContext) => {
+          childStarted();
+          await childGate;
+          await expect(childContext.runChild(nestedHandler))
+            .rejects.toThrow(/closed after cancellation/i);
+        });
+        await child;
+        return "completed";
+      }
+    });
+    await ensureStarted(engine);
+
+    const pending = engine.protectedOperations.execute(
+      operation,
+      { actorId: "cancelled-child-registration" },
+      { value: "ok" },
+      { signal: callerController.signal }
+    );
+    await started;
+    callerController.abort();
+    releaseChild();
+
+    await expect(pending).resolves.toEqual({ status: "executed", value: "completed" });
+    expect(nestedHandler).not.toHaveBeenCalled();
+    await engine.stop();
+  });
+});
+
+
+describe("protected-operation registration trust boundary", () => {
+  it("rejects accessor-backed registration fields without invoking getters", () => {
+    let getterCalls = 0;
+    const definition = {
+      id: "security.accessor-registration",
+      action: "record.read",
+      resource: "record:accessor",
+      validateInput: (value: unknown): value is string => typeof value === "string",
+      get handler() {
+        getterCalls += 1;
+        throw new Error("handler getter must not run");
+      }
+    };
+    const executor = new ProtectedOperationExecutor({ evaluate: async () => allow }, () => true);
+    expect(() => executor.register(definition as never)).toThrow(/registration is invalid/i);
+    expect(getterCalls).toBe(0);
+  });
+
+  it("pins registration fields against mutation after registration", async () => {
+    const executor = new ProtectedOperationExecutor({ evaluate: async () => allow }, () => true);
+    const originalHandler = vi.fn(async () => "original");
+    const replacementHandler = vi.fn(async () => "replacement");
+    const definition = {
+      id: "security.pinned-registration",
+      action: "record.read",
+      resource: "record:pinned",
+      validateInput: (value: unknown): value is string => typeof value === "string",
+      handler: originalHandler
+    };
+    const operation = executor.register(definition);
+    definition.action = "admin.delete";
+    definition.resource = "record:mutated";
+    definition.handler = replacementHandler;
+    const result = await executor.execute(operation, { actorId: "pinned" }, "input");
+    expect(result).toEqual({ status: "executed", value: "original" });
+    expect(originalHandler).toHaveBeenCalledTimes(1);
+    expect(replacementHandler).not.toHaveBeenCalled();
+  });
 });

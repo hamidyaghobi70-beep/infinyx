@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { CoreEngine } from "../../src/core/core-engine.js";
 import { FailClosedPolicyEngine } from "../../src/core/fail-closed-policy-engine.js";
-import type { PolicyRequest } from "../../src/core/contracts.js";
+import type { PolicyEngine, PolicyRequest } from "../../src/core/contracts.js";
 
 const request: PolicyRequest = {
   actorId: "test-actor",
@@ -11,6 +11,41 @@ const request: PolicyRequest = {
 
 afterEach(() => {
   vi.useRealTimers();
+});
+
+describe("FailClosedPolicyEngine delegate method integrity", () => {
+  it("pins evaluator and shutdown methods against later delegate mutation", async () => {
+    const originalEvaluate = vi.fn(async () => ({ effect: "allow" as const, reason: "pinned" }));
+    const originalShutdown = vi.fn(async () => undefined);
+    const delegate: PolicyEngine = { evaluate: originalEvaluate, shutdown: originalShutdown };
+    const policy = new FailClosedPolicyEngine(delegate);
+    const replacementEvaluate = vi.fn(async () => ({ effect: "deny" as const, reason: "replaced" }));
+    const replacementShutdown = vi.fn(async () => { throw new Error("replacement shutdown"); });
+    delegate.evaluate = replacementEvaluate;
+    delegate.shutdown = replacementShutdown;
+
+    await expect(policy.evaluate(request)).resolves.toEqual({ effect: "allow", reason: "pinned" });
+    await expect(policy.shutdown()).resolves.toBeUndefined();
+    expect(originalEvaluate).toHaveBeenCalledTimes(1);
+    expect(originalShutdown).toHaveBeenCalledTimes(1);
+    expect(replacementEvaluate).not.toHaveBeenCalled();
+    expect(replacementShutdown).not.toHaveBeenCalled();
+  });
+
+  it("rejects accessor-backed delegate methods without invoking getters", () => {
+    let getterCalls = 0;
+    const delegate = Object.defineProperty({}, "evaluate", {
+      enumerable: true,
+      get() {
+        getterCalls += 1;
+        throw new Error("hostile evaluator getter");
+      }
+    });
+
+    expect(() => new FailClosedPolicyEngine(delegate as never))
+      .toThrow(/stable data methods/i);
+    expect(getterCalls).toBe(0);
+  });
 });
 
 describe("FailClosedPolicyEngine", () => {
@@ -258,6 +293,48 @@ describe("FailClosedPolicyEngine caller and parent cancellation", () => {
     expect(observedSignal?.aborted).toBe(true);
   });
 
+
+  it("fails closed when a caller abort reason has hostile reflection traps", async () => {
+    const reason = new Proxy({}, {
+      has() { throw new Error("hostile has trap"); },
+      get() { throw new Error("hostile get trap"); },
+      getOwnPropertyDescriptor() { throw new Error("hostile descriptor trap"); }
+    });
+    const controller = new AbortController();
+    controller.abort(reason);
+    const evaluator = vi.fn(async () => ({
+      effect: "allow" as const,
+      reason: "must not execute"
+    }));
+    const policy = new FailClosedPolicyEngine({ evaluate: evaluator });
+
+    await expect(policy.evaluate(request, { signal: controller.signal }))
+      .resolves.toMatchObject({ effect: "deny" });
+    expect(evaluator).not.toHaveBeenCalled();
+  });
+
+  it("handles hostile abort reasons during active cancellation", async () => {
+    const reason = new Proxy({}, {
+      getOwnPropertyDescriptor() { throw new Error("hostile descriptor trap"); }
+    });
+    const controller = new AbortController();
+    let evaluatorStarted!: () => void;
+    const started = new Promise<void>((resolve) => { evaluatorStarted = resolve; });
+    const policy = new FailClosedPolicyEngine({
+      evaluate: (_request, options) => new Promise((resolve) => {
+        evaluatorStarted();
+        options?.signal?.addEventListener("abort", () => {
+          resolve({ effect: "deny", reason: "cooperatively stopped" });
+        }, { once: true });
+      })
+    });
+
+    const pending = policy.evaluate(request, { signal: controller.signal });
+    await started;
+    controller.abort(reason);
+    await expect(pending).resolves.toMatchObject({ effect: "deny" });
+  });
+
   it("does not allow cancellation after a settled result to rewrite that result", async () => {
     const controller = new AbortController();
     const policy = new FailClosedPolicyEngine({
@@ -324,4 +401,252 @@ describe("FailClosedPolicyEngine caller and parent cancellation", () => {
     });
   });
 
+  it("shares repeated shutdown retries and remains closed after transient failures", async () => {
+    let shutdownCalls = 0;
+    let releaseSecond!: (error?: Error) => void;
+    const secondAttempt = new Promise<void>((resolve, reject) => {
+      releaseSecond = (error) => error ? reject(error) : resolve();
+    });
+    const delegate: PolicyEngine = {
+      evaluate: async () => ({ effect: "allow", reason: "allowed" }),
+      shutdown: () => {
+        shutdownCalls += 1;
+        if (shutdownCalls === 1) throw new Error("first transient failure");
+        if (shutdownCalls === 2) return secondAttempt;
+        return Promise.resolve();
+      }
+    };
+    const policy = new FailClosedPolicyEngine(delegate);
+
+    await expect(policy.shutdown()).rejects.toThrow();
+    await expect(policy.evaluate(request)).resolves.toMatchObject({ effect: "deny" });
+
+    const retryA = policy.shutdown();
+    const retryB = policy.shutdown();
+    expect(retryB).toBe(retryA);
+    expect(shutdownCalls).toBe(2);
+
+    releaseSecond(new Error("second transient failure"));
+    await expect(retryA).rejects.toThrow();
+    expect(shutdownCalls).toBe(2);
+    await expect(policy.evaluate(request)).resolves.toMatchObject({ effect: "deny" });
+
+    await expect(policy.shutdown()).resolves.toBeUndefined();
+    expect(shutdownCalls).toBe(3);
+    await expect(policy.evaluate(request)).resolves.toMatchObject({ effect: "deny" });
+  });
+
+});
+
+
+describe("untrusted policy decision descriptors", () => {
+  it("denies accessor-backed decisions without invoking getters", async () => {
+    let getterCalls = 0;
+    const output = Object.defineProperties({}, {
+      effect: {
+        enumerable: true,
+        get() {
+          getterCalls += 1;
+          throw new Error("getter must not execute");
+        }
+      },
+      reason: { enumerable: true, value: "apparently valid" }
+    });
+    const policy = new FailClosedPolicyEngine({
+      evaluate: async () => output as never
+    });
+
+    await expect(policy.evaluate(request)).resolves.toMatchObject({ effect: "deny" });
+    expect(getterCalls).toBe(0);
+  });
+
+  it("snapshots a data-only Proxy without invoking its get trap", async () => {
+    let getCalls = 0;
+    const output = new Proxy(
+      { effect: "allow" as const, reason: "descriptor snapshot" },
+      {
+        get() {
+          getCalls += 1;
+          throw new Error("property get trap must not execute");
+        }
+      }
+    );
+    const policy = new FailClosedPolicyEngine({
+      evaluate: async () => output
+    });
+
+    await expect(policy.evaluate(request)).resolves.toEqual({
+      effect: "allow",
+      reason: "descriptor snapshot"
+    });
+    expect(getCalls).toBe(0);
+  });
+
+  it("denies when a Proxy reflection trap throws", async () => {
+    const output = new Proxy(
+      { effect: "allow" as const, reason: "must not be trusted" },
+      {
+        ownKeys() {
+          throw new Error("untrusted reflection trap");
+        }
+      }
+    );
+    const policy = new FailClosedPolicyEngine({
+      evaluate: async () => output
+    });
+
+    await expect(policy.evaluate(request)).resolves.toMatchObject({ effect: "deny" });
+  });
+
+  it("rejects decision objects with unexpected own properties", async () => {
+    const policy = new FailClosedPolicyEngine({
+      evaluate: async () => ({
+        effect: "allow",
+        reason: "unexpected property",
+        privilegeEscalation: true
+      } as never)
+    });
+
+    await expect(policy.evaluate(request)).resolves.toMatchObject({ effect: "deny" });
+  });
+
+  it("rejects non-enumerable policy decision fields", async () => {
+    const output = {};
+    Object.defineProperties(output, {
+      effect: { configurable: true, enumerable: false, value: "allow" },
+      reason: { configurable: true, enumerable: true, value: "hidden effect" }
+    });
+    const evaluator = vi.fn(async () => output as never);
+    const policy = new FailClosedPolicyEngine({ evaluate: evaluator });
+
+    await expect(policy.evaluate(request)).resolves.toMatchObject({ effect: "deny" });
+    expect(evaluator).toHaveBeenCalledTimes(1);
+  });
+
+});
+
+
+describe("policy request snapshot descriptor integrity", () => {
+  it("denies requests containing non-enumerable data that structuredClone would omit", async () => {
+    const attributes = { visible: "value" };
+    Object.defineProperty(attributes, "hidden", {
+      configurable: true,
+      enumerable: false,
+      value: "must not be silently discarded"
+    });
+    const evaluator = vi.fn(async () => ({
+      effect: "allow" as const,
+      reason: "must not be reached"
+    }));
+    const policy = new FailClosedPolicyEngine({ evaluate: evaluator });
+
+    await expect(policy.evaluate({
+      ...request,
+      context: { attributes }
+    })).resolves.toMatchObject({ effect: "deny" });
+    expect(evaluator).not.toHaveBeenCalled();
+  });
+});
+
+
+describe("hostile policy evaluation options", () => {
+  it("denies option Proxy getters without rejecting evaluate", async () => {
+    const options = new Proxy({}, {
+      get(_target, property) {
+        if (property === "signal") throw new Error("hostile options getter");
+        return undefined;
+      }
+    });
+    const evaluator = vi.fn(async () => ({
+      effect: "allow" as const,
+      reason: "must not execute"
+    }));
+    const policy = new FailClosedPolicyEngine({ evaluate: evaluator });
+
+    await expect(policy.evaluate(request, options as never)).resolves.toMatchObject({
+      effect: "deny"
+    });
+    expect(evaluator).not.toHaveBeenCalled();
+  });
+
+  it("denies a signal whose listener registration getter throws", async () => {
+    const signal = new Proxy({
+      aborted: false,
+      removeEventListener: () => undefined
+    }, {
+      get(target, property, receiver) {
+        if (property === "addEventListener") throw new Error("hostile registration getter");
+        return Reflect.get(target, property, receiver);
+      }
+    });
+    const evaluator = vi.fn(async () => ({
+      effect: "allow" as const,
+      reason: "must not execute"
+    }));
+    const policy = new FailClosedPolicyEngine({ evaluate: evaluator });
+
+    await expect(policy.evaluate(request, { signal: signal as unknown as AbortSignal }))
+      .resolves.toMatchObject({ effect: "deny" });
+    expect(evaluator).not.toHaveBeenCalled();
+  });
+
+  it("keeps a settled policy decision when signal listener cleanup throws", async () => {
+    const signal = {
+      aborted: false,
+      addEventListener: () => undefined,
+      removeEventListener: () => { throw new Error("hostile cleanup"); }
+    } as unknown as AbortSignal;
+    const policy = new FailClosedPolicyEngine({
+      evaluate: async () => ({ effect: "allow", reason: "evaluation completed" })
+    });
+
+    await expect(policy.evaluate(request, { signal })).resolves.toEqual({
+      effect: "allow",
+      reason: "evaluation completed"
+    });
+  });
+
+  it("denies a non-finite deadline before invoking the evaluator", async () => {
+    const evaluator = vi.fn(async () => ({
+      effect: "allow" as const,
+      reason: "must not execute"
+    }));
+    const policy = new FailClosedPolicyEngine({ evaluate: evaluator });
+
+    await expect(policy.evaluate(request, { deadlineAt: Number.POSITIVE_INFINITY }))
+      .resolves.toMatchObject({ effect: "deny" });
+    expect(evaluator).not.toHaveBeenCalled();
+  });
+});
+
+
+describe("global policy evaluation resource bound", () => {
+  it("rejects evaluations beyond the process-wide concurrency limit", async () => {
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    let evaluatorCalls = 0;
+    const policy = new FailClosedPolicyEngine({
+      evaluate: async () => {
+        evaluatorCalls += 1;
+        await gate;
+        return { effect: "allow", reason: "completed" };
+      }
+    });
+
+    const active = Array.from({ length: 512 }, () => policy.evaluate(request));
+    const overflow = await policy.evaluate(request);
+
+    expect(overflow).toMatchObject({
+      effect: "deny",
+      reason: expect.stringMatching(/concurrency limit/i)
+    });
+    expect(evaluatorCalls).toBe(0);
+
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(evaluatorCalls).toBe(512);
+    release();
+    const results = await Promise.all(active);
+    expect(results.every((result) => result.effect === "allow")).toBe(true);
+  });
 });

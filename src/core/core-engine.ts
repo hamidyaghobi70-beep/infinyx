@@ -1,5 +1,5 @@
 import { AsyncLocalStorage } from "node:async_hooks";
-import { GuardedMemoryPort } from "./guarded-memory-port.js";
+import { GuardedMemoryPort, revokeGuardedMemoryPort } from "./guarded-memory-port.js";
 import type {
   CoreLifecycleState,
   CoreModule,
@@ -16,7 +16,7 @@ import type {
 import { DefaultDenyPolicyEngine } from "./default-policy-engine.js";
 import { FailClosedPolicyEngine } from "./fail-closed-policy-engine.js";
 import { InMemoryEventBus } from "./event-bus.js";
-import { CoreError, type CoreShutdownBlocker, type CoreShutdownBlockerCode } from "./core-error.js";
+import { CoreError, type CoreErrorCode, type CoreShutdownBlocker, type CoreShutdownBlockerCode } from "./core-error.js";
 import { ModuleRegistry } from "./module-registry.js";
 import { ProtectedOperationExecutor } from "./protected-operation-executor.js";
 
@@ -37,6 +37,115 @@ export interface CoreEngineOptions {
   };
 }
 
+function snapshotOptionRecord(
+  value: unknown,
+  allowedKeys: readonly string[],
+  code: CoreErrorCode,
+  message: string
+): Record<string, unknown> {
+  try {
+    if (typeof value !== "object" || value === null || Array.isArray(value)) {
+      throw new Error("Invalid option record.");
+    }
+    const prototype = Object.getPrototypeOf(value);
+    if (prototype !== Object.prototype && prototype !== null) {
+      throw new Error("Option records must be plain objects.");
+    }
+    const result: Record<string, unknown> = Object.create(null) as Record<string, unknown>;
+    for (const key of Reflect.ownKeys(value)) {
+      if (typeof key !== "string" || !allowedKeys.includes(key)) {
+        throw new Error("Unknown option property.");
+      }
+      const descriptor = Object.getOwnPropertyDescriptor(value, key);
+      if (!descriptor ||
+          !Object.prototype.hasOwnProperty.call(descriptor, "value") ||
+          descriptor.enumerable !== true) {
+        throw new Error("Option properties must be enumerable data properties.");
+      }
+      result[key] = descriptor.value;
+    }
+    return result;
+  } catch {
+    throw new CoreError(code, message);
+  }
+}
+
+function snapshotCoreEngineOptions(value: unknown): CoreEngineOptions {
+  const options = snapshotOptionRecord(
+    value,
+    ["events", "policy", "memory", "policyTimeoutMs", "protectedOperationShutdown"],
+    "CORE_ENGINE_OPTIONS_INVALID",
+    "Core Engine options must contain only stable data properties."
+  );
+  const shutdown = options.protectedOperationShutdown;
+  if (shutdown === undefined) {
+    return Object.freeze(options) as CoreEngineOptions;
+  }
+  const shutdownOptions = snapshotOptionRecord(
+    shutdown,
+    ["drainDeadlineMs"],
+    "PROTECTED_OPERATION_SHUTDOWN_CONFIG_INVALID",
+    "Protected-operation shutdown configuration is invalid."
+  );
+  options.protectedOperationShutdown = Object.freeze(shutdownOptions);
+  return Object.freeze(options) as CoreEngineOptions;
+}
+
+function captureEventBusMethod(
+  target: object,
+  name: "subscribe" | "publish" | "publishIfSubscribed" | "hasSubscribers",
+  required: boolean
+): Function | undefined {
+  let current: object | null = target;
+  const visited = new Set<object>();
+  try {
+    while (current !== null) {
+      if (visited.has(current)) throw new TypeError("Invalid Event Bus prototype chain.");
+      visited.add(current);
+      const descriptor = Object.getOwnPropertyDescriptor(current, name);
+      if (descriptor) {
+        if (!Object.prototype.hasOwnProperty.call(descriptor, "value") ||
+            typeof descriptor.value !== "function") {
+          throw new TypeError("Event Bus methods must be data properties containing functions.");
+        }
+        return Function.prototype.bind.call(descriptor.value, target);
+      }
+      current = Object.getPrototypeOf(current);
+    }
+  } catch {
+    throw new TypeError("Event Bus capability could not be safely inspected.");
+  }
+  if (required) throw new TypeError("Event Bus is missing required method: " + name + ".");
+  return undefined;
+}
+
+function createEventBusCapability(value: unknown): EventBusPort {
+  if ((typeof value !== "object" || value === null) && typeof value !== "function") {
+    throw new TypeError("Event Bus capability must be an object.");
+  }
+  const target = value as object;
+  const subscribe = captureEventBusMethod(target, "subscribe", true) as EventBusPort["subscribe"];
+  const publish = captureEventBusMethod(target, "publish", true) as EventBusPort["publish"];
+  const publishIfSubscribed = captureEventBusMethod(
+    target, "publishIfSubscribed", false
+  ) as EventBusPort["publishIfSubscribed"];
+  const hasSubscribers = captureEventBusMethod(
+    target, "hasSubscribers", false
+  ) as EventBusPort["hasSubscribers"];
+
+  const capability: EventBusPort = {
+    subscribe: (type, handler) => subscribe(type, handler),
+    publish: (type, payload) => publish(type, payload)
+  };
+  if (publishIfSubscribed) {
+    capability.publishIfSubscribed = (type, payload) => publishIfSubscribed(type, payload);
+  }
+  if (hasSubscribers) {
+    capability.hasSubscribers = (type) => hasSubscribers(type);
+  }
+  return Object.freeze(capability);
+}
+
 export class CoreEngine {
   readonly events: EventBusPort;
   readonly policy: PolicyEngine;
@@ -48,6 +157,10 @@ export class CoreEngine {
   private readonly moduleStates = new Map<string, ModuleLifecycleState>();
   private initializedModules: CoreModule[] = [];
   private readonly cleanupInFlight = new Map<string, Promise<void>>();
+  /** Successful stop hooks are not repeated when a later memory drain needs retry. */
+  private readonly moduleStopCompleted = new Set<string>();
+  /** Stop hooks remain pinned while running past a deadline, so retries never invoke them twice. */
+  private readonly moduleStopInFlight = new Map<string, Promise<void>>();
   private readonly cleanupContext = new AsyncLocalStorage<CleanupExecutionContext>();
   private stopPromise: Promise<void> | undefined;
   private readonly drainDeadlineMs: number;
@@ -61,9 +174,11 @@ export class CoreEngine {
   private executorDrainFailure: CoreError | undefined;
   private policyShutdownFailure: CoreError | undefined;
   private readonly moduleMemory = new Map<string, GuardedMemoryPort>();
+  private readonly options: CoreEngineOptions;
 
-  constructor(private readonly options: CoreEngineOptions = {}) {
-    const shutdownConfig = options.protectedOperationShutdown;
+  constructor(options: CoreEngineOptions = {}) {
+    this.options = snapshotCoreEngineOptions(options);
+    const shutdownConfig = this.options.protectedOperationShutdown;
     if (shutdownConfig !== undefined &&
         (typeof shutdownConfig !== "object" || shutdownConfig === null)) {
       throw new CoreError(
@@ -86,9 +201,9 @@ export class CoreEngine {
     this.drainDeadlineMs = hasExplicitDrainDeadline
       ? configuredDrainDeadline as number
       : 30_000;
-    this.events = options.events ?? new InMemoryEventBus();
-    this.policy = options.policy
-      ? new FailClosedPolicyEngine(options.policy, options.policyTimeoutMs)
+    this.events = createEventBusCapability(this.options.events ?? new InMemoryEventBus());
+    this.policy = this.options.policy
+      ? new FailClosedPolicyEngine(this.options.policy, this.options.policyTimeoutMs)
       : new DefaultDenyPolicyEngine();
     this.protectedOperationExecutor = new ProtectedOperationExecutor(
       this.policy,
@@ -133,8 +248,8 @@ export class CoreEngine {
         "Modules can only be registered before initialization."
       );
     }
-    this.moduleRegistry.register(module);
-    this.moduleStates.set(module.id, "registered");
+    const registered = this.moduleRegistry.register(module);
+    this.moduleStates.set(registered.id, "registered");
   }
 
   getModuleStates(): ReadonlyMap<string, ModuleLifecycleState> {
@@ -159,8 +274,12 @@ export class CoreEngine {
       const failedModule = [...this.moduleStates.entries()]
         .find(([, state]) => state === "initializing")?.[0];
       this.lifecycle = "failed";
+      // Rollback is a shutdown path too: bound module memory draining with one
+      // monotonic budget so a failed initialize/start cannot hang indefinitely.
+      const rollbackDeadline = performance.now() + this.drainDeadlineMs;
       const cleanupErrors = await this.cleanupInitializedModules(
-        failedModule ? new Set([failedModule]) : new Set()
+        failedModule ? new Set([failedModule]) : new Set(),
+        rollbackDeadline
       );
       const failure = new CoreError(
         "MODULE_INITIALIZATION_FAILED",
@@ -189,8 +308,11 @@ export class CoreEngine {
       const failedModule = [...this.moduleStates.entries()]
         .find(([, state]) => state === "starting")?.[0];
       this.lifecycle = "failed";
+      // Startup rollback shares the same bounded memory-drain contract as initialization rollback.
+      const rollbackDeadline = performance.now() + this.drainDeadlineMs;
       const cleanupErrors = await this.cleanupInitializedModules(
-        failedModule ? new Set([failedModule]) : new Set()
+        failedModule ? new Set([failedModule]) : new Set(),
+        rollbackDeadline
       );
       const failure = new CoreError(
         "MODULE_START_FAILED",
@@ -282,19 +404,35 @@ export class CoreEngine {
     }
     void this.executorDrainPromise.catch(() => undefined);
 
-    // Always attempt policy shutdown, even if executor shutdown initiation failed.
+  }
+
+  /** Retry a failed policy shutdown on a later stop() attempt, but share any in-flight attempt. */
+  private beginPolicyShutdown(): void {
+    if (this.policyShutdownPromise && !this.policyShutdownFailure) return;
+    this.policyShutdownFailure = undefined;
+    this.policyShutdownSettled = false;
+    this.policyShutdownSettledAt = undefined;
+
     try {
-      this.policyShutdownPromise = Promise.resolve(this.policy.shutdown?.()).catch(() => {
+      const shutdown = this.policy.shutdown?.();
+      let attempt!: Promise<void>;
+      attempt = Promise.resolve(shutdown).catch(() => {
         const failure = new CoreError(
           "POLICY_SHUTDOWN_FAILED",
           "Policy runtime shutdown failed."
         );
-        this.policyShutdownFailure = failure;
+        if (this.policyShutdownPromise === attempt) {
+          this.policyShutdownFailure = failure;
+        }
         throw failure;
       }).finally(() => {
-        this.policyShutdownSettled = true;
-        this.policyShutdownSettledAt = performance.now();
+        // A settled attempt must never overwrite the state of a newer retry.
+        if (this.policyShutdownPromise === attempt) {
+          this.policyShutdownSettled = true;
+          this.policyShutdownSettledAt = performance.now();
+        }
       });
+      this.policyShutdownPromise = attempt;
     } catch {
       const failure = new CoreError(
         "POLICY_SHUTDOWN_FAILED",
@@ -312,6 +450,7 @@ export class CoreEngine {
     // Start the shared monotonic budget before initiating either shutdown path.
     const deadline = performance.now() + this.drainDeadlineMs;
     this.beginShutdownInitiation();
+    this.beginPolicyShutdown();
 
     const executorDrain = this.executorDrainPromise ?? Promise.resolve();
     const policyShutdown = this.policyShutdownPromise ?? Promise.resolve();
@@ -321,11 +460,9 @@ export class CoreEngine {
       timer = setTimeout(() => resolve(false), remainingMs);
     });
 
-    let bothSettledBeforeDeadline = false;
     try {
-      const drained = Promise.allSettled([executorDrain, policyShutdown]).then(() => true as const);
-      const completed = await Promise.race([drained, timedOut]);
-      bothSettledBeforeDeadline = completed && performance.now() <= deadline;
+      const drained = Promise.allSettled([executorDrain, policyShutdown]);
+      await Promise.race([drained, timedOut]);
     } finally {
       if (timer !== undefined) clearTimeout(timer);
     }
@@ -364,14 +501,6 @@ export class CoreEngine {
       });
     }
 
-    if (!bothSettledBeforeDeadline && blockers.length === 0) {
-      blockers.push({
-        code: "POLICY_EVALUATION_DRAIN_TIMEOUT",
-        subsystem: "policy",
-        state: "unresolved"
-      });
-    }
-
     if (blockers.length > 0) {
       const precedence: readonly CoreShutdownBlockerCode[] = [
         "POLICY_SHUTDOWN_FAILED",
@@ -390,7 +519,17 @@ export class CoreEngine {
       );
     }
 
-    const errors = await this.cleanupInitializedModules();
+    const errors = await this.cleanupInitializedModules(new Set(), deadline);
+    if (errors.length === 0) {
+      // Rollback may have completed a module's resource cleanup while preserving
+      // its failed initialization/start state. A later successful shutdown is
+      // the terminal lifecycle transition and must normalize those states.
+      for (const [moduleId, state] of this.moduleStates) {
+        if (state === "failed" && !this.initializedModules.some((module) => module.id === moduleId)) {
+          this.moduleStates.set(moduleId, "stopped");
+        }
+      }
+    }
     this.lifecycle = errors.length ? "failed" : "stopped";
     if (errors.length) {
       throw new CoreError(
@@ -412,20 +551,31 @@ export class CoreEngine {
     let memory = this.moduleMemory.get(moduleId);
     if (!memory) {
       const candidate = this.options.memory(moduleId);
-      if (!(candidate instanceof GuardedMemoryPort) || candidate.scopeModuleId !== moduleId) {
+      if (!(candidate instanceof GuardedMemoryPort)) {
         throw new CoreError(
           "INVALID_MEMORY_CAPABILITY",
           "Core Engine requires a GuardedMemoryPort bound to the receiving module."
         );
       }
+      // Retain even a scope-mismatched capability before rejecting it so the
+      // module rollback path can revoke and drain it. Revoke immediately to
+      // prevent the rejected capability from admitting work in the meantime.
       memory = candidate;
       this.moduleMemory.set(moduleId, memory);
+      if (candidate.scopeModuleId !== moduleId) {
+        void revokeGuardedMemoryPort(candidate).catch(() => undefined);
+        throw new CoreError(
+          "INVALID_MEMORY_CAPABILITY",
+          "Core Engine requires a GuardedMemoryPort bound to the receiving module."
+        );
+      }
     }
     return Object.freeze({ ...base, memory });
   }
 
   private async cleanupInitializedModules(
-    preserveFailureIds: ReadonlySet<string> = new Set()
+    preserveFailureIds: ReadonlySet<string> = new Set(),
+    deadlineAt?: number
   ): Promise<unknown[]> {
     const errors: unknown[] = [];
     for (const module of [...this.initializedModules].reverse()) {
@@ -445,7 +595,7 @@ export class CoreEngine {
         continue;
       }
       try {
-        await this.cleanupModule(module, preserveFailureIds.has(module.id));
+        await this.cleanupModule(module, preserveFailureIds.has(module.id), deadlineAt);
       } catch (error) {
         errors.push(error);
       }
@@ -453,7 +603,7 @@ export class CoreEngine {
     return errors;
   }
 
-  private async cleanupModule(module: CoreModule, preserveFailure: boolean): Promise<void> {
+  private async cleanupModule(module: CoreModule, preserveFailure: boolean, deadlineAt?: number): Promise<void> {
     const inFlight = this.cleanupInFlight.get(module.id);
     if (inFlight) {
       await inFlight;
@@ -463,10 +613,85 @@ export class CoreEngine {
       this.moduleStates.set(module.id, "cleaning");
       const context: CleanupExecutionContext = { engine: this, active: true };
       try {
-        await this.cleanupContext.run(context, async () => {
-          await module.stop?.(this.createContext(module.id));
-        });
+        if (!this.moduleStopCompleted.has(module.id)) {
+          let stopWork = this.moduleStopInFlight.get(module.id);
+          if (!stopWork) {
+            if (deadlineAt !== undefined && performance.now() >= deadlineAt && module.stop) {
+              throw new CoreError(
+                "MODULE_STOP_TIMEOUT",
+                "Module stop hook could not start before the shutdown deadline."
+              );
+            }
+            const stopContext: CleanupExecutionContext = { engine: this, active: true };
+            let trackedStopWork!: Promise<void>;
+            trackedStopWork = this.cleanupContext.run(stopContext, async () => {
+              try {
+                await module.stop?.(this.createContext(module.id));
+              } finally {
+                // Keep re-entrant-stop protection active until the actual hook settles,
+                // even if the caller's bounded wait has already timed out.
+                stopContext.active = false;
+              }
+            }).then(() => {
+              this.moduleStopCompleted.add(module.id);
+              // Once the hook has actually settled, do not retain its completed
+              // promise (and the module/context closure) for the engine lifetime.
+              if (this.moduleStopInFlight.get(module.id) === trackedStopWork) {
+                this.moduleStopInFlight.delete(module.id);
+              }
+            }, (error: unknown) => {
+              if (this.moduleStopInFlight.get(module.id) === trackedStopWork) {
+                this.moduleStopInFlight.delete(module.id);
+              }
+              throw error;
+            });
+            this.moduleStopInFlight.set(module.id, trackedStopWork);
+            stopWork = trackedStopWork;
+          }
+          if (deadlineAt === undefined) {
+            await stopWork;
+          } else {
+            const remainingMs = Math.max(0, deadlineAt - performance.now());
+            let stopTimer: ReturnType<typeof setTimeout> | undefined;
+            try {
+              const timedOut = new Promise<false>((resolve) => {
+                stopTimer = setTimeout(() => resolve(false), remainingMs);
+              });
+              const completed = await Promise.race([
+                stopWork.then(() => true as const),
+                timedOut
+              ]);
+              if (!completed) {
+                throw new CoreError(
+                  "MODULE_STOP_TIMEOUT",
+                  "Module stop hook did not settle before the shutdown deadline."
+                );
+              }
+            } finally {
+              if (stopTimer !== undefined) clearTimeout(stopTimer);
+            }
+          }
+        }
+        const memory = this.moduleMemory.get(module.id);
+        if (memory) {
+          try {
+            await revokeGuardedMemoryPort(memory, deadlineAt);
+          } catch (cause) {
+            if (deadlineAt !== undefined && performance.now() >= deadlineAt) {
+              throw new CoreError(
+                "MODULE_MEMORY_DRAIN_TIMEOUT",
+                "Module memory operations did not drain before the shutdown deadline.",
+                { cause }
+              );
+            }
+            throw cause;
+          }
+        }
         this.moduleStates.set(module.id, preserveFailure ? "failed" : "stopped");
+        // Release the module-scoped capability only after its cleanup succeeds.
+        // Failed hooks retain it so an explicit cleanup retry sees the same context.
+        this.moduleMemory.delete(module.id);
+        this.moduleStopCompleted.delete(module.id);
         // Successful hooks leave the retry queue. Failed hooks remain queued
         // for an explicit later stop() call; successful siblings never rerun.
         this.initializedModules = this.initializedModules.filter(
