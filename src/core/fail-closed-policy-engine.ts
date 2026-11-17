@@ -152,19 +152,54 @@ function reasonFromSignal(signal: AbortSignal, fallback: PolicyStopReason): Poli
  * continue executing after this method returns. Use a process boundary when
  * hard execution termination is required.
  */
+function capturePolicyMethod<T extends (...args: never[]) => unknown>(
+  target: unknown,
+  name: string,
+  optional = false
+): T | undefined {
+  try {
+    if ((typeof target !== "object" && typeof target !== "function") || target === null) {
+      throw new Error("Invalid policy delegate.");
+    }
+    let current: object | null = target as object;
+    while (current !== null) {
+      const descriptor = Object.getOwnPropertyDescriptor(current, name);
+      if (descriptor) {
+        if (!Object.prototype.hasOwnProperty.call(descriptor, "value")) {
+          throw new Error("Policy methods must be data properties.");
+        }
+        if (descriptor.value === undefined && optional) return undefined;
+        if (typeof descriptor.value !== "function") {
+          throw new Error("Policy method is not callable.");
+        }
+        return Function.prototype.bind.call(descriptor.value, target) as T;
+      }
+      current = Object.getPrototypeOf(current) as object | null;
+    }
+    if (optional) return undefined;
+  } catch {
+    throw new TypeError("Policy delegate must expose stable data methods.");
+  }
+  throw new TypeError("Policy delegate must expose stable data methods.");
+}
+
 export class FailClosedPolicyEngine implements PolicyEngine {
   private shuttingDown = false;
   private readonly activeStops = new Set<(reason: PolicyStopReason) => void>();
   private readonly activeEvaluations = new Set<Promise<unknown>>();
   private shutdownPromise: Promise<void> | undefined;
+  private readonly delegateEvaluate: PolicyEngine["evaluate"];
+  private readonly delegateShutdown: PolicyEngine["shutdown"];
 
   constructor(
-    private readonly delegate: PolicyEngine,
+    delegate: PolicyEngine,
     private readonly timeoutMs = DEFAULT_POLICY_TIMEOUT_MS
   ) {
     if (!Number.isFinite(timeoutMs) || timeoutMs <= 0) {
       throw new RangeError("Policy evaluation timeout must be a positive finite number.");
     }
+    this.delegateEvaluate = capturePolicyMethod(delegate, "evaluate")!;
+    this.delegateShutdown = capturePolicyMethod(delegate, "shutdown", true);
   }
 
   async evaluate(
@@ -290,7 +325,7 @@ export class FailClosedPolicyEngine implements PolicyEngine {
       const evaluation = Promise.resolve()
         .then(() => {
           if (controller.signal.aborted) return undefined;
-          return this.delegate.evaluate(input, delegateOptions);
+          return this.delegateEvaluate(input, delegateOptions);
         })
         .then((result) => {
           if (candidateFrozen) return undefined;
@@ -323,7 +358,7 @@ export class FailClosedPolicyEngine implements PolicyEngine {
 
     let delegateShutdown: Promise<void>;
     try {
-      delegateShutdown = Promise.resolve(this.delegate.shutdown?.());
+      delegateShutdown = Promise.resolve(this.delegateShutdown?.());
     } catch (error) {
       this.shutdownPromise = Promise.reject(error);
       return this.shutdownPromise;
