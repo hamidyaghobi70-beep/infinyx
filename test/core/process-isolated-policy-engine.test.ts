@@ -1,4 +1,7 @@
 import { ChildProcess } from "node:child_process";
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { describe, expect, it, vi } from "vitest";
 import { ProcessIsolatedPolicyEngine } from "../../src/core/process-isolated-policy-engine.js";
@@ -32,6 +35,39 @@ function stateObserver(target: string): {
 }
 
 describe("ProcessIsolatedPolicyEngine", () => {
+  it("reports reduced containment capability on Windows", () => {
+    const engine = new ProcessIsolatedPolicyEngine({ moduleUrl: fixtureUrl });
+    expect(engine.containmentCapability).toBe(
+      process.platform === "win32" ? "DIRECT_CHILD_ONLY" : "POSIX_PROCESS_GROUP"
+    );
+  });
+
+  it.skipIf(process.platform === "win32")(
+    "terminates a surviving evaluator descendant before releasing capacity or allowing",
+    async () => {
+      const directory = mkdtempSync(join(tmpdir(), "infinyx-process-group-"));
+      const pidFile = join(directory, "descendant.pid");
+      try {
+        const engine = new ProcessIsolatedPolicyEngine({
+          moduleUrl: fixtureUrl,
+          terminationGraceMs: 30,
+          killWaitMs: 2_000,
+          maxConcurrent: 1
+        });
+        const result = await engine.evaluateDetailed(request("orphan-descendant", pidFile));
+        const descendantPid = Number(readFileSync(pidFile, "utf8"));
+        expect(Number.isSafeInteger(descendantPid)).toBe(true);
+        expect(result.outcome).toBe("FAILED");
+        expect(result.decision.effect).toBe("deny");
+        expect(result.decision.reason).toContain("descendant processes");
+        expect(engine.activeExecutionCount).toBe(0);
+        expect(() => process.kill(descendantPid, 0)).toThrow();
+      } finally {
+        rmSync(directory, { recursive: true, force: true });
+      }
+    }
+  );
+
   it("returns an immutable allow decision only after the child process exits", async () => {
     const engine = new ProcessIsolatedPolicyEngine({ moduleUrl: fixtureUrl });
     const result = await engine.evaluateDetailed(request());
