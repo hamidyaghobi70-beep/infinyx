@@ -848,8 +848,6 @@ describe("ProtectedOperationExecutor", () => {
       validateInput: (value: unknown): value is string => typeof value === "string",
       handler: async (_input, context) => {
         const childPromise = context.runChild(child, { actorId: "child-caller" }, "child");
-        await started;
-        controller.abort();
         const result = await childPromise;
         expect(result.status).toBe("executed");
         return "parent";
@@ -861,6 +859,7 @@ describe("ProtectedOperationExecutor", () => {
       parent, { actorId: "parent-caller" }, "root", { signal: controller.signal }
     );
     await started;
+    controller.abort();
     expect(childSignal?.aborted).toBe(true);
     releaseChild();
     await pending;
