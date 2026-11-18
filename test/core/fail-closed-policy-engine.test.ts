@@ -32,6 +32,18 @@ describe("FailClosedPolicyEngine delegate method integrity", () => {
     expect(replacementShutdown).not.toHaveBeenCalled();
   });
 
+  it("rejects a cyclic Proxy prototype chain while capturing delegate methods", () => {
+    const target = {};
+    let cyclic!: PolicyEngine;
+    cyclic = new Proxy(target, {
+      getPrototypeOf() {
+        return cyclic;
+      }
+    }) as PolicyEngine;
+
+    expect(() => new FailClosedPolicyEngine(cyclic)).toThrow(/stable data methods/i);
+  });
+
   it("rejects accessor-backed delegate methods without invoking getters", () => {
     let getterCalls = 0;
     const delegate = Object.defineProperty({}, "evaluate", {
