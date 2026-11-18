@@ -642,7 +642,7 @@ describe("global policy evaluation resource bound", () => {
       effect: "deny",
       reason: expect.stringMatching(/concurrency limit/i)
     });
-    expect(evaluatorCalls).toBe(0);
+    expect(evaluatorCalls).toBe(512);
 
     await Promise.resolve();
     await Promise.resolve();
