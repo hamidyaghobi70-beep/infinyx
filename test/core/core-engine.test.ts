@@ -372,7 +372,7 @@ describe("multi-level intermediate cleanup failure recovery", () => {
     expect(calls).toEqual(["worker", "service:1"]);
     expect(engine.getModuleStates().get("worker")).toBe("stopped");
     expect(engine.getModuleStates().get("service")).toBe("failed");
-    expect(engine.getModuleStates().get("foundation")).toBe("initialized");
+    expect(engine.getModuleStates().get("foundation")).toBe("running");
 
     await engine.stop();
     expect(calls).toEqual(["worker", "service:1", "service:2", "foundation"]);
@@ -830,7 +830,7 @@ describe("CoreEngine policy shutdown retry alignment", () => {
       }]
     });
     expect(engine.state).toBe("stopping");
-    expect(engine.getModuleStates().get("policy-layer-alignment-module")).toBe("initialized");
+    expect(engine.getModuleStates().get("policy-layer-alignment-module")).toBe("running");
     await expect(engine.policy.evaluate({
       action: "record.read",
       resource: "record:retry",
