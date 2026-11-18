@@ -1096,7 +1096,7 @@ describe("GuardedMemoryPort — construction", () => {
       store,
       audit: createAuditPort(events),
       scope
-    })).toThrow(TypeError);
+    })).toThrowError(expect.objectContaining({ code: "MEMORY_INVALID_SCOPE" }));
 
     expect(tenantReads).toBe(0);
     expect(store.size).toBe(0);
