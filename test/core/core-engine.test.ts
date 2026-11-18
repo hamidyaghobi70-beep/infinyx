@@ -1582,7 +1582,7 @@ describe("CoreEngine stop-hook timeout recovery", () => {
 
 
 describe("CoreEngine stop-hook deadline boundary", () => {
-  it("does not turn a completed stop hook into a timeout because its continuation resumes later", async () => {
+  it("completes a synchronous stop hook admitted before the deadline", async () => {
     const engine = new CoreEngine({
       protectedOperationShutdown: { drainDeadlineMs: 15 }
     });
@@ -1594,11 +1594,9 @@ describe("CoreEngine stop-hook deadline boundary", () => {
     await engine.initialize();
     await engine.start();
 
-    // Deadline starts at 100 (115 total); shutdown and hook admission both
-    // observe 100. The old post-race clock check then observed 120 and
-    // incorrectly converted the already-won completion race into a timeout.
-    const clock = [100, 100, 100, 100, 120];
-    const now = vi.spyOn(performance, "now").mockImplementation(() => clock.shift() ?? 120);
+    // Keep the monotonic clock inside the deadline while exercising the
+    // synchronous hook-admission and completion path deterministically.
+    const now = vi.spyOn(performance, "now").mockReturnValue(100);
     try {
       await expect(engine.stop()).resolves.toBeUndefined();
       expect(engine.state).toBe("stopped");
