@@ -356,17 +356,26 @@ export class FailClosedPolicyEngine implements PolicyEngine {
     this.shuttingDown = true;
     for (const stop of [...this.activeStops]) stop("RUNTIME_SHUTDOWN");
 
-    const attempt = Promise.resolve().then(async () => {
-      // The wrapper's cancellation race is not proof that delegate work settled.
-      // Retain the underlying evaluation promises until they actually settle.
-      const evaluations = [...this.activeEvaluations].map((evaluation) =>
-        evaluation.then(() => undefined, () => undefined)
-      );
-      await Promise.all([
-        Promise.resolve(this.delegateShutdown?.()),
-        Promise.all(evaluations).then(() => undefined)
-      ]);
-    });
+    // Initiate delegate shutdown in this call, not in a later microtask. This
+    // preserves the synchronous shutdown-admission boundary and makes retries
+    // observable immediately to callers. Convert synchronous throws into a
+    // rejected promise so the shared retry state follows the same path.
+    let delegateShutdown: Promise<unknown>;
+    try {
+      delegateShutdown = Promise.resolve(this.delegateShutdown?.());
+    } catch (error) {
+      delegateShutdown = Promise.reject(error);
+    }
+
+    // The wrapper's cancellation race is not proof that delegate work settled.
+    // Retain the underlying evaluation promises until they actually settle.
+    const evaluations = [...this.activeEvaluations].map((evaluation) =>
+      evaluation.then(() => undefined, () => undefined)
+    );
+    const attempt = Promise.all([
+      delegateShutdown,
+      Promise.all(evaluations).then(() => undefined)
+    ]).then(() => undefined);
     let tracked!: Promise<void>;
     tracked = attempt.catch((error: unknown) => {
       // Concurrent callers share this attempt; a later call may retry a transient failure.
