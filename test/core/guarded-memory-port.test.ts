@@ -1051,6 +1051,14 @@ describe("GuardedMemoryPort — construction", () => {
     expect(store.size).toBe(0);
   });
 
+  it("freezes the shared prototype so guarded methods cannot be replaced", async () => {
+    const { guard } = setup();
+
+    expect(Object.isFrozen(GuardedMemoryPort.prototype)).toBe(true);
+    expect(Reflect.set(GuardedMemoryPort.prototype, "write", async () => undefined)).toBe(false);
+    await expect(guard.write({ namespace: "n", key: "k" }, "still guarded")).resolves.toBeUndefined();
+  });
+
   it("keeps capability internals private and prevents instance method replacement", async () => {
     const { guard } = setup();
     const exposed = guard as unknown as Record<string, unknown>;
