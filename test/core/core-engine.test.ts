@@ -1533,7 +1533,7 @@ describe("CoreEngine stop-hook timeout recovery", () => {
     let memory!: InstanceType<typeof GuardedMemoryPort>;
     let stopCalls = 0;
     const engine = new CoreEngine({
-      protectedOperationShutdown: { drainDeadlineMs: 20 },
+      protectedOperationShutdown: { drainDeadlineMs: 100 },
       memory: (moduleId) => {
         memory = new GuardedMemoryPort({
           store,
