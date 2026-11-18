@@ -1011,6 +1011,18 @@ describe("CoreEngine injected Event Bus capability boundary", () => {
     })).toThrow(/event bus capability/i);
   });
 
+  it("rejects a cyclic Proxy prototype chain while capturing Event Bus methods", () => {
+    const target = {};
+    let cyclic!: import("../../src/core/contracts.js").EventBusPort;
+    cyclic = new Proxy(target, {
+      getPrototypeOf() {
+        return cyclic;
+      }
+    }) as import("../../src/core/contracts.js").EventBusPort;
+
+    expect(() => new CoreEngine({ events: cyclic })).toThrow(/event bus capability/i);
+  });
+
   it("does not expose mutable adapter method references to module contexts", async () => {
     let delivered = 0;
     const adapter = {
