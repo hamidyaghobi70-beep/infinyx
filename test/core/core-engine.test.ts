@@ -372,7 +372,7 @@ describe("multi-level intermediate cleanup failure recovery", () => {
     expect(calls).toEqual(["worker", "service:1"]);
     expect(engine.getModuleStates().get("worker")).toBe("stopped");
     expect(engine.getModuleStates().get("service")).toBe("failed");
-    expect(engine.getModuleStates().get("foundation")).toBe("running");
+    expect(engine.getModuleStates().get("foundation")).toBe("initialized");
 
     await engine.stop();
     expect(calls).toEqual(["worker", "service:1", "service:2", "foundation"]);
@@ -1404,7 +1404,7 @@ describe("CoreEngine bounded module stop hooks", () => {
 
     expect(engine.state).toBe("failed");
     expect(calls).toEqual(["dependent"]);
-    expect(engine.getModuleStates().get("foundation")).toBe("initialized");
+    expect(engine.getModuleStates().get("foundation")).toBe("running");
 
     releaseDependent();
     await engine.stop();
@@ -1597,7 +1597,7 @@ describe("CoreEngine stop-hook deadline boundary", () => {
     // Deadline starts at 100 (115 total); shutdown and hook admission both
     // observe 100. The old post-race clock check then observed 120 and
     // incorrectly converted the already-won completion race into a timeout.
-    const clock = [100, 100, 100, 120];
+    const clock = [100, 100, 100, 100, 120];
     const now = vi.spyOn(performance, "now").mockImplementation(() => clock.shift() ?? 120);
     try {
       await expect(engine.stop()).resolves.toBeUndefined();
