@@ -461,7 +461,7 @@ describe("GuardedMemoryPort — authorization", () => {
     ]);
     expect(actorB.decided[0]).toMatchObject({
       tenantId: "tenant-a",
-      actorId: "actor-1",
+      actorId: "actor-2",
       moduleId: "module-x",
       decision: "deny"
     });
@@ -1019,7 +1019,7 @@ describe("GuardedMemoryPort — construction", () => {
     }
   );
 
-  it("validates and retains the exact dependency references captured from option accessors", async () => {
+  it("rejects accessor-backed option records without invoking getters", () => {
     let storeReads = 0;
     let policyReads = 0;
     let auditReads = 0;
@@ -1044,13 +1044,11 @@ describe("GuardedMemoryPort — construction", () => {
       scope: scopeA
     } as GuardedMemoryPortOptions;
 
-    const guard = new GuardedMemoryPort(options);
-    await guard.write({ namespace: "n", key: "k" }, "captured");
-
-    expect(storeReads).toBe(1);
-    expect(policyReads).toBe(1);
-    expect(auditReads).toBe(1);
-    expect(store.size).toBe(1);
+    expect(() => new GuardedMemoryPort(options)).toThrow(TypeError);
+    expect(storeReads).toBe(0);
+    expect(policyReads).toBe(0);
+    expect(auditReads).toBe(0);
+    expect(store.size).toBe(0);
   });
 
   it("keeps capability internals private and prevents instance method replacement", async () => {
@@ -1080,7 +1078,7 @@ describe("GuardedMemoryPort — construction", () => {
     expect(store.addresses()[0]?.namespace.startsWith("tenant-a/")).toBe(true);
   });
 
-  it("validates the exact scope values captured from accessor properties", async () => {
+  it("rejects accessor-backed scope records without invoking getters", () => {
     let tenantReads = 0;
     const scope = {
       get tenantId() {
@@ -1093,17 +1091,15 @@ describe("GuardedMemoryPort — construction", () => {
     const store = new InMemoryMemoryStore();
     const events = new InMemoryEventBus();
     events.subscribe(MEMORY_ACCESS_DECIDED_EVENT, () => undefined);
-    const guard = new GuardedMemoryPort({
+    expect(() => new GuardedMemoryPort({
       ...base(),
       store,
       audit: createAuditPort(events),
       scope
-    });
+    })).toThrow(TypeError);
 
-    await guard.write({ namespace: "n", key: "k" }, 1);
-
-    expect(tenantReads).toBe(1);
-    expect(store.addresses()[0]?.namespace.startsWith("tenant-a/")).toBe(true);
+    expect(tenantReads).toBe(0);
+    expect(store.size).toBe(0);
   });
 });
 
