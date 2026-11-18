@@ -356,26 +356,15 @@ export class FailClosedPolicyEngine implements PolicyEngine {
     this.shuttingDown = true;
     for (const stop of [...this.activeStops]) stop("RUNTIME_SHUTDOWN");
 
-    // Initiate delegate shutdown in this call, not in a later microtask. This
-    // preserves the synchronous shutdown-admission boundary and makes retries
-    // observable immediately to callers. Convert synchronous throws into a
-    // rejected promise so the shared retry state follows the same path.
-    let delegateShutdown: Promise<unknown>;
-    try {
-      delegateShutdown = Promise.resolve(this.delegateShutdown?.());
-    } catch (error) {
-      delegateShutdown = Promise.reject(error);
-    }
-
-    // The wrapper's cancellation race is not proof that delegate work settled.
-    // Retain the underlying evaluation promises until they actually settle.
-    const evaluations = [...this.activeEvaluations].map((evaluation) =>
-      evaluation.then(() => undefined, () => undefined)
-    );
-    const attempt = Promise.all([
-      delegateShutdown,
-      Promise.all(evaluations).then(() => undefined)
-    ]).then(() => undefined);
+    // Publish the shared attempt before invoking external code. The delegate
+    // is called synchronously, but any re-entrant shutdown() joins this attempt
+    // instead of recursively initiating another delegate shutdown.
+    let resolveAttempt!: () => void;
+    let rejectAttempt!: (error: unknown) => void;
+    const attempt = new Promise<void>((resolve, reject) => {
+      resolveAttempt = resolve;
+      rejectAttempt = reject;
+    });
     let tracked!: Promise<void>;
     tracked = attempt.catch((error: unknown) => {
       // Concurrent callers share this attempt; a later call may retry a transient failure.
@@ -383,6 +372,24 @@ export class FailClosedPolicyEngine implements PolicyEngine {
       throw error;
     });
     this.shutdownPromise = tracked;
+
+    try {
+      // Initiate delegate shutdown in this call, not in a later microtask.
+      // Convert synchronous throws into a rejection on the shared attempt.
+      const delegateShutdown = Promise.resolve(this.delegateShutdown?.());
+
+      // The wrapper's cancellation race is not proof that delegate work settled.
+      // Retain the underlying evaluation promises until they actually settle.
+      const evaluations = [...this.activeEvaluations].map((evaluation) =>
+        evaluation.then(() => undefined, () => undefined)
+      );
+      void Promise.all([
+        delegateShutdown,
+        Promise.all(evaluations).then(() => undefined)
+      ]).then(resolveAttempt, rejectAttempt);
+    } catch (error) {
+      rejectAttempt(error);
+    }
     return tracked;
   }
 }
