@@ -100,6 +100,7 @@ jobs:
             echo "- Audit threshold: high"
           } | tee -a "$GITHUB_STEP_SUMMARY"
       - name: Install dependencies
+        id: install-dependencies
         run: npm ci
       - name: Run npm audit and build dependency-path report
         shell: bash
@@ -181,3 +182,6 @@ jobs:
             npm-audit-report.md
           if-no-files-found: error
           retention-days: 30
+      - name: Production dependency security audit
+        if: always() && steps.install-dependencies.outcome == 'success'
+        run: npm audit --omit=dev --audit-level=high
