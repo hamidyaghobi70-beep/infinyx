@@ -652,3 +652,25 @@ describe("global policy evaluation resource bound", () => {
     expect(results.every((result) => result.effect === "allow")).toBe(true);
   });
 });
+
+
+describe("FailClosedPolicyEngine re-entrant shutdown", () => {
+  it("shares the published shutdown attempt when the delegate re-enters synchronously", async () => {
+    let policy!: FailClosedPolicyEngine;
+    let reentrant: Promise<void> | undefined;
+    let shutdownCalls = 0;
+    const delegate: PolicyEngine = {
+      evaluate: async () => ({ effect: "allow", reason: "unused" }),
+      shutdown: () => {
+        shutdownCalls += 1;
+        reentrant = policy.shutdown();
+      }
+    };
+    policy = new FailClosedPolicyEngine(delegate);
+
+    const outer = policy.shutdown();
+    expect(reentrant).toBe(outer);
+    await expect(outer).resolves.toBeUndefined();
+    expect(shutdownCalls).toBe(1);
+  });
+});
