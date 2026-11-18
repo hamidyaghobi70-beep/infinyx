@@ -133,7 +133,7 @@ describe("FailClosedPolicyEngine", () => {
       }
     });
     await expect(policy.evaluate(invalidRequest as never)).resolves.toMatchObject({ effect: "deny" });
-    expect(evaluatorCalls).toBe(512);
+    expect(evaluatorCalls).toBe(0);
   });
 
   it("accepts the documented context envelope with opaque attributes", async () => {
