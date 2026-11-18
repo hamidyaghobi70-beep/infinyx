@@ -386,7 +386,7 @@ export class FailClosedPolicyEngine implements PolicyEngine {
       void Promise.all([
         delegateShutdown,
         Promise.all(evaluations).then(() => undefined)
-      ]).then(resolveAttempt, rejectAttempt);
+      ]).then(() => resolveAttempt(), rejectAttempt);
     } catch (error) {
       rejectAttempt(error);
     }
