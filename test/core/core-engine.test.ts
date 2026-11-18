@@ -14,7 +14,7 @@ describe("CoreEngine", () => {
     await engine.initialize();
     await engine.start();
 
-    const clock = [100, 100, 110, 111, 120];
+    const clock = [100, 100, 100, 100, 110];
     const now = vi.spyOn(performance, "now").mockImplementation(() => clock.shift() ?? 110);
     try {
       await expect(engine.stop()).resolves.toBeUndefined();
