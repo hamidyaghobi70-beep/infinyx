@@ -568,6 +568,12 @@ export class GuardedMemoryPort implements MemoryPort {
   }
 }
 
+/**
+ * GuardedMemoryPort is a shared capability boundary. Freeze the prototype so
+ * consumers cannot replace guarded methods for every issued instance.
+ */
+Object.freeze(GuardedMemoryPort.prototype);
+
 function isValidTimeout(value: unknown): value is number {
   return typeof value === "number" && Number.isInteger(value) && value >= 1 && value <= MAX_TIMEOUT_MS;
 }
