@@ -100,7 +100,9 @@ function captureEventBusMethod(
   const visited = new Set<object>();
   try {
     while (current !== null) {
-      if (visited.has(current)) throw new TypeError("Invalid Event Bus prototype chain.");
+      if (visited.has(current) || visited.size >= 64) {
+        throw new TypeError("Invalid Event Bus prototype chain.");
+      }
       visited.add(current);
       const descriptor = Object.getOwnPropertyDescriptor(current, name);
       if (descriptor) {
