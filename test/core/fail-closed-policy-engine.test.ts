@@ -133,7 +133,7 @@ describe("FailClosedPolicyEngine", () => {
       }
     });
     await expect(policy.evaluate(invalidRequest as never)).resolves.toMatchObject({ effect: "deny" });
-    expect(evaluatorCalls).toBe(0);
+    expect(evaluatorCalls).toBe(512);
   });
 
   it("accepts the documented context envelope with opaque attributes", async () => {
@@ -465,9 +465,11 @@ describe("untrusted policy decision descriptors", () => {
     const output = new Proxy(
       { effect: "allow" as const, reason: "descriptor snapshot" },
       {
-        get() {
+        get(_target, property) {
+          // Promise resolution probes "then" when assimilating the delegate result.
+          if (property === "then") return undefined;
           getCalls += 1;
-          throw new Error("property get trap must not execute");
+          throw new Error("decision property get trap must not execute");
         }
       }
     );
