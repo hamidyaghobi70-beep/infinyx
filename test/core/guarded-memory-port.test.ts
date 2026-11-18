@@ -1187,6 +1187,18 @@ describe("GuardedMemoryPort policy decision trust boundary", () => {
     expect(decided[0]?.decision).toBe("deny");
   });
 
+  it("rejects a cyclic Proxy prototype chain when capturing backing-store methods", () => {
+    const target = {};
+    let cyclic!: MemoryPort;
+    cyclic = new Proxy(target, {
+      getPrototypeOf() {
+        return cyclic;
+      }
+    }) as MemoryPort;
+
+    expect(() => setup({ store: cyclic })).toThrow(/stable data methods/i);
+  });
+
   it("fails closed on hostile decision Proxy reflection and unexpected own keys", async () => {
     const hostile = new Proxy(
       { effect: "allow", reason: "must not pass" },

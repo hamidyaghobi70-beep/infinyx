@@ -31,20 +31,27 @@ function readLifecycleHook(
   key: "initialize" | "start" | "stop"
 ): CoreModule["initialize"] | CoreModule["start"] | CoreModule["stop"] {
   let current: object | null = target;
-  while (current !== null) {
-    const descriptor = Object.getOwnPropertyDescriptor(current, key);
-    if (descriptor) {
-      if (!Object.prototype.hasOwnProperty.call(descriptor, "value")) {
-        throw invalidModule();
+  const visited = new Set<object>();
+  try {
+    while (current !== null) {
+      if (visited.has(current) || visited.size >= 64) throw invalidModule();
+      visited.add(current);
+      const descriptor = Object.getOwnPropertyDescriptor(current, key);
+      if (descriptor) {
+        if (!Object.prototype.hasOwnProperty.call(descriptor, "value")) {
+          throw invalidModule();
+        }
+        const hook: unknown = descriptor.value;
+        if (hook === undefined) return undefined;
+        if (typeof hook !== "function") throw invalidModule();
+        return Function.prototype.bind.call(hook, target);
       }
-      const hook: unknown = descriptor.value;
-      if (hook === undefined) return undefined;
-      if (typeof hook !== "function") throw invalidModule();
-      return Function.prototype.bind.call(hook, target);
+      current = Object.getPrototypeOf(current) as object | null;
     }
-    current = Object.getPrototypeOf(current) as object | null;
+    return undefined;
+  } catch {
+    throw invalidModule();
   }
-  return undefined;
 }
 
 function snapshotDependencies(value: unknown): readonly string[] {
