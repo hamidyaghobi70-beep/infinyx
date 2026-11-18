@@ -7,7 +7,9 @@ on:
       - release/**
       - fix/infinyx-core-policy-cancellation
       - feat/gap-002-protected-operation-executor
+      - work/core-engine-completion-2026-11-18
       - fix/protected-operation-hardening
+      - integration/infinyx-core-runtime-v1
       - fix/ci-target-protected-operation-2026-11-17
   pull_request:
     branches:
@@ -15,6 +17,7 @@ on:
       - foundation/repository-foundation
       - main
       - feat/gap-002-protected-operation-executor
+      - work/core-engine-completion-2026-11-18
       - fix/protected-operation-hardening
 
 permissions:
