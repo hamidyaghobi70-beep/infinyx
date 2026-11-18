@@ -160,6 +160,20 @@ describe("ModuleRegistry trust-boundary snapshots", () => {
     expect(elementGetterCalls).toBe(0);
   });
 
+  it("rejects a cyclic Proxy prototype chain while capturing lifecycle hooks", () => {
+    const registry = new ModuleRegistry();
+    const target = { id: "cyclic-prototype", version: "1.0.0" } as CoreModule;
+    let cyclic!: CoreModule;
+    cyclic = new Proxy(target, {
+      getPrototypeOf() {
+        return cyclic;
+      }
+    });
+
+    expect(() => registry.register(cyclic)).toThrowError(CoreError);
+    expect(registry.list()).toHaveLength(0);
+  });
+
   it("converts throwing Proxy reflection traps into a registration error", () => {
     const registry = new ModuleRegistry();
     const hostile = new Proxy(
