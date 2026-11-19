@@ -163,7 +163,12 @@ function capturePolicyMethod<T extends (...args: never[]) => unknown>(
       throw new Error("Invalid policy delegate.");
     }
     let current: object | null = target as object;
+    const visited = new Set<object>();
     while (current !== null) {
+      if (visited.has(current) || visited.size >= MAX_PROTOTYPE_CHAIN_DEPTH) {
+        throw new Error("Policy delegate prototype chain is cyclic or too deep.");
+      }
+      visited.add(current);
       const descriptor = Object.getOwnPropertyDescriptor(current, name);
       if (descriptor) {
         if (!Object.prototype.hasOwnProperty.call(descriptor, "value")) {
