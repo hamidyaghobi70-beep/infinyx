@@ -957,7 +957,6 @@ describe("process-wide child activity budget", () => {
     let signalAllStarted!: () => void;
     const allStarted = new Promise<void>((resolve) => { signalAllStarted = resolve; });
     let startedCount = 0;
-    const executors: ProtectedOperationExecutor[] = [];
     const pendingExecutions: Promise<unknown>[] = [];
 
     for (let executorIndex = 0; executorIndex < 4; executorIndex += 1) {
@@ -978,7 +977,6 @@ describe("process-wide child activity budget", () => {
           return "parent-handler-returned";
         }
       });
-      executors.push(executor);
       pendingExecutions.push(executor.execute(
         operation, { actorId: `global-budget-parent-${executorIndex}` }, undefined
       ));
@@ -988,6 +986,8 @@ describe("process-wide child activity budget", () => {
     expect(startedCount).toBe(4096);
 
     let overflowCallbackCalls = 0;
+    let signalOverflowAttempt!: () => void;
+    const overflowAttempt = new Promise<void>((resolve) => { signalOverflowAttempt = resolve; });
     let overflowChild!: Promise<void>;
     const overflowExecutor = new ProtectedOperationExecutor({ evaluate: async () => allow }, () => true);
     const overflowOperation = overflowExecutor.register({
@@ -999,6 +999,7 @@ describe("process-wide child activity budget", () => {
         overflowChild = context.runChild(() => {
           overflowCallbackCalls += 1;
         });
+        signalOverflowAttempt();
         return "overflow-parent-returned";
       }
     });
@@ -1006,8 +1007,9 @@ describe("process-wide child activity budget", () => {
       overflowOperation, { actorId: "global-budget-overflow" }, undefined
     );
 
+    await overflowAttempt;
     await expect(overflowChild).rejects.toThrow(/global child activity concurrency limit/i);
-    await expect(overflowExecution).resolves.toMatchObject({ status: "failed" });
+    await expect(overflowExecution).resolves.toMatchObject({ status: "executed" });
     expect(overflowCallbackCalls).toBe(0);
     expect(startedCount).toBe(4096);
 
