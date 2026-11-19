@@ -129,7 +129,12 @@ function captureTrustedMethod<T extends (...args: never[]) => unknown>(
       throw new Error("Invalid capability target.");
     }
     let current: object | null = target as object;
+    const visited = new Set<object>();
     while (current !== null) {
+      if (visited.has(current) || visited.size >= MAX_PROTOTYPE_CHAIN_DEPTH) {
+        throw new Error("Capability prototype chain is cyclic or too deep.");
+      }
+      visited.add(current);
       const descriptor = Object.getOwnPropertyDescriptor(current, name);
       if (descriptor) {
         if (!Object.prototype.hasOwnProperty.call(descriptor, "value") ||
