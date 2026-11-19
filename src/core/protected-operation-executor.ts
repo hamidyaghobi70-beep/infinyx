@@ -19,7 +19,12 @@ const handleBrand: unique symbol = Symbol("ProtectedOperationHandle");
 // Bound outstanding child work and nesting to prevent one authorized operation
 // from exhausting process resources through unbounded detached descendants.
 const MAX_PENDING_CHILD_ACTIVITIES = 1024;
+const MAX_GLOBAL_PENDING_CHILD_ACTIVITIES = 4096;
 const MAX_CHILD_ACTIVITY_DEPTH = 64;
+
+// Shared by every executor instance in this process. JavaScript's synchronous
+// execution makes check-and-increment a single admission step.
+let globalPendingChildActivities = 0;
 // Process-wide cap for admitted protected handlers across all registered operations.
 const MAX_ACTIVE_PROTECTED_OPERATIONS = 256;
 
@@ -71,13 +76,30 @@ function createChildActivityContext(
       void rejected.catch(() => undefined);
       return rejected;
     }
+    if (globalPendingChildActivities >= MAX_GLOBAL_PENDING_CHILD_ACTIVITIES) {
+      const rejected = Promise.reject<T>(new Error("Global child activity concurrency limit exceeded."));
+      void rejected.catch(() => undefined);
+      return rejected;
+    }
     if (scope.depth >= MAX_CHILD_ACTIVITY_DEPTH) {
       const rejected = Promise.reject<T>(new Error("Child activity nesting limit exceeded."));
       void rejected.catch(() => undefined);
       return rejected;
     }
 
+    // Reserve both budgets before invoking user code. The release closure is
+    // idempotent and runs only when the callback's actual Promise settles.
     active.pendingChildren += 1;
+    globalPendingChildActivities += 1;
+    let released = false;
+    const releaseReservation = (): void => {
+      if (released) return;
+      released = true;
+      active.pendingChildren -= 1;
+      globalPendingChildActivities -= 1;
+      settleHandlerIfComplete(active);
+    };
+
     const childScope: ChildActivityScope = { open: true, depth: scope.depth + 1 };
     let started: T | Promise<T>;
     try {
@@ -85,8 +107,7 @@ function createChildActivityContext(
     } catch (error) {
       childScope.open = false;
       active.childFailed = true;
-      active.pendingChildren -= 1;
-      settleHandlerIfComplete(active);
+      releaseReservation();
       const rejected = Promise.reject<T>(error);
       // Match the asynchronous path: detached child failures are tracked here,
       // while the returned promise remains rejected for callers that await it.
@@ -97,15 +118,13 @@ function createChildActivityContext(
     const tracked = Promise.resolve(started).then(
       (value) => {
         childScope.open = false;
-        active.pendingChildren -= 1;
-        settleHandlerIfComplete(active);
+        releaseReservation();
         return value;
       },
       (error: unknown) => {
         childScope.open = false;
         active.childFailed = true;
-        active.pendingChildren -= 1;
-        settleHandlerIfComplete(active);
+        releaseReservation();
         throw error;
       }
     );
