@@ -91,6 +91,8 @@ function snapshotCoreEngineOptions(value: unknown): CoreEngineOptions {
   return Object.freeze(options) as CoreEngineOptions;
 }
 
+const MAX_PROTOTYPE_CHAIN_DEPTH = 64;
+
 function captureEventBusMethod(
   target: object,
   name: "subscribe" | "publish" | "publishIfSubscribed" | "hasSubscribers",
