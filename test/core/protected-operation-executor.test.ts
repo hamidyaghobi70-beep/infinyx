@@ -950,6 +950,133 @@ describe("protected-operation cancellation cleanup hardening", () => {
 });
 
 
+describe("process-wide child activity budget", () => {
+  it("caps concurrent children across executor instances and retains reservations after parent handlers return", async () => {
+    let releaseChildren!: () => void;
+    const childGate = new Promise<void>((resolve) => { releaseChildren = resolve; });
+    let signalAllStarted!: () => void;
+    const allStarted = new Promise<void>((resolve) => { signalAllStarted = resolve; });
+    let startedCount = 0;
+    const executors: ProtectedOperationExecutor[] = [];
+    const pendingExecutions: Promise<unknown>[] = [];
+
+    for (let executorIndex = 0; executorIndex < 4; executorIndex += 1) {
+      const executor = new ProtectedOperationExecutor({ evaluate: async () => allow }, () => true);
+      const operation = executor.register({
+        id: `global-child-budget-${executorIndex}`,
+        action: "record.write",
+        resource: "record:global-child-budget",
+        validateInput: (value: unknown): value is undefined => value === undefined,
+        handler: (_value, context) => {
+          for (let childIndex = 0; childIndex < 1024; childIndex += 1) {
+            void context.runChild(() => {
+              startedCount += 1;
+              if (startedCount === 4096) signalAllStarted();
+              return childGate;
+            });
+          }
+          return "parent-handler-returned";
+        }
+      });
+      executors.push(executor);
+      pendingExecutions.push(executor.execute(
+        operation, { actorId: `global-budget-parent-${executorIndex}` }, undefined
+      ));
+    }
+
+    await allStarted;
+    expect(startedCount).toBe(4096);
+
+    let overflowCallbackCalls = 0;
+    let overflowChild!: Promise<void>;
+    const overflowExecutor = new ProtectedOperationExecutor({ evaluate: async () => allow }, () => true);
+    const overflowOperation = overflowExecutor.register({
+      id: "global-child-budget-overflow",
+      action: "record.write",
+      resource: "record:global-child-budget",
+      validateInput: (value: unknown): value is undefined => value === undefined,
+      handler: (_value, context) => {
+        overflowChild = context.runChild(() => {
+          overflowCallbackCalls += 1;
+        });
+        return "overflow-parent-returned";
+      }
+    });
+    const overflowExecution = overflowExecutor.execute(
+      overflowOperation, { actorId: "global-budget-overflow" }, undefined
+    );
+
+    await expect(overflowChild).rejects.toThrow(/global child activity concurrency limit/i);
+    await expect(overflowExecution).resolves.toMatchObject({ status: "failed" });
+    expect(overflowCallbackCalls).toBe(0);
+    expect(startedCount).toBe(4096);
+
+    let parentsFinished = false;
+    void Promise.all(pendingExecutions).then(() => { parentsFinished = true; });
+    await Promise.resolve();
+    expect(parentsFinished).toBe(false);
+
+    releaseChildren();
+    const results = await Promise.all(pendingExecutions);
+    expect(results).toHaveLength(4);
+    expect(results.every((result) => (result as { status?: string }).status === "executed")).toBe(true);
+
+    // A rejected admission is not queued or replayed; a new explicit request
+    // can use the capacity only after the original child Promises settle.
+    let retryCallbackCalls = 0;
+    const retryOperation = overflowExecutor.register({
+      id: "global-child-budget-explicit-retry",
+      action: "record.write",
+      resource: "record:global-child-budget",
+      validateInput: (value: unknown): value is undefined => value === undefined,
+      handler: async (_value, context) => {
+        await context.runChild(() => { retryCallbackCalls += 1; });
+        return "retried-explicitly";
+      }
+    });
+    await expect(overflowExecutor.execute(
+      retryOperation, { actorId: "global-budget-explicit-retry" }, undefined
+    )).resolves.toEqual({ status: "executed", value: "retried-explicitly" });
+    expect(retryCallbackCalls).toBe(1);
+  });
+
+  it("releases reservations exactly once after synchronous throws and asynchronous rejection", async () => {
+    const executor = new ProtectedOperationExecutor({ evaluate: async () => allow }, () => true);
+    const failingOperation = executor.register({
+      id: "global-child-budget-failure",
+      action: "record.write",
+      resource: "record:global-child-budget",
+      validateInput: (value: unknown): value is undefined => value === undefined,
+      handler: (_value, context) => {
+        void context.runChild(() => { throw new Error("synchronous child failure"); });
+        void context.runChild(() => Promise.reject(new Error("asynchronous child failure")));
+        return "handler-returned";
+      }
+    });
+
+    await expect(executor.execute(
+      failingOperation, { actorId: "global-budget-failure" }, undefined
+    )).resolves.toMatchObject({ status: "failed" });
+
+    let callbackCalls = 0;
+    const recoveryOperation = executor.register({
+      id: "global-child-budget-recovery",
+      action: "record.write",
+      resource: "record:global-child-budget",
+      validateInput: (value: unknown): value is undefined => value === undefined,
+      handler: async (_value, context) => {
+        await context.runChild(() => { callbackCalls += 1; });
+        return "capacity-recovered";
+      }
+    });
+    await expect(executor.execute(
+      recoveryOperation, { actorId: "global-budget-recovery" }, undefined
+    )).resolves.toEqual({ status: "executed", value: "capacity-recovered" });
+    expect(callbackCalls).toBe(1);
+  });
+});
+
+
 describe("protected-operation child activity resource bounds", () => {
   it("rejects child activity beyond the per-operation concurrency limit", async () => {
     let releaseChildren!: () => void;
