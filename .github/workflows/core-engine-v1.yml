@@ -10,18 +10,9 @@ on:
       - fix/protected-operation-hardening
       - work/core-engine-v1-hardening
       - fix/ci-target-protected-operation-2026-11-17
-      - fix/core-engine-shutdown-v4
-      - fix/core-engine-shutdown-v5
-      - fix/core-engine-shutdown-v6
-      - work/core-engine-v1-hardening
-      - fix/protected-operation-hardening
-      - fix/ci-target-protected-operation-2026-11-17
   pull_request:
     branches:
       - foundation/repository-foundation
-      - feature/core-engine-v1
-      - fix/core-engine-shutdown-v6
-      - fix/protected-operation-hardening
       - feature/core-engine-v1
       - fix/core-engine-shutdown-v6
       - fix/protected-operation-hardening
