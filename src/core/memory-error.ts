@@ -4,7 +4,8 @@ export type MemoryErrorCode =
   | "MEMORY_INVALID_VALUE"
   | "MEMORY_ACCESS_DENIED"
   | "MEMORY_AUDIT_UNAVAILABLE"
-  | "MEMORY_BACKEND_FAILED";
+  | "MEMORY_BACKEND_FAILED"
+  | "MEMORY_CAPABILITY_REVOKED";
 
 /**
  * Error raised by the memory boundary. Messages are deliberately generic: policy

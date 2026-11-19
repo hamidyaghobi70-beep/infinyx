@@ -4,6 +4,8 @@ import type {
   PolicyEngine,
   PolicyRequest
 } from "./contracts.js";
+import { snapshotPolicyDecision } from "./fail-closed-policy-engine.js";
+import { snapshotBoundedPolicyData } from "./policy-input-snapshot.js";
 import { MemoryAccessError } from "./memory-error.js";
 
 /** Published before every memory operation is executed or refused. */
@@ -16,7 +18,9 @@ export const DEFAULT_MEMORY_POLICY_TIMEOUT_MS = 5_000;
 /** Default deadline for publishing one audit event. A timeout refuses an allowed operation. */
 export const DEFAULT_MEMORY_AUDIT_TIMEOUT_MS = 5_000;
 const MAX_TIMEOUT_MS = 2_147_483_647;
+const MAX_PROTOTYPE_CHAIN_DEPTH = 64;
 const TIMED_OUT = Symbol("timed out");
+const memoryCapabilityRevokers = new WeakMap<object, (deadlineAt?: number) => Promise<void>>();
 
 const MAX_SCOPE_SEGMENT_LENGTH = 128;
 const MAX_NAMESPACE_LENGTH = 128;
@@ -84,6 +88,69 @@ interface NormalizedDecision {
   readonly reason: string;
 }
 
+function snapshotMemoryOptionRecord(
+  value: unknown,
+  allowedKeys: readonly string[],
+  errorMessage: string
+): Record<string, unknown> {
+  try {
+    if (typeof value !== "object" || value === null || Array.isArray(value)) {
+      throw new Error("Invalid option record.");
+    }
+    const prototype = Object.getPrototypeOf(value);
+    if (prototype !== Object.prototype && prototype !== null) {
+      throw new Error("Option records must be plain objects.");
+    }
+    const result: Record<string, unknown> = Object.create(null) as Record<string, unknown>;
+    for (const key of Reflect.ownKeys(value)) {
+      if (typeof key !== "string" || !allowedKeys.includes(key)) {
+        throw new Error("Unexpected option property.");
+      }
+      const descriptor = Object.getOwnPropertyDescriptor(value, key);
+      if (!descriptor ||
+          !Object.prototype.hasOwnProperty.call(descriptor, "value") ||
+          descriptor.enumerable !== true) {
+        throw new Error("Options must be enumerable data properties.");
+      }
+      result[key] = descriptor.value;
+    }
+    return result;
+  } catch {
+    throw new TypeError(errorMessage);
+  }
+}
+
+function captureTrustedMethod<T extends (...args: never[]) => unknown>(
+  target: unknown,
+  name: string
+): T {
+  try {
+    if ((typeof target !== "object" && typeof target !== "function") || target === null) {
+      throw new Error("Invalid capability target.");
+    }
+    let current: object | null = target as object;
+    const visited = new Set<object>();
+    while (current !== null) {
+      if (visited.has(current) || visited.size >= MAX_PROTOTYPE_CHAIN_DEPTH) {
+        throw new Error("Capability prototype chain is cyclic or too deep.");
+      }
+      visited.add(current);
+      const descriptor = Object.getOwnPropertyDescriptor(current, name);
+      if (descriptor) {
+        if (!Object.prototype.hasOwnProperty.call(descriptor, "value") ||
+            typeof descriptor.value !== "function") {
+          throw new Error("Capability methods must be data properties.");
+        }
+        return Function.prototype.bind.call(descriptor.value, target) as T;
+      }
+      current = Object.getPrototypeOf(current) as object | null;
+    }
+  } catch {
+    throw new TypeError("GuardedMemoryPort dependencies must expose stable data methods.");
+  }
+  throw new TypeError("GuardedMemoryPort dependencies must expose stable data methods.");
+}
+
 /**
  * Tenant-scoped, policy-checked, audited decorator over a MemoryPort.
  *
@@ -100,13 +167,18 @@ interface NormalizedDecision {
  * key management, retention, backup and durable audit storage are NOT provided.
  */
 export class GuardedMemoryPort implements MemoryPort {
-  readonly #store: MemoryPort;
-  readonly #policy: PolicyEngine;
-  readonly #audit: MemoryAuditPort;
+  readonly #storeRead: (address: MemoryAddress) => Promise<unknown | null>;
+  readonly #storeWrite: (address: MemoryAddress, value: unknown) => Promise<void>;
+  readonly #storeDelete: (address: MemoryAddress) => Promise<void>;
+  readonly #policyEvaluate: PolicyEngine["evaluate"];
+  readonly #auditPublishDecision: MemoryAuditPort["publishDecision"];
+  readonly #auditPublishFailure: MemoryAuditPort["publishFailure"];
   readonly #scope: MemoryScope;
   readonly #maxValueBytes: number;
   readonly #policyTimeoutMs: number;
   readonly #auditTimeoutMs: number;
+  #revoked = false;
+  readonly #activeOperations = new Set<Promise<void>>();
 
   /** Module identity bound to this capability by the composition root. */
   get scopeModuleId(): string {
@@ -114,43 +186,57 @@ export class GuardedMemoryPort implements MemoryPort {
   }
 
   constructor(options: GuardedMemoryPortOptions) {
-    if (!options || typeof options !== "object") {
-      throw new TypeError("GuardedMemoryPort options are required.");
-    }
-    // Capture dependency references once, then validate and retain those exact
-    // references. Re-reading option accessors after validation would create a
-    // time-of-check/time-of-use gap in this security boundary.
-    let store: unknown;
-    let policy: unknown;
-    let audit: unknown;
+    const safeOptions = snapshotMemoryOptionRecord(
+      options,
+      ["store", "policy", "audit", "scope", "maxValueBytes", "policyTimeoutMs", "auditTimeoutMs"],
+      "GuardedMemoryPort options must contain only stable data properties."
+    );
+    // Dependencies and scalar settings are captured once from a descriptor-only
+    // snapshot; no caller-controlled option getter is invoked.
+    const store: unknown = safeOptions.store;
+    const policy: unknown = safeOptions.policy;
+    const audit: unknown = safeOptions.audit;
+    let storeRead: (address: MemoryAddress) => Promise<unknown | null>;
+    let storeWrite: (address: MemoryAddress, value: unknown) => Promise<void>;
+    let storeDelete: (address: MemoryAddress) => Promise<void>;
+    let policyEvaluate: PolicyEngine["evaluate"];
+    let auditPublishDecision: MemoryAuditPort["publishDecision"];
+    let auditPublishFailure: MemoryAuditPort["publishFailure"];
     try {
-      store = options.store;
-      policy = options.policy;
-      audit = options.audit;
+      storeRead = captureTrustedMethod<MemoryPort["read"]>(store, "read");
+      storeWrite = captureTrustedMethod<MemoryPort["write"]>(store, "write");
+      storeDelete = captureTrustedMethod<MemoryPort["delete"]>(store, "delete");
+      policyEvaluate = captureTrustedMethod<PolicyEngine["evaluate"]>(policy, "evaluate");
+      auditPublishDecision = captureTrustedMethod<MemoryAuditPort["publishDecision"]>(audit, "publishDecision");
+      auditPublishFailure = captureTrustedMethod<MemoryAuditPort["publishFailure"]>(audit, "publishFailure");
     } catch {
-      throw new TypeError("GuardedMemoryPort dependencies must be readable values.");
-    }
-    if (!hasMethods(store, ["read", "write", "delete"])) {
-      throw new TypeError("GuardedMemoryPort requires a MemoryPort store.");
-    }
-    if (!hasMethods(policy, ["evaluate"])) {
-      throw new TypeError("GuardedMemoryPort requires a PolicyEngine.");
-    }
-    if (!hasMethods(audit, ["publishDecision", "publishFailure"])) {
-      throw new TypeError("GuardedMemoryPort requires a dedicated MemoryAuditPort.");
+      throw new TypeError("GuardedMemoryPort dependencies must expose stable data methods.");
     }
 
-    const maxValueBytes = options.maxValueBytes ?? DEFAULT_MAX_MEMORY_VALUE_BYTES;
-    if (!Number.isSafeInteger(maxValueBytes) || maxValueBytes <= 0) {
+    const maxValueBytes = safeOptions.maxValueBytes ?? DEFAULT_MAX_MEMORY_VALUE_BYTES;
+    if (typeof maxValueBytes !== "number" ||
+        !Number.isSafeInteger(maxValueBytes) || maxValueBytes <= 0) {
       throw new TypeError("maxValueBytes must be a positive safe integer.");
     }
 
-    const policyTimeoutMs = options.policyTimeoutMs ?? DEFAULT_MEMORY_POLICY_TIMEOUT_MS;
-    const auditTimeoutMs = options.auditTimeoutMs ?? DEFAULT_MEMORY_AUDIT_TIMEOUT_MS;
+    const policyTimeoutMs = safeOptions.policyTimeoutMs ?? DEFAULT_MEMORY_POLICY_TIMEOUT_MS;
+    const auditTimeoutMs = safeOptions.auditTimeoutMs ?? DEFAULT_MEMORY_AUDIT_TIMEOUT_MS;
     if (!isValidTimeout(policyTimeoutMs)) throw new TypeError(`policyTimeoutMs must be an integer from 1 to ${MAX_TIMEOUT_MS}.`);
     if (!isValidTimeout(auditTimeoutMs)) throw new TypeError(`auditTimeoutMs must be an integer from 1 to ${MAX_TIMEOUT_MS}.`);
 
-    const suppliedScope = options.scope as Partial<MemoryScope> | undefined;
+    let suppliedScope: Partial<MemoryScope> | undefined;
+    try {
+      suppliedScope = snapshotMemoryOptionRecord(
+        safeOptions.scope,
+        ["tenantId", "actorId", "moduleId"],
+        "Memory scope must contain only stable data properties."
+      ) as Partial<MemoryScope>;
+    } catch {
+      throw new MemoryAccessError(
+        "MEMORY_INVALID_SCOPE",
+        "tenantId, actorId and moduleId must be non-empty strings without control characters."
+      );
+    }
     // Snapshot each property exactly once before validation. Re-reading accessors
     // after validation would allow a changing getter to bypass the scope checks.
     let tenantId: unknown;
@@ -177,9 +263,12 @@ export class GuardedMemoryPort implements MemoryPort {
       );
     }
 
-    this.#store = store as MemoryPort;
-    this.#policy = policy as PolicyEngine;
-    this.#audit = audit as MemoryAuditPort;
+    this.#storeRead = storeRead!;
+    this.#storeWrite = storeWrite!;
+    this.#storeDelete = storeDelete!;
+    this.#policyEvaluate = policyEvaluate!;
+    this.#auditPublishDecision = auditPublishDecision!;
+    this.#auditPublishFailure = auditPublishFailure!;
     this.#maxValueBytes = maxValueBytes;
     this.#policyTimeoutMs = policyTimeoutMs;
     this.#auditTimeoutMs = auditTimeoutMs;
@@ -190,50 +279,149 @@ export class GuardedMemoryPort implements MemoryPort {
     } as MemoryScope);
     // Modules receive this instance as a capability. Freeze its public surface so
     // they cannot shadow read/write/delete with unguarded replacements.
+    memoryCapabilityRevokers.set(this, (deadlineAt) => this.revokeAndDrain(deadlineAt));
     Object.freeze(this);
   }
 
-  async read(address: MemoryAddress): Promise<unknown | null> {
-    const target = this.resolve(address);
-    await this.authorize("read", target);
-
-    return this.callStore("read", target, async () => {
-      const stored = await this.#store.read(target.inner);
-      if (stored === null) return null;
-      if (typeof stored !== "string") {
-        throw new TypeError("Backing store returned a value that is not a serialized string.");
-      }
-      return JSON.parse(stored) as unknown;
+  read(address: MemoryAddress): Promise<unknown | null> {
+    return this.trackOperation(async () => {
+      const target = this.resolve(address);
+      await this.authorize("read", target);
+      return this.callStore("read", target, async () => {
+        const stored = await this.#storeRead(target.inner);
+        if (stored === null) return null;
+        if (typeof stored !== "string") {
+          throw new TypeError("Backing store returned a value that is not a serialized string.");
+        }
+        if (Buffer.byteLength(stored, "utf8") > this.#maxValueBytes) {
+          throw new TypeError("Backing store value exceeds the configured byte limit.");
+        }
+        const parsed = JSON.parse(stored) as unknown;
+        const snapshot = snapshotBoundedPolicyData(parsed);
+        if (!snapshot.ok) {
+          throw new TypeError("Backing store value exceeds bounded structured-data limits.");
+        }
+        return parsed;
+      });
     });
   }
 
-  async write(address: MemoryAddress, value: unknown): Promise<void> {
-    const target = this.resolve(address);
-    const serialized = this.serialize(value);
-    await this.authorize("write", target);
-    await this.callStore("write", target, () => this.#store.write(target.inner, serialized));
+  write(address: MemoryAddress, value: unknown): Promise<void> {
+    return this.trackOperation(async () => {
+      const target = this.resolve(address);
+      const serialized = this.serialize(value);
+      await this.authorize("write", target);
+      await this.callStore("write", target, () => this.#storeWrite(target.inner, serialized));
+    });
   }
 
-  async delete(address: MemoryAddress): Promise<void> {
-    const target = this.resolve(address);
-    await this.authorize("delete", target);
-    await this.callStore("delete", target, () => this.#store.delete(target.inner));
+  delete(address: MemoryAddress): Promise<void> {
+    return this.trackOperation(async () => {
+      const target = this.resolve(address);
+      await this.authorize("delete", target);
+      await this.callStore("delete", target, () => this.#storeDelete(target.inner));
+    });
+  }
+
+  private trackOperation<T>(action: () => Promise<T>): Promise<T> {
+    if (this.#revoked) {
+      return Promise.reject(new MemoryAccessError(
+        "MEMORY_CAPABILITY_REVOKED",
+        "Memory capability is closed and no longer accepts operations."
+      ));
+    }
+    let settle!: () => void;
+    const settled = new Promise<void>((resolve) => { settle = resolve; });
+    this.#activeOperations.add(settled);
+    return (async () => {
+      try {
+        return await action();
+      } finally {
+        this.#activeOperations.delete(settled);
+        settle();
+      }
+    })();
+  }
+
+  private trackPendingOperation(work: Promise<unknown>): void {
+    let settle!: () => void;
+    const settled = new Promise<void>((resolve) => { settle = resolve; });
+    this.#activeOperations.add(settled);
+    void work.then(
+      () => { this.#activeOperations.delete(settled); settle(); },
+      () => { this.#activeOperations.delete(settled); settle(); }
+    );
+  }
+
+  private async revokeAndDrain(deadlineAt?: number): Promise<void> {
+    // Revoke is immediate and permanent, even when the drain exceeds its budget.
+    this.#revoked = true;
+    const drain = (async () => {
+      while (this.#activeOperations.size > 0) {
+        await Promise.all([...this.#activeOperations]);
+      }
+    })();
+    if (deadlineAt === undefined) {
+      await drain;
+      return;
+    }
+    // An empty drain is already complete, even if the caller's deadline has
+    // elapsed. For admitted work, verify its actual settlement timestamp rather
+    // than relying only on timer delivery (which can be delayed by the event loop).
+    if (this.#activeOperations.size === 0) {
+      await drain;
+      return;
+    }
+    const remainingMs = Math.max(0, deadlineAt - performance.now());
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      const timedOut = new Promise<never>((_, reject) => {
+        timer = setTimeout(() => reject(new Error("Module memory operations did not drain before the shutdown deadline.")), remainingMs);
+      });
+      const completedAt = await Promise.race([
+        drain.then(() => performance.now()),
+        timedOut
+      ]);
+      if (completedAt > deadlineAt) {
+        throw new Error("Module memory operations did not drain before the shutdown deadline.");
+      }
+    } finally {
+      if (timer !== undefined) clearTimeout(timer);
+    }
   }
 
   private resolve(address: MemoryAddress): ResolvedTarget {
-    const candidate = address as Partial<MemoryAddress> | null | undefined;
-
-    // Read each property exactly once. Validating and then re-reading would let an
-    // address with accessor properties pass validation and return different values later.
     let namespace: unknown;
     let key: unknown;
-    if (candidate && typeof candidate === "object") {
-      try {
-        namespace = candidate.namespace;
-        key = candidate.key;
-      } catch {
-        // A throwing accessor is treated as an invalid address, not an internal error.
+    try {
+      if (typeof address !== "object" || address === null || Array.isArray(address)) {
+        throw new TypeError("Memory address must be a plain record.");
       }
+      const prototype = Object.getPrototypeOf(address);
+      if (prototype !== Object.prototype && prototype !== null) {
+        throw new TypeError("Memory address must be a plain record.");
+      }
+      const keys = Reflect.ownKeys(address);
+      if (keys.length !== 2 || keys.some((name) => name !== "namespace" && name !== "key")) {
+        throw new TypeError("Memory address must contain exactly namespace and key.");
+      }
+      const namespaceDescriptor = Object.getOwnPropertyDescriptor(address, "namespace");
+      const keyDescriptor = Object.getOwnPropertyDescriptor(address, "key");
+      if (!namespaceDescriptor ||
+          !Object.prototype.hasOwnProperty.call(namespaceDescriptor, "value") ||
+          namespaceDescriptor.enumerable !== true ||
+          !keyDescriptor ||
+          !Object.prototype.hasOwnProperty.call(keyDescriptor, "value") ||
+          keyDescriptor.enumerable !== true) {
+        throw new TypeError("Memory address fields must be enumerable data properties.");
+      }
+      namespace = namespaceDescriptor.value;
+      key = keyDescriptor.value;
+    } catch {
+      throw new MemoryAccessError(
+        "MEMORY_INVALID_ADDRESS",
+        "Memory namespace and key must be own enumerable data properties on a plain record."
+      );
     }
 
     if (
@@ -259,9 +447,20 @@ export class GuardedMemoryPort implements MemoryPort {
   }
 
   private serialize(value: unknown): string {
+    // Never pass caller-owned values directly to JSON.stringify: getters and
+    // toJSON methods execute during serialization. First create a bounded,
+    // detached data-only snapshot that rejects accessors, cycles and Proxies.
+    const snapshot = snapshotBoundedPolicyData(value);
+    if (!snapshot.ok) {
+      throw new MemoryAccessError(
+        "MEMORY_INVALID_VALUE",
+        "Memory value must be safe, bounded structured data."
+      );
+    }
+
     let serialized: unknown;
     try {
-      serialized = JSON.stringify(value);
+      serialized = JSON.stringify(snapshot.value);
     } catch (cause) {
       throw new MemoryAccessError(
         "MEMORY_INVALID_VALUE",
@@ -298,7 +497,8 @@ export class GuardedMemoryPort implements MemoryPort {
 
     let decision: NormalizedDecision;
     try {
-      const result = await withTimeout(() => this.#policy.evaluate(request), this.#policyTimeoutMs);
+      const result = await withTimeout(() => this.#policyEvaluate(request), this.#policyTimeoutMs,
+        (pending) => this.trackPendingOperation(pending));
       decision = result === TIMED_OUT
         ? { effect: "deny", reason: "Policy evaluation timed out." }
         : normalizeDecision(result);
@@ -317,8 +517,9 @@ export class GuardedMemoryPort implements MemoryPort {
 
     try {
       const published = await withTimeout(
-        () => this.#audit.publishDecision(audit),
-        this.#auditTimeoutMs
+        () => this.#auditPublishDecision(audit),
+        this.#auditTimeoutMs,
+        (pending) => this.trackPendingOperation(pending)
       );
       if (published !== true) {
         throw new Error(
@@ -376,8 +577,9 @@ export class GuardedMemoryPort implements MemoryPort {
       // Failure reporting is best-effort and bounded by the same audit deadline.
       // A stalled subscriber must not delay propagation of the original backend error.
       await withTimeout(
-        () => this.#audit.publishFailure(failure),
-        this.#auditTimeoutMs
+        () => this.#auditPublishFailure(failure),
+        this.#auditTimeoutMs,
+        (pending) => this.trackPendingOperation(pending)
       );
     } catch {
       // Intentionally ignored: reporting must never mask the original backend failure.
@@ -385,26 +587,34 @@ export class GuardedMemoryPort implements MemoryPort {
   }
 }
 
+/**
+ * GuardedMemoryPort is a shared capability boundary. Freeze the prototype so
+ * consumers cannot replace guarded methods for every issued instance.
+ */
+Object.freeze(GuardedMemoryPort.prototype);
+
 function isValidTimeout(value: unknown): value is number {
   return typeof value === "number" && Number.isInteger(value) && value >= 1 && value <= MAX_TIMEOUT_MS;
 }
 
 /** A deadline does not cancel work; late fulfilment/rejection is consumed. */
-function withTimeout<T>(work: () => Promise<T> | T, ms: number): Promise<T | typeof TIMED_OUT> {
+function withTimeout<T>(
+  work: () => Promise<T> | T,
+  ms: number,
+  onPending?: (pending: Promise<T>) => void
+): Promise<T | typeof TIMED_OUT> {
   return new Promise((resolve, reject) => {
     let settled = false;
+    const pending = Promise.resolve().then(work);
+    // The timeout bounds the caller's wait, not the lifetime of the underlying
+    // callback. Keep that callback in the capability drain until it really settles.
+    onPending?.(pending);
     const timer = setTimeout(() => { if (!settled) { settled = true; resolve(TIMED_OUT); } }, ms);
-    Promise.resolve().then(work).then(
+    pending.then(
       (value) => { if (!settled) { settled = true; clearTimeout(timer); resolve(value); } },
       (error: unknown) => { if (!settled) { settled = true; clearTimeout(timer); reject(error); } }
     );
   });
-}
-
-function hasMethods(value: unknown, names: readonly string[]): boolean {
-  if (!value || typeof value !== "object") return false;
-  const record = value as Record<string, unknown>;
-  return names.every((name) => typeof record[name] === "function");
 }
 
 function isValidSegment(value: unknown, maxLength: number): value is string {
@@ -421,13 +631,20 @@ function isValidSegment(value: unknown, maxLength: number): value is string {
 }
 
 function normalizeDecision(result: unknown): NormalizedDecision {
-  if (!result || typeof result !== "object" || Array.isArray(result)) {
-    return { effect: "deny", reason: "Policy returned an invalid decision." };
-  }
+  // GuardedMemoryPort is independently constructible, so it must enforce its own
+  // decision boundary instead of trusting callers to wrap policies in FailClosedPolicyEngine.
+  // Descriptor-based snapshotting rejects accessors, extra/symbol keys and hostile reflection
+  // without executing untrusted getters.
+  return snapshotPolicyDecision(result) ?? {
+    effect: "deny",
+    reason: "Policy returned an invalid decision."
+  };
+}
 
-  const { effect, reason } = result as { effect?: unknown; reason?: unknown };
-  if ((effect !== "allow" && effect !== "deny") || typeof reason !== "string" || !reason.trim()) {
-    return { effect: "deny", reason: "Policy returned an invalid decision." };
-  }
-  return { effect, reason };
+
+/** Internal composition-root hook: close a module capability and await all admitted operations. */
+export async function revokeGuardedMemoryPort(port: GuardedMemoryPort, deadlineAt?: number): Promise<void> {
+  const revoke = memoryCapabilityRevokers.get(port);
+  if (!revoke) throw new TypeError("Unknown guarded memory capability.");
+  await revoke(deadlineAt);
 }

@@ -8,6 +8,8 @@ import type {
 } from "./contracts.js";
 
 const DEFAULT_POLICY_TIMEOUT_MS = 5_000;
+const MAX_ACTIVE_POLICY_EVALUATIONS = 512;
+const MAX_PROTOTYPE_CHAIN_DEPTH = 64;
 
 function deny(reason: string): PolicyDecision {
   return Object.freeze({ effect: "deny", reason });
@@ -34,7 +36,7 @@ function isSafeData(value: unknown, ancestors = new Set<object>()): boolean {
   for (const key of Reflect.ownKeys(descriptors)) {
     if (typeof key === "symbol" || (Array.isArray(value) && key === "length")) continue;
     const descriptor = descriptors[key as keyof typeof descriptors];
-    if (!descriptor || !("value" in descriptor) ||
+    if (!descriptor || !descriptor.enumerable || !("value" in descriptor) ||
         !isSafeData(descriptor.value, ancestors)) {
       ancestors.delete(value);
       return false;
@@ -73,19 +75,46 @@ export function isValidPolicyRequest(value: unknown): value is PolicyRequest {
       Object.keys(attributes).every((key) => key.trim().length > 0));
 }
 
-export function isValidPolicyDecision(value: unknown): value is PolicyDecision {
-  return isPlainRecord(value) &&
-    (value.effect === "allow" || value.effect === "deny") &&
-    isNonEmptyString(value.reason);
-}
-
+/**
+ * Read a policy result through own property descriptors. Never dereference
+ * untrusted properties: accessor getters must not execute at the trust boundary.
+ *
+ * Proxy reflection traps cannot be detected or prevented by JavaScript; any
+ * trap failure is caught by the caller and converted into a deny decision.
+ */
 export function snapshotPolicyDecision(value: unknown): PolicyDecision | undefined {
   try {
-    if (!isValidPolicyDecision(value)) return undefined;
-    return Object.freeze({ effect: value.effect, reason: value.reason });
+    if (typeof value !== "object" || value === null || Array.isArray(value)) return undefined;
+    const prototype = Object.getPrototypeOf(value);
+    if (prototype !== Object.prototype && prototype !== null) return undefined;
+
+    const descriptors = Object.getOwnPropertyDescriptors(value);
+    const keys = Reflect.ownKeys(descriptors);
+    if (keys.length !== 2 || !keys.includes("effect") || !keys.includes("reason")) {
+      return undefined;
+    }
+
+    const effectDescriptor = descriptors.effect;
+    const reasonDescriptor = descriptors.reason;
+    if (!effectDescriptor || !effectDescriptor.enumerable || !("value" in effectDescriptor) ||
+        !reasonDescriptor || !reasonDescriptor.enumerable || !("value" in reasonDescriptor)) {
+      return undefined;
+    }
+
+    const effect: unknown = effectDescriptor.value;
+    const reason: unknown = reasonDescriptor.value;
+    if ((effect !== "allow" && effect !== "deny") || !isNonEmptyString(reason)) {
+      return undefined;
+    }
+
+    return Object.freeze({ effect, reason });
   } catch {
     return undefined;
   }
+}
+
+export function isValidPolicyDecision(value: unknown): value is PolicyDecision {
+  return snapshotPolicyDecision(value) !== undefined;
 }
 
 function cancellationMessage(reason: PolicyStopReason): string {
@@ -102,11 +131,19 @@ function cancellationMessage(reason: PolicyStopReason): string {
 }
 
 function reasonFromSignal(signal: AbortSignal, fallback: PolicyStopReason): PolicyStopReason {
-  const reason: unknown = signal.reason;
-  if (typeof reason === "object" && reason !== null && "code" in reason) {
-    const code = reason.code;
-    if (code === "CALLER_CANCELLED" || code === "POLICY_TIMEOUT" ||
-        code === "RUNTIME_SHUTDOWN" || code === "PARENT_CANCELLED") return code;
+  try {
+    const reason: unknown = signal.reason;
+    if (typeof reason === "object" && reason !== null) {
+      const descriptor = Object.getOwnPropertyDescriptor(reason, "code");
+      if (descriptor && "value" in descriptor) {
+        const code: unknown = descriptor.value;
+        if (code === "CALLER_CANCELLED" || code === "POLICY_TIMEOUT" ||
+            code === "RUNTIME_SHUTDOWN" || code === "PARENT_CANCELLED") return code;
+      }
+    }
+  } catch {
+    // Abort reasons are caller-controlled; hostile reflection must not escape
+    // the cancellation boundary or prevent the fail-closed fallback.
   }
   return fallback;
 }
@@ -116,19 +153,59 @@ function reasonFromSignal(signal: AbortSignal, fallback: PolicyStopReason): Poli
  * continue executing after this method returns. Use a process boundary when
  * hard execution termination is required.
  */
+function capturePolicyMethod<T extends (...args: never[]) => unknown>(
+  target: unknown,
+  name: string,
+  optional = false
+): T | undefined {
+  try {
+    if ((typeof target !== "object" && typeof target !== "function") || target === null) {
+      throw new Error("Invalid policy delegate.");
+    }
+    let current: object | null = target as object;
+    const visited = new Set<object>();
+    while (current !== null) {
+      if (visited.has(current) || visited.size >= MAX_PROTOTYPE_CHAIN_DEPTH) {
+        throw new Error("Policy delegate prototype chain is cyclic or too deep.");
+      }
+      visited.add(current);
+      const descriptor = Object.getOwnPropertyDescriptor(current, name);
+      if (descriptor) {
+        if (!Object.prototype.hasOwnProperty.call(descriptor, "value")) {
+          throw new Error("Policy methods must be data properties.");
+        }
+        if (descriptor.value === undefined && optional) return undefined;
+        if (typeof descriptor.value !== "function") {
+          throw new Error("Policy method is not callable.");
+        }
+        return Function.prototype.bind.call(descriptor.value, target) as T;
+      }
+      current = Object.getPrototypeOf(current) as object | null;
+    }
+    if (optional) return undefined;
+  } catch {
+    throw new TypeError("Policy delegate must expose stable data methods.");
+  }
+  throw new TypeError("Policy delegate must expose stable data methods.");
+}
+
 export class FailClosedPolicyEngine implements PolicyEngine {
   private shuttingDown = false;
   private readonly activeStops = new Set<(reason: PolicyStopReason) => void>();
   private readonly activeEvaluations = new Set<Promise<unknown>>();
   private shutdownPromise: Promise<void> | undefined;
+  private readonly delegateEvaluate: PolicyEngine["evaluate"];
+  private readonly delegateShutdown: PolicyEngine["shutdown"];
 
   constructor(
-    private readonly delegate: PolicyEngine,
+    delegate: PolicyEngine,
     private readonly timeoutMs = DEFAULT_POLICY_TIMEOUT_MS
   ) {
     if (!Number.isFinite(timeoutMs) || timeoutMs <= 0) {
       throw new RangeError("Policy evaluation timeout must be a positive finite number.");
     }
+    this.delegateEvaluate = capturePolicyMethod<PolicyEngine["evaluate"]>(delegate, "evaluate")!;
+    this.delegateShutdown = capturePolicyMethod<NonNullable<PolicyEngine["shutdown"]>>(delegate, "shutdown", true);
   }
 
   async evaluate(
@@ -140,17 +217,48 @@ export class FailClosedPolicyEngine implements PolicyEngine {
     if (!input) return deny("Policy request cannot be safely snapshotted; access denied.");
     if (!isValidPolicyRequest(input)) return deny("Policy request is invalid; access denied.");
 
-    if (options?.signal?.aborted) {
-      return deny(cancellationMessage(reasonFromSignal(options.signal, "CALLER_CANCELLED")));
-    }
-    if (options?.parentSignal?.aborted) {
-      return deny(cancellationMessage("PARENT_CANCELLED"));
+    // Capture every caller-controlled option exactly once. Accessors and Proxy
+    // traps are untrusted input and must never escape this boundary.
+    let callerSignal: AbortSignal | undefined;
+    let parentSignal: AbortSignal | undefined;
+    let deadlineAt: number | undefined;
+    try {
+      callerSignal = options?.signal;
+      parentSignal = options?.parentSignal;
+      deadlineAt = options?.deadlineAt;
+      if (deadlineAt !== undefined && !Number.isFinite(deadlineAt)) {
+        return deny("Policy evaluation deadline is invalid; access denied.");
+      }
+      if (callerSignal !== undefined &&
+          (typeof callerSignal.aborted !== "boolean" ||
+           typeof callerSignal.addEventListener !== "function" ||
+           typeof callerSignal.removeEventListener !== "function")) {
+        return deny("Caller cancellation signal is invalid; access denied.");
+      }
+      if (parentSignal !== undefined &&
+          (typeof parentSignal.aborted !== "boolean" ||
+           typeof parentSignal.addEventListener !== "function" ||
+           typeof parentSignal.removeEventListener !== "function")) {
+        return deny("Parent cancellation signal is invalid; access denied.");
+      }
+      if (callerSignal?.aborted) {
+        return deny(cancellationMessage(reasonFromSignal(callerSignal, "CALLER_CANCELLED")));
+      }
+      if (parentSignal?.aborted) {
+        return deny(cancellationMessage("PARENT_CANCELLED"));
+      }
+    } catch {
+      return deny("Policy evaluation cancellation options are invalid; access denied.");
     }
 
-    const remainingDeadlineMs = options?.deadlineAt === undefined
+    const remainingDeadlineMs = deadlineAt === undefined
       ? this.timeoutMs
-      : options.deadlineAt - Date.now();
+      : deadlineAt - Date.now();
     if (remainingDeadlineMs <= 0) return deny(cancellationMessage("POLICY_TIMEOUT"));
+
+    if (this.activeEvaluations.size >= MAX_ACTIVE_POLICY_EVALUATIONS) {
+      return deny("Policy evaluation concurrency limit exceeded; access denied.");
+    }
 
     const effectiveTimeoutMs = Math.min(this.timeoutMs, remainingDeadlineMs);
     const controller = new AbortController();
@@ -159,7 +267,6 @@ export class FailClosedPolicyEngine implements PolicyEngine {
     let timeout: ReturnType<typeof setTimeout> | undefined;
     let callerAbort: (() => void) | undefined;
     let parentAbort: (() => void) | undefined;
-
     let resolveAbort!: (decision: PolicyDecision) => void;
     const aborted = new Promise<PolicyDecision>((resolve) => {
       resolveAbort = resolve;
@@ -177,31 +284,54 @@ export class FailClosedPolicyEngine implements PolicyEngine {
       resolveAbort(deny(cause.message));
     };
 
+    const cleanup = (): void => {
+      this.activeStops.delete(stop);
+      if (timeout !== undefined) {
+        clearTimeout(timeout);
+        timeout = undefined;
+      }
+      if (callerAbort && callerSignal) {
+        try { callerSignal.removeEventListener("abort", callerAbort); } catch {
+          // Cleanup failure must not replace the fail-closed decision.
+        }
+      }
+      if (parentAbort && parentSignal) {
+        try { parentSignal.removeEventListener("abort", parentAbort); } catch {
+          // Keep caller and parent cleanup independent.
+        }
+      }
+    };
+
     this.activeStops.add(stop);
+    try {
+      if (callerSignal) {
+        callerAbort = () => stop(reasonFromSignal(callerSignal!, "CALLER_CANCELLED"));
+        callerSignal.addEventListener("abort", callerAbort, { once: true });
+      }
+      if (parentSignal) {
+        parentAbort = () => stop("PARENT_CANCELLED");
+        parentSignal.addEventListener("abort", parentAbort, { once: true });
+      }
+      timeout = setTimeout(() => stop("POLICY_TIMEOUT"), effectiveTimeoutMs);
 
-    if (options?.signal) {
-      callerAbort = () => stop(reasonFromSignal(options.signal!, "CALLER_CANCELLED"));
-      options.signal.addEventListener("abort", callerAbort, { once: true });
+      // Close the registration race: a signal may abort immediately around
+      // listener installation, so re-check both captured signals.
+      if (callerSignal?.aborted) stop(reasonFromSignal(callerSignal, "CALLER_CANCELLED"));
+      if (parentSignal?.aborted) stop("PARENT_CANCELLED");
+    } catch {
+      cleanup();
+      return deny("Policy evaluation cancellation setup failed; access denied.");
     }
-    if (options?.parentSignal) {
-      parentAbort = () => stop("PARENT_CANCELLED");
-      options.parentSignal.addEventListener("abort", parentAbort, { once: true });
-    }
-
-    timeout = setTimeout(() => stop("POLICY_TIMEOUT"), effectiveTimeoutMs);
 
     try {
-      if (options?.signal?.aborted) stop(reasonFromSignal(options.signal, "CALLER_CANCELLED"));
-      if (options?.parentSignal?.aborted) stop("PARENT_CANCELLED");
-
       const delegateOptions: PolicyEvaluationOptions = {
         signal: controller.signal,
-        ...(options?.deadlineAt === undefined ? {} : { deadlineAt: options.deadlineAt })
+        ...(deadlineAt === undefined ? {} : { deadlineAt })
       };
       const evaluation = Promise.resolve()
         .then(() => {
           if (controller.signal.aborted) return undefined;
-          return this.delegate.evaluate(input, delegateOptions);
+          return this.delegateEvaluate(input, delegateOptions);
         })
         .then((result) => {
           if (candidateFrozen) return undefined;
@@ -223,14 +353,7 @@ export class FailClosedPolicyEngine implements PolicyEngine {
         ? deny(cancellationMessage(stopReason))
         : deny("Policy evaluation failed; access denied.");
     } finally {
-      this.activeStops.delete(stop);
-      if (timeout !== undefined) clearTimeout(timeout);
-      if (callerAbort && options?.signal) {
-        options.signal.removeEventListener("abort", callerAbort);
-      }
-      if (parentAbort && options?.parentSignal) {
-        options.parentSignal.removeEventListener("abort", parentAbort);
-      }
+      cleanup();
     }
   }
 
@@ -239,23 +362,40 @@ export class FailClosedPolicyEngine implements PolicyEngine {
     this.shuttingDown = true;
     for (const stop of [...this.activeStops]) stop("RUNTIME_SHUTDOWN");
 
-    let delegateShutdown: Promise<void>;
-    try {
-      delegateShutdown = Promise.resolve(this.delegate.shutdown?.());
-    } catch (error) {
-      this.shutdownPromise = Promise.reject(error);
-      return this.shutdownPromise;
-    }
+    // Publish the shared attempt before invoking external code. The delegate
+    // is called synchronously, but any re-entrant shutdown() joins this attempt
+    // instead of recursively initiating another delegate shutdown.
+    let resolveAttempt!: () => void;
+    let rejectAttempt!: (error: unknown) => void;
+    const attempt = new Promise<void>((resolve, reject) => {
+      resolveAttempt = resolve;
+      rejectAttempt = reject;
+    });
+    let tracked!: Promise<void>;
+    tracked = attempt.catch((error: unknown) => {
+      // Concurrent callers share this attempt; a later call may retry a transient failure.
+      if (this.shutdownPromise === tracked) this.shutdownPromise = undefined;
+      throw error;
+    });
+    this.shutdownPromise = tracked;
 
-    // The wrapper's cancellation race is not proof that delegate work settled.
-    // Retain the underlying evaluation promises until they actually settle.
-    const evaluations = [...this.activeEvaluations].map((evaluation) =>
-      evaluation.then(() => undefined, () => undefined)
-    );
-    this.shutdownPromise = Promise.all([
-      delegateShutdown,
-      Promise.all(evaluations).then(() => undefined)
-    ]).then(() => undefined);
-    return this.shutdownPromise;
+    try {
+      // Initiate delegate shutdown in this call, not in a later microtask.
+      // Convert synchronous throws into a rejection on the shared attempt.
+      const delegateShutdown = Promise.resolve(this.delegateShutdown?.());
+
+      // The wrapper's cancellation race is not proof that delegate work settled.
+      // Retain the underlying evaluation promises until they actually settle.
+      const evaluations = [...this.activeEvaluations].map((evaluation) =>
+        evaluation.then(() => undefined, () => undefined)
+      );
+      void Promise.all([
+        delegateShutdown,
+        Promise.all(evaluations).then(() => undefined)
+      ]).then(() => resolveAttempt(), rejectAttempt);
+    } catch (error) {
+      rejectAttempt(error);
+    }
+    return tracked;
   }
 }

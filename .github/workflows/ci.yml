@@ -9,6 +9,8 @@ on:
       - feat/gap-002-protected-operation-executor
       - fix/protected-operation-hardening
       - fix/ci-target-protected-operation-2026-11-17
+      - work/core-engine-completion-2026-11-18
+      - integration/infinyx-core-runtime-v1
   pull_request:
     branches:
       - integration/infinyx-core-runtime-v1
@@ -16,6 +18,7 @@ on:
       - main
       - feat/gap-002-protected-operation-executor
       - fix/protected-operation-hardening
+      - work/core-engine-completion-2026-11-18
 
 permissions:
   contents: read

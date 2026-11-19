@@ -11,9 +11,22 @@ import type {
   ProtectedOperationPort,
   ProtectedOperationResult
 } from "./contracts.js";
-import { isValidPolicyDecision, isValidPolicyRequest } from "./fail-closed-policy-engine.js";
+import { isValidPolicyRequest, snapshotPolicyDecision } from "./fail-closed-policy-engine.js";
+import { snapshotBoundedPolicyData } from "./policy-input-snapshot.js";
 
 const handleBrand: unique symbol = Symbol("ProtectedOperationHandle");
+
+// Bound outstanding child work and nesting to prevent one authorized operation
+// from exhausting process resources through unbounded detached descendants.
+const MAX_PENDING_CHILD_ACTIVITIES = 1024;
+const MAX_GLOBAL_PENDING_CHILD_ACTIVITIES = 4096;
+const MAX_CHILD_ACTIVITY_DEPTH = 64;
+
+// Shared by every executor instance in this process. JavaScript's synchronous
+// execution makes check-and-increment a single admission step.
+let globalPendingChildActivities = 0;
+// Process-wide cap for admitted protected handlers across all registered operations.
+const MAX_ACTIVE_PROTECTED_OPERATIONS = 256;
 
 interface InternalHandle extends ProtectedOperationHandle {
   readonly [handleBrand]: true;
@@ -30,6 +43,7 @@ interface ActiveHandler {
 
 interface ChildActivityScope {
   open: boolean;
+  depth: number;
 }
 
 function settleHandlerIfComplete(active: ActiveHandler): void {
@@ -52,32 +66,65 @@ function createChildActivityContext(
       void rejected.catch(() => undefined);
       return rejected;
     }
+    if (active.controller.signal.aborted) {
+      const rejected = Promise.reject<T>(new Error("Child activity registration is closed after cancellation."));
+      void rejected.catch(() => undefined);
+      return rejected;
+    }
+    if (active.pendingChildren >= MAX_PENDING_CHILD_ACTIVITIES) {
+      const rejected = Promise.reject<T>(new Error("Child activity concurrency limit exceeded."));
+      void rejected.catch(() => undefined);
+      return rejected;
+    }
+    if (globalPendingChildActivities >= MAX_GLOBAL_PENDING_CHILD_ACTIVITIES) {
+      const rejected = Promise.reject<T>(new Error("Global child activity concurrency limit exceeded."));
+      void rejected.catch(() => undefined);
+      return rejected;
+    }
+    if (scope.depth >= MAX_CHILD_ACTIVITY_DEPTH) {
+      const rejected = Promise.reject<T>(new Error("Child activity nesting limit exceeded."));
+      void rejected.catch(() => undefined);
+      return rejected;
+    }
 
+    // Reserve both budgets before invoking user code. The release closure is
+    // idempotent and runs only when the callback's actual Promise settles.
     active.pendingChildren += 1;
-    const childScope: ChildActivityScope = { open: true };
+    globalPendingChildActivities += 1;
+    let released = false;
+    const releaseReservation = (): void => {
+      if (released) return;
+      released = true;
+      active.pendingChildren -= 1;
+      globalPendingChildActivities -= 1;
+      settleHandlerIfComplete(active);
+    };
+
+    const childScope: ChildActivityScope = { open: true, depth: scope.depth + 1 };
     let started: T | Promise<T>;
     try {
       started = start(createChildActivityContext(active, childScope));
     } catch (error) {
       childScope.open = false;
       active.childFailed = true;
-      active.pendingChildren -= 1;
-      settleHandlerIfComplete(active);
-      return Promise.reject(error);
+      releaseReservation();
+      const rejected = Promise.reject<T>(error);
+      // Match the asynchronous path: detached child failures are tracked here,
+      // while the returned promise remains rejected for callers that await it.
+      void rejected.catch(() => undefined);
+      return rejected;
     }
 
     const tracked = Promise.resolve(started).then(
       (value) => {
         childScope.open = false;
-        active.pendingChildren -= 1;
-        settleHandlerIfComplete(active);
+        releaseReservation();
         return value;
       },
       (error: unknown) => {
         childScope.open = false;
         active.childFailed = true;
-        active.pendingChildren -= 1;
-        settleHandlerIfComplete(active);
+        releaseReservation();
         throw error;
       }
     );
@@ -103,49 +150,13 @@ function isPlainRecord(value: unknown): value is Record<string, unknown> {
   return prototype === Object.prototype || prototype === null;
 }
 
-/** Clone a policy context without invoking getters; reject cycles and exotic values. */
-function cloneContextValue(value: unknown, ancestors: WeakSet<object>): unknown {
-  if (value === null || typeof value === "string" || typeof value === "boolean") return value;
-  if (typeof value === "number" && Number.isFinite(value)) return value;
-  if (typeof value !== "object") throw new TypeError("Policy context contains a non-cloneable value.");
-  if (ancestors.has(value)) throw new TypeError("Policy context cycles are not supported.");
-  ancestors.add(value);
-  try {
-    if (Array.isArray(value)) {
-      const result = value.map((item) => cloneContextValue(item, ancestors));
-      return result;
-    }
-    if (!isPlainRecord(value)) throw new TypeError("Policy context must contain only plain records and arrays.");
-    if (Object.getOwnPropertySymbols(value).length) throw new TypeError("Policy context symbol keys are not supported.");
-    const result: Record<string, unknown> = Object.create(null) as Record<string, unknown>;
-    for (const key of Object.keys(value)) {
-      const descriptor = Object.getOwnPropertyDescriptor(value, key);
-      if (!descriptor || !("value" in descriptor) || !descriptor.enumerable) {
-        throw new TypeError("Policy context accessors and hidden properties are not supported.");
-      }
-      result[key] = cloneContextValue(descriptor.value, ancestors);
-    }
-    return result;
-  } finally {
-    ancestors.delete(value);
-  }
-}
-
-function deepFreeze<T>(value: T): T {
-  if (typeof value !== "object" || value === null || Object.isFrozen(value)) return value;
-  for (const key of Reflect.ownKeys(value)) {
-    const child = (value as Record<PropertyKey, unknown>)[key];
-    deepFreeze(child);
-  }
-  return Object.freeze(value);
-}
-
+/** Create a bounded, detached and immutable Policy Context snapshot. */
 function snapshotPolicyContext(value: unknown): PolicyRequest["context"] | undefined {
-  if (value === undefined) return undefined;
-  if (!isPlainRecord(value)) throw new TypeError("Policy context must be a plain object.");
-  const cloned = cloneContextValue(value, new WeakSet<object>());
-  if (!isPlainRecord(cloned)) throw new TypeError("Policy context snapshot is invalid.");
-  return deepFreeze(cloned) as PolicyRequest["context"];
+  const result = snapshotBoundedPolicyData(value);
+  if (!result.ok) throw new TypeError("Policy context snapshot failed.");
+  if (result.value === undefined) return undefined;
+  if (!isPlainRecord(result.value)) throw new TypeError("Policy context must be a plain object.");
+  return result.value as PolicyRequest["context"];
 }
 
 /**
@@ -192,20 +203,58 @@ export class ProtectedOperationExecutor implements ProtectedOperationPort {
   }
 
   register<TInput, TOutput>(definition: ProtectedOperationDefinition<TInput, TOutput>): ProtectedOperationHandle<TInput, TOutput> {
-    if (!definition || typeof definition.id !== "string" || !definition.id.trim() ||
-      typeof definition.action !== "string" || !definition.action.trim() ||
-      typeof definition.resource !== "string" || !definition.resource.trim() ||
-      typeof definition.validateInput !== "function" || typeof definition.handler !== "function") {
+    // Registration is a trust boundary: capture one immutable descriptor snapshot
+    // so accessors and later caller mutation cannot change the authorized target.
+    let id: unknown;
+    let action: unknown;
+    let resource: unknown;
+    let validateInput: unknown;
+    let handler: unknown;
+    try {
+      if (!definition || typeof definition !== "object" || Array.isArray(definition)) {
+        throw new TypeError("Protected operation registration is invalid.");
+      }
+      const prototype = Object.getPrototypeOf(definition);
+      if (prototype !== Object.prototype && prototype !== null) {
+        throw new TypeError("Protected operation registration must be a plain record.");
+      }
+      const descriptors = Object.getOwnPropertyDescriptors(definition);
+      const keys = Reflect.ownKeys(definition);
+      const allowed = new Set(["id", "action", "resource", "validateInput", "handler"]);
+      if (keys.length !== allowed.size || keys.some((key) => typeof key !== "string" || !allowed.has(key))) {
+        throw new TypeError("Protected operation registration has unexpected properties.");
+      }
+      const read = (key: string): unknown => {
+        const descriptor = descriptors[key];
+        if (!descriptor || !Object.prototype.hasOwnProperty.call(descriptor, "value") ||
+            descriptor.enumerable !== true) {
+          throw new TypeError("Protected operation registration requires enumerable data properties.");
+        }
+        return descriptor.value;
+      };
+      id = read("id");
+      action = read("action");
+      resource = read("resource");
+      validateInput = read("validateInput");
+      handler = read("handler");
+    } catch {
       throw new TypeError("Protected operation registration is invalid.");
     }
-    if (this.operationIds.has(definition.id)) throw new TypeError("Protected operation ID is already registered.");
-    const handle: InternalHandle = Object.freeze({ id: definition.id, [handleBrand]: true as const });
+    if (typeof id !== "string" || !id.trim() || id.length > 128 ||
+        typeof action !== "string" || !action.trim() || action.length > 256 ||
+        typeof resource !== "string" || !resource.trim() || resource.length > 256 ||
+        typeof validateInput !== "function" || typeof handler !== "function") {
+      throw new TypeError("Protected operation registration is invalid.");
+    }
+    if (this.operationIds.has(id)) throw new TypeError("Protected operation ID is already registered.");
+    const handle: InternalHandle = Object.freeze({ id, [handleBrand]: true as const });
     const registration: RegisteredOperation<TInput, TOutput> = Object.freeze({
-      id: definition.id, action: definition.action, resource: definition.resource,
-      validateInput: definition.validateInput, handler: definition.handler
+      id, action, resource,
+      validateInput: validateInput as (value: unknown) => value is TInput,
+      handler: handler as (input: TInput, context: ProtectedOperationContext) => TOutput | Promise<TOutput>
     });
     this.registrations.set(handle, registration as RegisteredOperation);
-    this.operationIds.add(definition.id);
+    this.operationIds.add(id);
     return handle;
   }
 
@@ -222,14 +271,13 @@ export class ProtectedOperationExecutor implements ProtectedOperationPort {
     if (!registration) return this.denied("Unknown or unregistered protected operation.");
     if (!caller || typeof caller !== "object") return this.denied("Protected operation caller request is invalid.");
 
-    let actorId: unknown;
-    let callerContext: unknown;
-    try {
-      actorId = caller.actorId;
-      callerContext = caller.context;
-    } catch {
-      return this.denied("Protected operation caller request could not be read.");
+    const callerSnapshotResult = snapshotBoundedPolicyData(caller);
+    if (!callerSnapshotResult.ok || !isPlainRecord(callerSnapshotResult.value)) {
+      return this.denied("Protected operation caller request could not be safely snapshotted.");
     }
+    const callerSnapshot = callerSnapshotResult.value as Record<string, unknown>;
+    const actorId = callerSnapshot.actorId;
+    const callerContext = callerSnapshot.context;
 
     let snapshot: PolicyRequest["context"] | undefined;
     try {
@@ -243,16 +291,33 @@ export class ProtectedOperationExecutor implements ProtectedOperationPort {
     };
     if (!isValidPolicyRequest(policyRequestCandidate)) return this.denied("Protected operation caller request is invalid.");
 
+    const inputSnapshotResult = snapshotBoundedPolicyData(input);
+    if (!inputSnapshotResult.ok) {
+      return this.denied("Protected operation input could not be safely snapshotted.");
+    }
+    const inputSnapshot = inputSnapshotResult.value;
+
     try {
-      if (!registration.validateInput(input)) return this.denied("Protected operation input is invalid.");
+      if (!registration.validateInput(inputSnapshot)) return this.denied("Protected operation input is invalid.");
     } catch {
       return this.denied("Protected operation input validation failed.");
     }
 
-    const callerSignal = options?.signal;
-    const parentSignal = options?.parentSignal;
-    if (callerSignal?.aborted || parentSignal?.aborted) {
-      return this.denied("Protected operation was cancelled before authorization.");
+    let callerSignal: AbortSignal | undefined;
+    let parentSignal: AbortSignal | undefined;
+    let deadlineAt: number | undefined;
+    try {
+      callerSignal = options?.signal;
+      parentSignal = options?.parentSignal;
+      deadlineAt = options?.deadlineAt;
+      if (deadlineAt !== undefined && !Number.isFinite(deadlineAt)) {
+        return this.denied("Protected operation deadline is invalid.");
+      }
+      if (callerSignal?.aborted || parentSignal?.aborted) {
+        return this.denied("Protected operation was cancelled before authorization.");
+      }
+    } catch {
+      return this.denied("Protected operation cancellation options are invalid.");
     }
 
     let used = this.usedRequests.get(operation as object);
@@ -264,21 +329,35 @@ export class ProtectedOperationExecutor implements ProtectedOperationPort {
     const operationController = new AbortController();
     let callerAbortListener: (() => void) | undefined;
     let parentAbortListener: (() => void) | undefined;
-    if (callerSignal) {
-      callerAbortListener = () => operationController.abort({
-        code: "CALLER_CANCELLED",
-        message: "Protected operation cancellation requested by caller."
-      });
-      callerSignal.addEventListener("abort", callerAbortListener, { once: true });
-      if (callerSignal.aborted) callerAbortListener();
-    }
-    if (parentSignal) {
-      parentAbortListener = () => operationController.abort({
-        code: "PARENT_CANCELLED",
-        message: "Protected operation cancellation requested by parent."
-      });
-      parentSignal.addEventListener("abort", parentAbortListener, { once: true });
-      if (parentSignal.aborted) parentAbortListener();
+    try {
+      if (callerSignal) {
+        callerAbortListener = () => operationController.abort({
+          code: "CALLER_CANCELLED",
+          message: "Protected operation cancellation requested by caller."
+        });
+        callerSignal.addEventListener("abort", callerAbortListener, { once: true });
+        if (callerSignal.aborted) callerAbortListener();
+      }
+      if (parentSignal) {
+        parentAbortListener = () => operationController.abort({
+          code: "PARENT_CANCELLED",
+          message: "Protected operation cancellation requested by parent."
+        });
+        parentSignal.addEventListener("abort", parentAbortListener, { once: true });
+        if (parentSignal.aborted) parentAbortListener();
+      }
+    } catch {
+      try {
+        if (callerSignal && callerAbortListener) callerSignal.removeEventListener("abort", callerAbortListener);
+      } catch {
+        // A malformed caller signal must not escape the deny boundary.
+      }
+      try {
+        if (parentSignal && parentAbortListener) parentSignal.removeEventListener("abort", parentAbortListener);
+      } catch {
+        // A malformed parent signal must not escape the deny boundary.
+      }
+      return this.denied("Protected operation cancellation options are invalid.");
     }
 
     try {
@@ -289,7 +368,7 @@ export class ProtectedOperationExecutor implements ProtectedOperationPort {
       try {
         decision = await this.policy.evaluate(policyRequestCandidate, {
           signal: operationController.signal,
-          ...(options?.deadlineAt === undefined ? {} : { deadlineAt: options.deadlineAt })
+          ...(deadlineAt === undefined ? {} : { deadlineAt })
         });
       } catch {
         return this.denied("Policy evaluation failed; protected operation denied.");
@@ -299,8 +378,12 @@ export class ProtectedOperationExecutor implements ProtectedOperationPort {
       // there is no await between these checks and invoking the handler.
       if (!this.isCoreReady() || this.admissionClosed) return this.denied("Core Engine is stopping; protected operation denied.");
       if (operationController.signal.aborted) return this.denied("Protected operation was cancelled during authorization.");
-      if (!isValidPolicyDecision(decision)) return this.denied("Policy returned an invalid decision; protected operation denied.");
-      if (decision.effect !== "allow") return this.denied(decision.reason);
+      if (this.activeHandlers.size >= MAX_ACTIVE_PROTECTED_OPERATIONS) {
+        return this.denied("Protected operation concurrency limit exceeded.");
+      }
+      const safeDecision = snapshotPolicyDecision(decision);
+      if (!safeDecision) return this.denied("Policy returned an invalid decision; protected operation denied.");
+      if (safeDecision.effect !== "allow") return this.denied(safeDecision.reason);
       if (!this.isCoreReady() || this.admissionClosed) return this.denied("Core Engine is stopping; protected operation denied.");
 
       const operationId = randomUUID();
@@ -315,14 +398,14 @@ export class ProtectedOperationExecutor implements ProtectedOperationPort {
         childFailed: false
       };
       this.activeHandlers.set(operationId, active);
-      const rootScope: ChildActivityScope = { open: true };
+      const rootScope: ChildActivityScope = { open: true, depth: 0 };
       let value: TOutput | undefined;
       let handlerFailed = false;
       try {
         // Register before invoking user code; no await separates the final gate,
         // registry insertion, and handler invocation.
         try {
-          value = await registration.handler(input, Object.freeze({
+          value = await registration.handler(inputSnapshot as TInput, Object.freeze({
             operationId,
             signal: operationController.signal,
             ...createChildActivityContext(active, rootScope)
@@ -348,8 +431,20 @@ export class ProtectedOperationExecutor implements ProtectedOperationPort {
     } catch {
       return { status: "failed", reason: "Protected operation handler failed." };
     } finally {
-      if (callerSignal && callerAbortListener) callerSignal.removeEventListener("abort", callerAbortListener);
-      if (parentSignal && parentAbortListener) parentSignal.removeEventListener("abort", parentAbortListener);
+      if (callerSignal && callerAbortListener) {
+        try {
+          callerSignal.removeEventListener("abort", callerAbortListener);
+        } catch {
+          // Caller cleanup failure must not prevent parent listener cleanup.
+        }
+      }
+      if (parentSignal && parentAbortListener) {
+        try {
+          parentSignal.removeEventListener("abort", parentAbortListener);
+        } catch {
+          // Parent cleanup is independent and best-effort.
+        }
+      }
     }
   }
 
