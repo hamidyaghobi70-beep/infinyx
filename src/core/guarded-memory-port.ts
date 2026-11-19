@@ -18,6 +18,7 @@ export const DEFAULT_MEMORY_POLICY_TIMEOUT_MS = 5_000;
 /** Default deadline for publishing one audit event. A timeout refuses an allowed operation. */
 export const DEFAULT_MEMORY_AUDIT_TIMEOUT_MS = 5_000;
 const MAX_TIMEOUT_MS = 2_147_483_647;
+const MAX_PROTOTYPE_CHAIN_DEPTH = 64;
 const TIMED_OUT = Symbol("timed out");
 const memoryCapabilityRevokers = new WeakMap<object, (deadlineAt?: number) => Promise<void>>();
 
