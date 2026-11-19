@@ -32,7 +32,10 @@ function readLifecycleHook(
   key: "initialize" | "start" | "stop"
 ): CoreModule["initialize"] | CoreModule["start"] | CoreModule["stop"] {
   let current: object | null = target;
+  const visited = new Set<object>();
   while (current !== null) {
+    if (visited.has(current) || visited.size >= MAX_PROTOTYPE_CHAIN_DEPTH) throw invalidModule();
+    visited.add(current);
     const descriptor = Object.getOwnPropertyDescriptor(current, key);
     if (descriptor) {
       if (!Object.prototype.hasOwnProperty.call(descriptor, "value")) {
