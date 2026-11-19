@@ -855,11 +855,14 @@ describe("GuardedMemoryPort — deadlines", () => {
 
     const operation = guard.write(deadlineAddress, "must-not-persist");
     expect(await codeOf(operation)).toBe("MEMORY_ACCESS_DENIED");
-    await revokeGuardedMemoryPort(guard);
-    expect(write).not.toHaveBeenCalled();
+    let drained = false;
+    const revocation = revokeGuardedMemoryPort(guard).then(() => { drained = true; });
+    await Promise.resolve();
+    expect(drained).toBe(false);
 
     resolvePolicy({ effect: "allow", reason: "late allow must be ignored" });
-    await Promise.resolve();
+    await revocation;
+    expect(drained).toBe(true);
     await Promise.resolve();
 
     expect(write).not.toHaveBeenCalled();
@@ -869,6 +872,29 @@ describe("GuardedMemoryPort — deadlines", () => {
     });
     expect(await codeOf(guard.write(deadlineAddress, "after-revocation"))).toBe("MEMORY_CAPABILITY_REVOKED");
     expect(write).not.toHaveBeenCalled();
+  });
+
+  it("keeps a timed-out audit callback in the capability drain until it settles", async () => {
+    let releaseAudit!: () => void;
+    let markAuditStarted!: () => void;
+    const auditStarted = new Promise<void>((resolve) => { markAuditStarted = resolve; });
+    const bus = new InMemoryEventBus();
+    bus.subscribe(MEMORY_ACCESS_DECIDED_EVENT, async () => {
+      markAuditStarted();
+      await new Promise<void>((resolve) => { releaseAudit = resolve; });
+    });
+    const { guard } = setup({ events: bus, auditTimeoutMs: 5 });
+
+    expect(await codeOf(guard.write(deadlineAddress, "v"))).toBe("MEMORY_AUDIT_UNAVAILABLE");
+    await auditStarted;
+    let drained = false;
+    const revocation = revokeGuardedMemoryPort(guard).then(() => { drained = true; });
+    await Promise.resolve();
+    expect(drained).toBe(false);
+
+    releaseAudit();
+    await revocation;
+    expect(drained).toBe(true);
   });
 
   it("applies the policy deadline to reads and deletes", async () => {
