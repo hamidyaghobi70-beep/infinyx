@@ -93,7 +93,7 @@ Use the same schedule in every measured repetition:
 - P0 idle baseline: 120 seconds before load.
 - Ramp-up: increase admitted pending children at a controlled rate of 256 per second, recording actual admission timestamps. Pause at each profile target rather than jumping directly to the next target.
 - P1 through P4: hold each target occupancy for 60 seconds after reaching it.
-- P5: hold exact saturation for an initial 60-second measurement window, then continue the P5 occupancy for a 30-minute soak period.
+- P5: hold exact saturation for a 60-second initial measurement window, immediately followed by a 30-minute soak at the same 4096-pending-child occupancy. The required continuous P5 saturated duration is therefore **31 minutes total** per measured repetition, excluding ramp-up and drain.
 - P6: while P5 reservations remain pending, issue the single 4097th admission attempt during the P5 measurement window; do not repeat overflow attempts within that repetition.
 - Drain and recovery: release the Promise gate after the applicable hold/soak window, then observe settlement and capacity recovery for up to 5 minutes. Failure to settle within that observation window is a failed run requiring investigation, not permission to replay work.
 
@@ -120,12 +120,14 @@ The test harness must attach rejection observers to intentionally detached child
 
 Capture time-series samples at idle, each ramp step, saturation, and after settlement. The required sampling interval is **1 second** for RSS/heap/external/arrayBuffers, process CPU utilization/time, and event-loop-delay observations. The event-loop monitor may use a finer internal resolution, but report aggregated one-second windows and state the internal resolution. Timestamp all samples with a monotonic clock and retain raw samples.
 
+For Event Loop delay, maintain a dedicated perf_hooks histogram for each one-second reporting window: read its count and p50/p95/p99/max at the end of that window, record the sample count, then reset the histogram before the next window. Do not calculate a one-second p99 from a multi-second or whole-run histogram. If a window has too few observations to support a meaningful percentile, mark that percentile unavailable for that window and retain the count; do not silently pool it with adjacent windows. Record the histogram resolution and Node.js API configuration.
+
 ### Resource measurements
 
 - `process.memoryUsage()`: RSS, heapTotal, heapUsed, external, arrayBuffers
 - Heap delta relative to P0 baseline and per admitted pending child
 - Event-loop delay distribution using Node.js `perf_hooks` monitoring
-- CPU utilization and process CPU time, where available
+- Process CPU utilization and whole-runner CPU utilization, reported separately as defined below
 - Garbage-collection activity and pause observations, where available
 - Peak memory during saturation and time to return toward the post-settlement baseline
 
@@ -134,7 +136,7 @@ Report both absolute values and deltas. Do not infer a memory leak from one post
 ### Latency and throughput measurements
 
 - Time to admit each workload profile
-- Child registration latency distribution (p50, p95, p99, maximum)
+- Child registration latency distribution (p50, p95, p99, maximum), measured at the public API boundary as defined below
 - Overflow rejection latency
 - Time from gate release to all child Promises settling
 - Time to recover capacity for a subsequent explicit request
@@ -142,6 +144,15 @@ Report both absolute values and deltas. Do not infer a memory leak from one post
 - Event-loop delay distribution during saturation and recovery
 
 Use a monotonic clock. Report sample count and measurement method for every percentile. Separate warm-up from measured runs.
+
+### CPU utilization definition
+
+Report two distinct CPU measures; do not mix or label them interchangeably:
+
+1. **Node.js process CPU utilization (% of the four-vCPU baseline):** calculate the delta of process.cpuUsage() over each one-second monotonic interval, convert the consumed CPU time to seconds, divide by the elapsed wall-clock seconds multiplied by 4 vCPUs, then multiply by 100. This yields 0–100% of the total four-vCPU reference capacity for the Node.js process. Preserve the raw user/system CPU-time deltas and elapsed interval used for each sample.
+2. **Whole-runner CPU utilization (% of total capacity):** obtain from a documented OS-level metric source, normalized against all four allocated vCPUs. Report the source and sampling method. Do not substitute a per-core percentage or a single-core-normalized process percentage.
+
+The 75%, 85%, and 95% CPU targets/guardrails in Section 11 apply to **Node.js process CPU utilization as a percentage of total four-vCPU capacity**. Report whole-runner CPU separately as an environmental diagnostic. If the runner exposes a different CPU quota or throttling limit than four full vCPUs, the run is invalid until the baseline and thresholds are reviewed.
 
 ## 8. Repetition and reporting
 
@@ -174,7 +185,7 @@ Any correctness failure stops the run; do not continue increasing load.
 
 ## 10. Operational acceptance is a separate decision
 
-This specification intentionally defines no numeric pass threshold for memory, latency, CPU, or event-loop delay. Such thresholds must be set and approved by the architecture owner against a stated target environment and workload before execution. Choosing thresholds after seeing results would invalidate the acceptance decision.
+Section 11 contains proposed numeric targets and protective guardrails for architecture-owner review; none are approved operational SLOs yet. The architecture owner must explicitly approve or revise these values against the stated target environment and workload before execution. Choosing or relaxing thresholds after seeing results would invalidate the acceptance decision.
 
 The value 4096 remains **Experimental Limit** until:
 
@@ -197,7 +208,7 @@ These are target outcomes, not immediate stop conditions:
 - Peak RSS: at or below 8 GiB.
 - CPU utilization: at or below 75% averaged over a rolling 60-second window during P5.
 - Event-loop delay: p99 at or below 50 ms in one-second reporting windows, with the percentile calculation and sample count retained.
-- Child admission latency: p99 at or below 10 ms, measured from API admission request to admission result and excluding deliberate harness scheduling delay where that can be measured reliably.
+- Child admission latency: p99 at or below 10 ms, measured from immediately before invoking the public child-admission API until its admission result is observed by the caller. Include caller-visible scheduling and Promise-settlement delay; do not subtract harness scheduling overhead from the primary metric. If desired, report a separately calibrated harness-overhead measurement as diagnostic context, without adjusting the primary latency values.
 
 ### Runner warning guardrails
 
