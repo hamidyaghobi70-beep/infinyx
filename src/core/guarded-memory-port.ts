@@ -343,6 +343,16 @@ export class GuardedMemoryPort implements MemoryPort {
     })();
   }
 
+  private trackPendingOperation(work: Promise<unknown>): void {
+    let settle!: () => void;
+    const settled = new Promise<void>((resolve) => { settle = resolve; });
+    this.#activeOperations.add(settled);
+    void work.then(
+      () => { this.#activeOperations.delete(settled); settle(); },
+      () => { this.#activeOperations.delete(settled); settle(); }
+    );
+  }
+
   private async revokeAndDrain(deadlineAt?: number): Promise<void> {
     // Revoke is immediate and permanent, even when the drain exceeds its budget.
     this.#revoked = true;
@@ -487,7 +497,8 @@ export class GuardedMemoryPort implements MemoryPort {
 
     let decision: NormalizedDecision;
     try {
-      const result = await withTimeout(() => this.#policyEvaluate(request), this.#policyTimeoutMs);
+      const result = await withTimeout(() => this.#policyEvaluate(request), this.#policyTimeoutMs,
+        (pending) => this.trackPendingOperation(pending));
       decision = result === TIMED_OUT
         ? { effect: "deny", reason: "Policy evaluation timed out." }
         : normalizeDecision(result);
@@ -507,7 +518,8 @@ export class GuardedMemoryPort implements MemoryPort {
     try {
       const published = await withTimeout(
         () => this.#auditPublishDecision(audit),
-        this.#auditTimeoutMs
+        this.#auditTimeoutMs,
+        (pending) => this.trackPendingOperation(pending)
       );
       if (published !== true) {
         throw new Error(
@@ -566,7 +578,8 @@ export class GuardedMemoryPort implements MemoryPort {
       // A stalled subscriber must not delay propagation of the original backend error.
       await withTimeout(
         () => this.#auditPublishFailure(failure),
-        this.#auditTimeoutMs
+        this.#auditTimeoutMs,
+        (pending) => this.trackPendingOperation(pending)
       );
     } catch {
       // Intentionally ignored: reporting must never mask the original backend failure.
@@ -585,11 +598,19 @@ function isValidTimeout(value: unknown): value is number {
 }
 
 /** A deadline does not cancel work; late fulfilment/rejection is consumed. */
-function withTimeout<T>(work: () => Promise<T> | T, ms: number): Promise<T | typeof TIMED_OUT> {
+function withTimeout<T>(
+  work: () => Promise<T> | T,
+  ms: number,
+  onPending?: (pending: Promise<T>) => void
+): Promise<T | typeof TIMED_OUT> {
   return new Promise((resolve, reject) => {
     let settled = false;
+    const pending = Promise.resolve().then(work);
+    // The timeout bounds the caller's wait, not the lifetime of the underlying
+    // callback. Keep that callback in the capability drain until it really settles.
+    onPending?.(pending);
     const timer = setTimeout(() => { if (!settled) { settled = true; resolve(TIMED_OUT); } }, ms);
-    Promise.resolve().then(work).then(
+    pending.then(
       (value) => { if (!settled) { settled = true; clearTimeout(timer); resolve(value); } },
       (error: unknown) => { if (!settled) { settled = true; clearTimeout(timer); reject(error); } }
     );
