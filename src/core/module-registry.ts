@@ -6,6 +6,7 @@ export const MAX_MODULE_DEPENDENCIES = 64;
 export const MAX_TOTAL_MODULE_DEPENDENCIES = 4_096;
 export const MAX_MODULE_ID_LENGTH = 128;
 export const MAX_MODULE_VERSION_LENGTH = 128;
+const MAX_PROTOTYPE_CHAIN_DEPTH = 64;
 
 function invalidModule(): CoreError {
   return new CoreError(
