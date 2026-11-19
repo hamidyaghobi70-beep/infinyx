@@ -7,6 +7,13 @@ on:
       - release/**
       - fix/infinyx-core-policy-cancellation
       - feat/gap-002-protected-operation-executor
+      - fix/protected-operation-hardening
+      - fix/ci-target-protected-operation-2026-11-17
+      - work/core-engine-completion-2026-11-18
+      - integration/infinyx-core-runtime-v1
+      - release/**
+      - fix/infinyx-core-policy-cancellation
+      - feat/gap-002-protected-operation-executor
       - work/core-engine-completion-2026-11-18
       - fix/protected-operation-hardening
       - fix/ci-target-protected-operation-2026-11-17
@@ -14,6 +21,11 @@ on:
   pull_request:
     branches:
       - integration/infinyx-core-runtime-v1
+      - foundation/repository-foundation
+      - main
+      - feat/gap-002-protected-operation-executor
+      - fix/protected-operation-hardening
+      - work/core-engine-completion-2026-11-18
       - foundation/repository-foundation
       - main
       - feat/gap-002-protected-operation-executor
