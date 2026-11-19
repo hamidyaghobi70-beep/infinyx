@@ -9,6 +9,7 @@ import type {
 
 const DEFAULT_POLICY_TIMEOUT_MS = 5_000;
 const MAX_ACTIVE_POLICY_EVALUATIONS = 512;
+const MAX_PROTOTYPE_CHAIN_DEPTH = 64;
 
 function deny(reason: string): PolicyDecision {
   return Object.freeze({ effect: "deny", reason });
