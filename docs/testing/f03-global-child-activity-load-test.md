@@ -42,6 +42,18 @@ No test may bypass the public Executor API or mutate the module-level counter di
 
 Run only in a dedicated, non-production environment with no real external services, credentials, customer data, or production traffic.
 
+### Proposed reference baseline (not an existing or verified runner)
+
+The accepted planning baseline for this specification is:
+
+- CPU: 4 dedicated vCPUs
+- RAM: 16 GiB
+- OS: a fixed Linux distribution/release, with exact distribution, release, kernel, and architecture recorded before any run
+- Node.js: exact Node.js 22.x patch version recorded before any run
+- Environment: isolated, with no unrelated workload
+
+This is a proposed reference environment only. It does not assert that a runner with these resources exists or has been provisioned.
+
 Before an execution is authorized, record:
 
 - Exact commit SHA and clean working-tree status
@@ -72,7 +84,20 @@ Use a controlled Promise gate to keep child activities pending until the measure
 | P5 | 4096 | Exact global-cap saturation |
 | P6 | 4097 attempted | Verify overflow rejection without invoking callback |
 
-For P5, use at least four Executor instances in the same Runtime, with no individual active handler registering more than 1024 pending children. Keep all admitted child Promises unresolved until the occupancy and resource measurements are captured.
+For P5, use **at least four concurrently active protected handlers**, one through each of **four distinct Executor instances** in the same JavaScript Runtime. Each handler must hold pending child activities concurrently; distribute the 4096 reservations across the four handlers without exceeding 1024 per handler. Keep all admitted child Promises unresolved until occupancy and resource measurements are captured. The scenario must also remain within the 256 active protected-handler ceiling.
+
+### Ramp-up, hold, and soak schedule
+
+Use the same schedule in every measured repetition:
+
+- P0 idle baseline: 120 seconds before load.
+- Ramp-up: increase admitted pending children at a controlled rate of 256 per second, recording actual admission timestamps. Pause at each profile target rather than jumping directly to the next target.
+- P1 through P4: hold each target occupancy for 60 seconds after reaching it.
+- P5: hold exact saturation for an initial 60-second measurement window, then continue the P5 occupancy for a 30-minute soak period.
+- P6: while P5 reservations remain pending, issue the single 4097th admission attempt during the P5 measurement window; do not repeat overflow attempts within that repetition.
+- Drain and recovery: release the Promise gate after the applicable hold/soak window, then observe settlement and capacity recovery for up to 5 minutes. Failure to settle within that observation window is a failed run requiring investigation, not permission to replay work.
+
+Record both planned and achieved ramp rates, time to each target, hold duration, soak duration, and drain duration. If the target cannot be reached at the planned rate without violating a safety guardrail, stop the run and record the achieved load.
 
 For P6, attempt one additional child while P5 reservations remain pending. Assert that the additional callback invocation count remains zero and the attempt is rejected with the global child activity concurrency-limit error. Do not queue or automatically retry it.
 
@@ -93,7 +118,7 @@ The test harness must attach rejection observers to intentionally detached child
 
 ## 7. Measurements
 
-Capture time-series samples at idle, each ramp step, saturation, and after settlement.
+Capture time-series samples at idle, each ramp step, saturation, and after settlement. The required sampling interval is **1 second** for RSS/heap/external/arrayBuffers, process CPU utilization/time, and event-loop-delay observations. The event-loop monitor may use a finer internal resolution, but report aggregated one-second windows and state the internal resolution. Timestamp all samples with a monotonic clock and retain raw samples.
 
 ### Resource measurements
 
@@ -161,7 +186,51 @@ The value 4096 remains **Experimental Limit** until:
 
 Passing this test does not prove safety across Worker Threads, Child Processes, independent module instances, hosts, or distributed deployments.
 
-## 11. Explicit non-goals and prohibitions
+## 11. Proposed thresholds and Runner safety guardrails
+
+All numbers in this section are **proposals for architecture-owner review**, not approved operational SLOs and not authorization to execute. They are tied to the proposed 4-vCPU/16-GiB reference baseline and must be confirmed or revised before a run.
+
+### Desired operating targets
+
+These are target outcomes, not immediate stop conditions:
+
+- Peak RSS: at or below 8 GiB.
+- CPU utilization: at or below 75% averaged over a rolling 60-second window during P5.
+- Event-loop delay: p99 at or below 50 ms in one-second reporting windows, with the percentile calculation and sample count retained.
+- Child admission latency: p99 at or below 10 ms, measured from API admission request to admission result and excluding deliberate harness scheduling delay where that can be measured reliably.
+
+### Runner warning guardrails
+
+Pause escalation and investigate if any warning guardrail is crossed:
+
+- RSS at or above 10 GiB for 3 consecutive one-second samples.
+- Available system memory below 4 GiB.
+- CPU utilization above 85% for 30 consecutive seconds.
+- Event-loop delay p99 above 100 ms for 3 consecutive one-second windows.
+
+### Stop-run guardrails
+
+Stop increasing load, release the test gate where safe, and terminate the run in a controlled manner if any condition occurs:
+
+- RSS at or above 12 GiB for 5 consecutive one-second samples, or a single sample at or above 13 GiB.
+- Available system memory below 2 GiB.
+- CPU utilization above 95% for 60 consecutive seconds.
+- Event-loop delay p99 above 250 ms for 3 consecutive one-second windows.
+- The runner becomes unstable, unrelated workload appears, or measurements cannot be trusted.
+
+### Hard-fail conditions
+
+Mark the repetition failed, preserve evidence, and do not retry automatically if any of these occur:
+
+- Any correctness invariant in Section 9 fails.
+- The process is OOM-killed, crashes, exits unexpectedly, or emits an implementation-originated unhandled rejection.
+- RSS reaches 14 GiB at any sample.
+- A reservation is leaked, released more than once, or capacity is observed above the defined cap.
+- The harness cannot prove that the four P5 handlers were concurrently pending through four distinct Executor instances in the same Runtime.
+
+A warning or stop guardrail is a protective control, not proof that the implementation failed. A hard-fail condition is a failed test result. Thresholds must be approved before execution and must not be relaxed after observing results.
+
+## 12. Explicit non-goals and prohibitions
 
 - No runtime source changes.
 - No changes to existing unit tests or CI workflows as part of this specification.
@@ -171,12 +240,14 @@ Passing this test does not prove safety across Worker Threads, Child Processes, 
 - No change to PR #53 status or base branch.
 - No merge, release, deployment, or change to `main`.
 
-## 12. Execution authorization checklist
+## 13. Execution authorization checklist
 
 Execution remains blocked until all items are explicitly approved:
 
 - [ ] Architecture owner approves target environment and resource budget.
-- [ ] Architecture owner approves numeric memory, latency, CPU, and event-loop thresholds.
+- [ ] Architecture owner approves numeric memory, latency, CPU, and event-loop thresholds, including desired targets, warning guardrails, stop-run guardrails, and hard-fail conditions in Section 11.
+- [ ] Architecture owner approves the ramp-up/hold/soak schedule and one-second sampling protocol.
+- [ ] Runner provisioning is independently confirmed to match the proposed 4-vCPU/16-GiB baseline; the baseline itself is not evidence of an existing runner.
 - [ ] Founder/authorized project governance approves a dedicated execution window if required.
 - [ ] Independent reviewer agrees the harness measures the stated invariants.
 - [ ] A separate test-only branch and isolated runner are confirmed.
