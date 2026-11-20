@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import type {
   PolicyEngine,
   PolicyEvaluationOptions,
@@ -86,11 +87,31 @@ export class ProtectedOperationExecutor implements ProtectedOperationPort {
   // This is in-memory, per-process object-identity duplicate suppression only.
   // It is not durable replay protection and does not provide exactly-once semantics.
   private readonly usedRequests = new WeakMap<object, WeakSet<object>>();
+  private readonly activeInvocations = new Map<string, { readonly controller: AbortController }>();
+  private readonly drainWaiters = new Set<() => void>();
+  private closing = false;
 
   constructor(
     private readonly policy: PolicyEngine,
     private readonly isCoreReady: () => boolean
   ) {}
+
+  get activeInvocationCount(): number {
+    return this.activeInvocations.size;
+  }
+
+  /** Close admission synchronously, request cooperative cancellation, and retain the drain barrier. */
+  shutdown(): Promise<void> {
+    this.closing = true;
+    for (const invocation of this.activeInvocations.values()) {
+      invocation.controller.abort({
+        code: "RUNTIME_SHUTDOWN",
+        message: "Runtime shutdown requested."
+      });
+    }
+    if (this.activeInvocations.size === 0) return Promise.resolve();
+    return new Promise<void>((resolve) => { this.drainWaiters.add(resolve); });
+  }
 
   register<TInput, TOutput>(definition: ProtectedOperationDefinition<TInput, TOutput>): ProtectedOperationHandle<TInput, TOutput> {
     if (!definition || typeof definition.id !== "string" || !definition.id.trim() ||
@@ -116,7 +137,7 @@ export class ProtectedOperationExecutor implements ProtectedOperationPort {
     input: TInput,
     options?: PolicyEvaluationOptions
   ): Promise<ProtectedOperationResult<TOutput>> {
-    if (!this.isCoreReady()) return this.denied("Core Engine is not running; protected operation denied.");
+    if (this.closing || !this.isCoreReady()) return this.denied("Core Engine is not running; protected operation denied.");
     const registration = operation && typeof operation === "object"
       ? this.registrations.get(operation as object) as RegisteredOperation<TInput, TOutput> | undefined
       : undefined;
@@ -176,8 +197,9 @@ export class ProtectedOperationExecutor implements ProtectedOperationPort {
       if (parentSignal.aborted) operationController.abort();
     }
 
+    let activeOperationId: string | undefined;
     try {
-      if (!this.isCoreReady()) return this.denied("Core Engine is stopping or not running; protected operation denied.");
+      if (this.closing || !this.isCoreReady()) return this.denied("Core Engine is stopping or not running; protected operation denied.");
       if (operationController.signal.aborted) return this.denied("Protected operation was cancelled before authorization.");
 
       let decision: unknown;
@@ -192,19 +214,33 @@ export class ProtectedOperationExecutor implements ProtectedOperationPort {
 
       // Recheck lifecycle and cancellation immediately before handler admission;
       // there is no await between these checks and invoking the handler.
-      if (!this.isCoreReady()) return this.denied("Core Engine is stopping; protected operation denied.");
+      if (this.closing || !this.isCoreReady()) return this.denied("Core Engine is stopping; protected operation denied.");
       if (operationController.signal.aborted) return this.denied("Protected operation was cancelled during authorization.");
       if (!isValidPolicyDecision(decision)) return this.denied("Policy returned an invalid decision; protected operation denied.");
       if (decision.effect !== "allow") return this.denied(decision.reason);
-      if (!this.isCoreReady()) return this.denied("Core Engine is stopping; protected operation denied.");
+      if (this.closing || !this.isCoreReady()) return this.denied("Core Engine is stopping; protected operation denied.");
 
+      // Register before invoking user code; no await separates the final admission check,
+      // registry insertion, and handler invocation.
+      const operationId = randomUUID();
+      activeOperationId = operationId;
+      this.activeInvocations.set(operationId, { controller: operationController });
       const value = await registration.handler(input, Object.freeze({
-        operationId: registration.id, signal: operationController.signal
+        operationId,
+        operationDefinitionId: registration.id,
+        signal: operationController.signal
       }));
       return { status: "executed", value };
     } catch {
       return { status: "failed", reason: "Protected operation handler failed." };
     } finally {
+      if (activeOperationId !== undefined) {
+        this.activeInvocations.delete(activeOperationId);
+        if (this.activeInvocations.size === 0) {
+          for (const resolve of this.drainWaiters) resolve();
+          this.drainWaiters.clear();
+        }
+      }
       if (callerSignal && callerAbortListener) callerSignal.removeEventListener("abort", callerAbortListener);
       if (parentSignal && parentAbortListener) parentSignal.removeEventListener("abort", parentAbortListener);
     }
