@@ -54,14 +54,14 @@ describe("CoreEngine policy runtime shutdown", () => {
       .resolves.toMatchObject({ effect: "deny" });
   });
 
-  it("does not clean modules while policy runtime shutdown is unresolved", async () => {
+  it("keeps policy shutdown initiation failure sticky and never retries it implicitly", async () => {
     let shutdownAttempts = 0;
     let cleanupCalls = 0;
     const policy = {
       evaluate: async () => ({ effect: "allow" as const, reason: "test allow" }),
       shutdown: async () => {
         shutdownAttempts += 1;
-        if (shutdownAttempts === 1) throw new Error("runtime unresolved");
+        throw new Error("runtime unresolved");
       }
     };
     const engine = new CoreEngine({ policy });
@@ -72,14 +72,14 @@ describe("CoreEngine policy runtime shutdown", () => {
     });
     await engine.initialize();
 
-    await expect(engine.stop()).rejects.toThrow(/module cleanup was not started/i);
+    await expect(engine.stop()).rejects.toMatchObject({ code: "POLICY_SHUTDOWN_FAILED" });
     expect(cleanupCalls).toBe(0);
-    expect(engine.state).toBe("failed");
+    expect(engine.state).toBe("stopping");
 
-    await engine.stop();
-    expect(shutdownAttempts).toBe(2);
-    expect(cleanupCalls).toBe(1);
-    expect(engine.state).toBe("stopped");
+    await expect(engine.stop()).rejects.toMatchObject({ code: "POLICY_SHUTDOWN_FAILED" });
+    expect(shutdownAttempts).toBe(1);
+    expect(cleanupCalls).toBe(0);
+    expect(engine.state).toBe("stopping");
   });
 
   it("shuts down a policy runtime even when CoreEngine was never initialized", async () => {
