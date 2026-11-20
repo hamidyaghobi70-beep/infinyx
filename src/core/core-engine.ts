@@ -1,4 +1,5 @@
 import { AsyncLocalStorage } from "node:async_hooks";
+import { performance } from "node:perf_hooks";
 import { GuardedMemoryPort } from "./guarded-memory-port.js";
 import type {
   CoreLifecycleState,
@@ -32,6 +33,8 @@ export interface CoreEngineOptions {
   readonly memory?: (moduleId: string) => GuardedMemoryPort;
   /** Maximum time allowed for an injected policy evaluation. Defaults to 5 seconds. */
   readonly policyTimeoutMs?: number;
+  /** Shared monotonic deadline for protected-handler and policy shutdown draining. */
+  readonly protectedOperationShutdown?: { readonly drainDeadlineMs?: number };
 }
 
 export class CoreEngine {
@@ -48,6 +51,11 @@ export class CoreEngine {
   private readonly cleanupInFlight = new Map<string, Promise<void>>();
   private readonly cleanupContext = new AsyncLocalStorage<CleanupExecutionContext>();
   private stopPromise: Promise<void> | undefined;
+  private shutdownInitiated = false;
+  private handlerDrainPromise: Promise<void> | undefined;
+  private policyShutdownPromise: Promise<void> | undefined;
+  private shutdownInitiationFailure: CoreError | undefined;
+  private effectiveDrainDeadlineMs = 30_000;
   private readonly moduleMemory = new Map<string, GuardedMemoryPort>();
 
   constructor(private readonly options: CoreEngineOptions = {}) {
@@ -108,6 +116,7 @@ export class CoreEngine {
 
   async initialize(): Promise<void> {
     this.assertState("created", "initialize");
+    this.validateShutdownConfiguration();
     this.lifecycle = "initializing";
 
     try {
@@ -179,36 +188,45 @@ export class CoreEngine {
     }
     if (this.stopPromise) return this.stopPromise;
     if (this.lifecycle === "stopped") return Promise.resolve();
-    if (!["created", "initialized", "running", "failed"].includes(this.lifecycle)) {
+    if (!["created", "initialized", "running", "failed", "stopping"].includes(this.lifecycle)) {
       return Promise.reject(new CoreError(
         "INVALID_LIFECYCLE_TRANSITION",
         'Cannot stop Core Engine while it is "' + this.lifecycle + '".'
       ));
     }
 
-    this.lifecycle = "stopping";
-    // Notify modules synchronously before awaiting policy shutdown or cleanup.
+    try {
+      this.validateShutdownConfiguration();
+    } catch (error) {
+      return Promise.reject(error);
+    }
+
+    // The lifecycle predicate closes admission before either shutdown path.
+    if (this.lifecycle !== "stopping") this.lifecycle = "stopping";
+    // Preserve the existing module-level shutdown signal and initiate both
+    // protected-handler and policy shutdown in the same synchronous turn.
     this.shutdownController.abort("core_shutdown");
-    // Install the shared promise before invoking shutdown hooks. The policy
-    // runtime stops accepting new work synchronously before module cleanup.
-    const stopPromise = this.installStopPromise(() => {
-      const policyShutdown = this.beginPolicyShutdown();
-      if (this.initializedModules.length === 0) {
-        return policyShutdown.then(
-          () => { this.lifecycle = "stopped"; },
-          (error: unknown) => {
-            this.lifecycle = "failed";
-            throw new CoreError(
-              "MODULE_STOP_FAILED",
-              "Policy runtime failed to stop.",
-              { cause: error }
-            );
-          }
+    if (!this.shutdownInitiated) {
+      this.shutdownInitiated = true;
+      try {
+        this.handlerDrainPromise = this.protectedOperationExecutor.shutdown();
+      } catch (error) {
+        this.shutdownInitiationFailure = new CoreError(
+          "PROTECTED_OPERATION_SHUTDOWN_FAILED",
+          "Protected-operation shutdown initiation failed.",
+          { cause: error }
         );
+        this.handlerDrainPromise = Promise.resolve();
       }
-      return this.performStop(policyShutdown);
-    });
-    return stopPromise;
+      // Always attempt policy shutdown even if executor initiation failed.
+      this.policyShutdownPromise = this.beginPolicyShutdown();
+      void this.handlerDrainPromise.catch(() => undefined);
+      void this.policyShutdownPromise.catch(() => undefined);
+    }
+
+    const handlerDrain = this.handlerDrainPromise ?? Promise.resolve();
+    const policyShutdown = this.policyShutdownPromise ?? Promise.resolve();
+    return this.installStopPromise(() => this.performStop(handlerDrain, policyShutdown));
   }
 
   private installStopPromise(start: () => Promise<void>): Promise<void> {
@@ -238,22 +256,108 @@ export class CoreEngine {
   }
 
   private beginPolicyShutdown(): Promise<void> {
+    const recordFailure = (error: unknown): void => {
+      const failure = new CoreError(
+        "POLICY_SHUTDOWN_FAILED",
+        "Policy shutdown initiation or completion failed.",
+        { cause: error }
+      );
+      if (!this.shutdownInitiationFailure ||
+          this.shutdownInitiationFailure.code === "PROTECTED_OPERATION_SHUTDOWN_FAILED") {
+        this.shutdownInitiationFailure = failure;
+      }
+    };
     try {
-      return this.policy.shutdown?.() ?? Promise.resolve();
+      const shutdown = this.policy.shutdown?.() ?? Promise.resolve();
+      return shutdown.catch((error: unknown) => {
+        recordFailure(error);
+        throw error;
+      });
     } catch (error) {
+      recordFailure(error);
       return Promise.reject(error);
     }
   }
 
-  private async performStop(policyShutdown: Promise<void>): Promise<void> {
-    try {
-      await policyShutdown;
-    } catch (error) {
-      this.lifecycle = "failed";
+  private validateShutdownConfiguration(): void {
+    const configuration = this.options.protectedOperationShutdown;
+    if (configuration === undefined) {
+      this.effectiveDrainDeadlineMs = 30_000;
+      return;
+    }
+    if (typeof configuration !== "object" || configuration === null) {
       throw new CoreError(
-        "MODULE_STOP_FAILED",
-        "Policy runtime failed to stop; module cleanup was not started.",
-        { cause: error }
+        "PROTECTED_OPERATION_SHUTDOWN_CONFIG_INVALID",
+        "Protected-operation shutdown configuration is invalid."
+      );
+    }
+    if (!Object.prototype.hasOwnProperty.call(configuration, "drainDeadlineMs")) {
+      this.effectiveDrainDeadlineMs = 30_000;
+      return;
+    }
+    const value: unknown = configuration.drainDeadlineMs;
+    if (typeof value !== "number" || !Number.isInteger(value) ||
+        value < 1 || value > 2_147_483_647) {
+      throw new CoreError(
+        "PROTECTED_OPERATION_SHUTDOWN_CONFIG_INVALID",
+        "Protected-operation shutdown drainDeadlineMs must be an integer from 1 through 2147483647."
+      );
+    }
+    this.effectiveDrainDeadlineMs = value;
+  }
+
+  private async performStop(
+    handlerDrain: Promise<void>,
+    policyShutdown: Promise<void>
+  ): Promise<void> {
+    if (this.shutdownInitiationFailure) throw this.shutdownInitiationFailure;
+
+    const deadline = performance.now() + this.effectiveDrainDeadlineMs;
+    let timeout: ReturnType<typeof setTimeout> | undefined;
+    const timeoutPromise = new Promise<never>((_resolve, reject) => {
+      const remaining = Math.max(0, deadline - performance.now());
+      timeout = setTimeout(() => {
+        const handlerBlocked = this.protectedOperationExecutor.activeInvocationCount > 0;
+        reject(new CoreError(
+          handlerBlocked ? "PROTECTED_OPERATION_DRAIN_TIMEOUT" : "POLICY_EVALUATION_DRAIN_TIMEOUT",
+          handlerBlocked
+            ? "Protected-operation handlers did not settle before the shutdown drain deadline."
+            : "Policy shutdown did not settle before the shutdown drain deadline."
+        ));
+      }, remaining);
+    });
+
+    try {
+      try {
+        await Promise.race([Promise.all([handlerDrain, policyShutdown]), timeoutPromise]);
+      } catch (error) {
+        if (error instanceof CoreError &&
+            (error.code === "PROTECTED_OPERATION_DRAIN_TIMEOUT" ||
+             error.code === "POLICY_EVALUATION_DRAIN_TIMEOUT")) {
+          throw error;
+        }
+        if (!this.shutdownInitiationFailure) {
+          this.shutdownInitiationFailure = new CoreError(
+            "POLICY_SHUTDOWN_FAILED",
+            "Policy shutdown failed; module cleanup was not started.",
+            { cause: error }
+          );
+        }
+        throw this.shutdownInitiationFailure;
+      }
+    } finally {
+      if (timeout !== undefined) clearTimeout(timeout);
+    }
+
+    if (this.shutdownInitiationFailure) throw this.shutdownInitiationFailure;
+
+    // Timer delivery can be delayed by a busy event loop; the absolute
+    // monotonic deadline is authoritative immediately before cleanup.
+    if (performance.now() >= deadline) {
+      const handlerBlocked = this.protectedOperationExecutor.activeInvocationCount > 0;
+      throw new CoreError(
+        handlerBlocked ? "PROTECTED_OPERATION_DRAIN_TIMEOUT" : "POLICY_EVALUATION_DRAIN_TIMEOUT",
+        "Shutdown drain completed after its absolute monotonic deadline."
       );
     }
 
