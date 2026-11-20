@@ -351,3 +351,27 @@ describe("CoreEngine guarded memory composition", () => {
     expect(first).not.toBe(second);
   });
 });
+
+
+describe("CoreEngine protected-operation shutdown configuration", () => {
+  it("rejects an explicitly invalid drain deadline before startup", async () => {
+    const engine = new CoreEngine({
+      protectedOperationShutdown: { drainDeadlineMs: 0 }
+    });
+    await expect(engine.initialize()).rejects.toMatchObject({
+      code: "PROTECTED_OPERATION_SHUTDOWN_CONFIG_INVALID"
+    });
+    expect(engine.state).toBe("created");
+  });
+
+  it("distinguishes an explicitly undefined drain deadline from an omitted setting", async () => {
+    const protectedOperationShutdown = { drainDeadlineMs: undefined } as unknown as {
+      readonly drainDeadlineMs: number;
+    };
+    const engine = new CoreEngine({ protectedOperationShutdown });
+    await expect(engine.initialize()).rejects.toMatchObject({
+      code: "PROTECTED_OPERATION_SHUTDOWN_CONFIG_INVALID"
+    });
+    expect(engine.state).toBe("created");
+  });
+});

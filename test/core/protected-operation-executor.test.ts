@@ -364,13 +364,14 @@ describe("ProtectedOperationExecutor", () => {
   });
 
 
-  it("keeps an already-admitted handler in flight during shutdown without claiming cancellation", async () => {
+  it("cancels and drains an admitted handler before module cleanup", async () => {
     let release!: (value: string) => void;
     let signalHandlerStarted!: () => void;
     const handlerStarted = new Promise<void>((resolve) => { signalHandlerStarted = resolve; });
     let handlerSignal: AbortSignal | undefined;
+    let cleanupCalls = 0;
     const engine = new CoreEngine({ policy: { evaluate: async () => allow } });
-    const handler = vi.fn((_input: string, context: { operationId: string; signal: AbortSignal }) => {
+    const handler = vi.fn((_input: string, context: { operationId: string; operationDefinitionId: string; signal: AbortSignal }) => {
       handlerSignal = context.signal;
       signalHandlerStarted();
       return new Promise<string>((resolve) => { release = resolve; });
@@ -382,15 +383,108 @@ describe("ProtectedOperationExecutor", () => {
       validateInput: (value: unknown): value is string => typeof value === "string",
       handler
     });
+    engine.register({ id: "resource-owner", version: "1.0.0", stop: () => { cleanupCalls += 1; } });
     await ensureStarted(engine);
     const pending = engine.protectedOperations.execute(operation, { actorId: "in-flight" }, "work");
     await handlerStarted;
     expect(handler).toHaveBeenCalledTimes(1);
     const stopping = engine.stop();
-    await stopping;
-    expect(handlerSignal?.aborted).toBe(false);
+    expect(handlerSignal?.aborted).toBe(true);
+    expect(cleanupCalls).toBe(0);
     release("completed");
     expect(await pending).toEqual({ status: "executed", value: "completed" });
+    await stopping;
+    expect(cleanupCalls).toBe(1);
+  });
+
+  it("assigns a distinct invocation ID to each execution of one definition", async () => {
+    const observed: Array<{ operationId: string; operationDefinitionId: string }> = [];
+    const engine = new CoreEngine({ policy: { evaluate: async () => allow } });
+    const operation = engine.registerProtectedOperation({
+      id: "records.correlated",
+      action: "record.read",
+      resource: "record:correlated",
+      validateInput: (value: unknown): value is string => typeof value === "string",
+      handler: (_input, context) => {
+        observed.push({
+          operationId: context.operationId,
+          operationDefinitionId: context.operationDefinitionId
+        });
+        return "ok";
+      }
+    });
+    await ensureStarted(engine);
+    await engine.protectedOperations.execute(operation, { actorId: "first" }, "x");
+    await engine.protectedOperations.execute(operation, { actorId: "second" }, "x");
+    expect(observed).toHaveLength(2);
+    expect(observed[0].operationId).not.toBe(observed[1].operationId);
+    expect(observed[0].operationDefinitionId).toBe("records.correlated");
+    expect(observed[1].operationDefinitionId).toBe("records.correlated");
+  });
+
+  it("keeps unresolved handlers tracked after a drain timeout and observes them on a later stop", async () => {
+    vi.useFakeTimers();
+    let release!: (value: string) => void;
+    let signalHandlerStarted!: () => void;
+    const handlerStarted = new Promise<void>((resolve) => { signalHandlerStarted = resolve; });
+    let handlerSignal: AbortSignal | undefined;
+    let cleanupCalls = 0;
+    const engine = new CoreEngine({
+      policy: { evaluate: async () => allow },
+      protectedOperationShutdown: { drainDeadlineMs: 10 }
+    });
+    const operation = engine.registerProtectedOperation({
+      id: "records.timeout-drain",
+      action: "record.write",
+      resource: "record:timeout-drain",
+      validateInput: (value: unknown): value is string => typeof value === "string",
+      handler: (_input, context) => {
+        handlerSignal = context.signal;
+        signalHandlerStarted();
+        return new Promise<string>((resolve) => { release = resolve; });
+      }
+    });
+    engine.register({ id: "resource-owner", version: "1.0.0", stop: () => { cleanupCalls += 1; } });
+    await ensureStarted(engine);
+    const pending = engine.protectedOperations.execute(operation, { actorId: "timeout" }, "work");
+    await handlerStarted;
+    const firstStop = engine.stop();
+    await vi.advanceTimersByTimeAsync(10);
+    await expect(firstStop).rejects.toMatchObject({ code: "PROTECTED_OPERATION_DRAIN_TIMEOUT" });
+    expect(engine.state).toBe("stopping");
+    expect(handlerSignal?.aborted).toBe(true);
+    expect(cleanupCalls).toBe(0);
+    release("late-completion");
+    expect(await pending).toEqual({ status: "executed", value: "late-completion" });
+    await engine.stop();
+    expect(cleanupCalls).toBe(1);
+    expect(engine.state).toBe("stopped");
+  });
+
+  it("drains an admitted handler even when no modules were initialized", async () => {
+    let release!: (value: string) => void;
+    let signalHandlerStarted!: () => void;
+    const handlerStarted = new Promise<void>((resolve) => { signalHandlerStarted = resolve; });
+    const engine = new CoreEngine({ policy: { evaluate: async () => allow } });
+    const operation = engine.registerProtectedOperation({
+      id: "records.no-modules",
+      action: "record.write",
+      resource: "record:no-modules",
+      validateInput: (value: unknown): value is string => typeof value === "string",
+      handler: () => {
+        signalHandlerStarted();
+        return new Promise<string>((resolve) => { release = resolve; });
+      }
+    });
+    await ensureStarted(engine);
+    const pending = engine.protectedOperations.execute(operation, { actorId: "no-modules" }, "work");
+    await handlerStarted;
+    const stopping = engine.stop();
+    expect(engine.state).toBe("stopping");
+    release("done");
+    expect(await pending).toEqual({ status: "executed", value: "done" });
+    await stopping;
+    expect(engine.state).toBe("stopped");
   });
 
   it("fails closed for non-cloneable context values before PolicyEngine", async () => {
