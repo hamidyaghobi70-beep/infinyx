@@ -148,9 +148,13 @@ export class LinuxCgroupV2Supervisor implements ProcessTreeSupervisor {
         }
         if (emptyVerified) return;
         if (!emptyVerificationPromise) {
-          emptyVerificationPromise = handle.waitForBoundaryEmpty().then(() => {
+          emptyVerificationPromise = (async () => {
+            // If termination has already been requested, do not verify emptiness
+            // or permit release until that request has settled successfully.
+            if (terminationPromise) await terminationPromise;
+            await handle.waitForBoundaryEmpty();
             emptyVerified = true;
-          }).catch((error: unknown) => {
+          })().catch((error: unknown) => {
             // Permit a later independent verification attempt after transient broker failure.
             emptyVerificationPromise = undefined;
             throw error;
