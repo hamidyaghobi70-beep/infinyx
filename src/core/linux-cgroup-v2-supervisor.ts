@@ -35,6 +35,14 @@ export interface LinuxCgroupV2BrokerHandle {
  * Implemented by a separately trusted, narrowly privileged service.
  * It must spawn only the supplied trusted bootstrap and put it inside the
  * supervisor-owned cgroup boundary before resolving.
+ *
+ * Failure ownership is part of the broker contract: if launch rejects after
+ * allocating any process or boundary resources, the broker must retain
+ * ownership and perform fail-closed cleanup only after independently proving
+ * the boundary empty, or retain the allocation in an operator-recoverable
+ * state. It must never orphan a partially-created boundary. The same ownership
+ * rule applies when later termination, empty verification, or release calls
+ * fail; an adapter error is not permission to abandon the allocation.
  */
 export interface LinuxCgroupV2Broker {
   launchTrustedRunner(
