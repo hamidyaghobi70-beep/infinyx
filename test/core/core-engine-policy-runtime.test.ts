@@ -105,6 +105,60 @@ describe("CoreEngine policy runtime shutdown", () => {
     expect(cleanupCalls).toBe(0);
   });
 
+  it("keeps shutdown unresolved and never runs a handler after a late Allow", async () => {
+    let release!: (decision: { effect: "allow"; reason: string }) => void;
+    let evaluatorStarted!: () => void;
+    const started = new Promise<void>((resolve) => { evaluatorStarted = resolve; });
+    let handlerCalls = 0;
+    let cleanupCalls = 0;
+    const engine = new CoreEngine({
+      policyShutdownTimeoutMs: 20,
+      policy: {
+        evaluate: () => new Promise((resolve) => {
+          evaluatorStarted();
+          release = resolve;
+        }),
+        shutdown: async () => undefined
+      }
+    });
+    const operation = engine.registerProtectedOperation({
+      id: "late-allow",
+      action: "record.write",
+      resource: "record:late-allow",
+      validateInput: (value: unknown): value is string => typeof value === "string",
+      handler: () => { handlerCalls += 1; return "executed"; }
+    });
+    engine.register({
+      id: "worker",
+      version: "1.0.0",
+      stop: () => { cleanupCalls += 1; }
+    });
+    await engine.initialize();
+    await engine.start();
+
+    const pending = engine.protectedOperations.execute(
+      operation,
+      { actorId: "late-allow-test" },
+      "input"
+    );
+    await started;
+
+    await expect(engine.stop()).rejects.toMatchObject({
+      code: "POLICY_SHUTDOWN_TIMEOUT"
+    });
+    expect(engine.state).toBe("unresolved");
+    expect(cleanupCalls).toBe(0);
+    expect(handlerCalls).toBe(0);
+
+    release({ effect: "allow", reason: "late allow after stop" });
+    await expect(pending).resolves.toMatchObject({ status: "denied" });
+    await engine.stop();
+
+    expect(handlerCalls).toBe(0);
+    expect(cleanupCalls).toBe(1);
+    expect(engine.state).toBe("stopped");
+  });
+
   it("shuts down a policy runtime even when CoreEngine was never initialized", async () => {
     let shutdownCalls = 0;
     const engine = new CoreEngine({
