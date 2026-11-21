@@ -119,6 +119,7 @@ function reasonFromSignal(signal: AbortSignal, fallback: PolicyStopReason): Poli
 export class FailClosedPolicyEngine implements PolicyEngine {
   private shuttingDown = false;
   private readonly activeStops = new Set<(reason: PolicyStopReason) => void>();
+  private readonly activeEvaluations = new Set<Promise<void>>();
 
   constructor(
     private readonly delegate: PolicyEngine,
@@ -208,6 +209,13 @@ export class FailClosedPolicyEngine implements PolicyEngine {
           candidateFrozen = true;
           return decision;
         });
+      const evaluationSettled = evaluation.then(
+        () => undefined,
+        () => undefined
+      );
+      this.activeEvaluations.add(evaluationSettled);
+      void evaluationSettled.then(() => this.activeEvaluations.delete(evaluationSettled));
+
       const result = await Promise.race([evaluation, aborted]);
       if (stopReason !== undefined) return deny(cancellationMessage(stopReason));
       return result ?? deny("Policy evaluator returned an invalid decision; access denied.");
@@ -231,5 +239,9 @@ export class FailClosedPolicyEngine implements PolicyEngine {
     this.shuttingDown = true;
     for (const stop of [...this.activeStops]) stop("RUNTIME_SHUTDOWN");
     await this.delegate.shutdown?.();
+    // Cancellation freezes the authorization result, but it does not prove the
+    // delegate has stopped executing. Keep shutdown pending until every
+    // underlying evaluation promise has actually settled.
+    await Promise.all([...this.activeEvaluations]);
   }
 }
