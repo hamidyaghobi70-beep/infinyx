@@ -176,4 +176,56 @@ describe("LinuxCgroupV2Supervisor", () => {
     }
   });
 
+  it("suppresses late broker messages after empty verification and unsubscribes on release", async () => {
+    const messageListeners: Array<(message: unknown) => void> = [];
+    const unsubscribe = vi.fn();
+    const brokerHandle = makeHandle({
+      onMessage: vi.fn((listener: (message: unknown) => void) => {
+        messageListeners.push(listener);
+        return unsubscribe;
+      })
+    });
+    const handle = await new LinuxCgroupV2Supervisor(brokerFor(brokerHandle))
+      .launchContainedRunner(launchOptions);
+    const received: unknown[] = [];
+
+    handle.onMessage((message) => received.push(message));
+    messageListeners[0]?.({ type: "before-empty" });
+    expect(received).toEqual([{ type: "before-empty" }]);
+
+    await handle.waitForTreeExit();
+    messageListeners[0]?.({ type: "after-empty" });
+    expect(received).toEqual([{ type: "before-empty" }]);
+
+    await handle.dispose();
+    expect(unsubscribe).toHaveBeenCalledTimes(1);
+    messageListeners[0]?.({ type: "after-release" });
+    expect(received).toEqual([{ type: "before-empty" }]);
+  });
+
+  it("does not deliver broker messages while boundary release is in progress", async () => {
+    const messageListeners: Array<(message: unknown) => void> = [];
+    let finishRelease: (() => void) | undefined;
+    const brokerHandle = makeHandle({
+      onMessage: vi.fn((listener: (message: unknown) => void) => {
+        messageListeners.push(listener);
+        return () => undefined;
+      }),
+      releaseBoundary: vi.fn(() => new Promise<void>((resolve) => {
+        finishRelease = resolve;
+      }))
+    });
+    const handle = await new LinuxCgroupV2Supervisor(brokerFor(brokerHandle))
+      .launchContainedRunner(launchOptions);
+    const received: unknown[] = [];
+    handle.onMessage((message) => received.push(message));
+    await handle.waitForTreeExit();
+
+    const disposing = handle.dispose();
+    messageListeners[0]?.({ type: "during-release" });
+    expect(received).toEqual([]);
+    finishRelease?.();
+    await disposing;
+  });
+
 });
