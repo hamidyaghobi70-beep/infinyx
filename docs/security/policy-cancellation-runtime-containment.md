@@ -59,6 +59,12 @@ CoreEngine remains a lower-level public API and can still be constructed directl
 
 The module-context shutdownSignal is emitted synchronously at shutdown start. It is an early notification that new protected work is no longer admitted, not permission to release resources still needed by already-admitted handlers. Modules may stop accepting work and request cooperative cancellation in response, but resource release belongs in the module stop() hook, which CoreEngine does not invoke until policy shutdown and protected-handler drain have completed.
 
+## Child-process IPC integrity
+
+The parent accepts policy-runner progress and result messages only when they carry a per-execution random response token. The child runner captures its IPC sender before importing evaluator-controlled code and uses that closure-held sender for authenticated messages. This prevents an evaluator from forging a result by calling or monkey-patching the shared `process.send` API, including by attempting to intercept the runner's progress message. Messages without the matching token are ignored and the normal timeout/termination path remains fail-closed.
+
+This is protocol hardening within the child-process boundary, not a claim that a Node.js child process is a complete hostile-code sandbox. Process isolation still requires deployment-level OS controls, and the parent remains responsible for enforcing deadlines and validating the final decision shape.
+
 ## Runtime outcomes
 
 The detailed process API reports lifecycle, terminal outcome, runtime status, cleanup status, stop reason, and whether the terminal candidate was frozen.
