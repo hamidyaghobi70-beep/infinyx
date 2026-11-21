@@ -2,7 +2,7 @@
 
 ## Status
 
-Implementation integrated on `integration/infinyx-core-runtime-v1`; CI verification completed on Linux, macOS, and Windows. Independent governance/security review remains pending. This document does not authorize merge, release, deployment, activation of Agent Runtime, or changes to Shutdown Timeout Contract v6.2.
+Proposed in pull request #57 on `security/shutdown-containment-hardening`; the changes have not been merged into `integration/infinyx-core-runtime-v1`. CI verification completed on Linux, macOS, and Windows for the current PR head. Independent governance/security review remains pending. This document does not authorize merge, release, deployment, activation of Agent Runtime, or changes to Shutdown Timeout Contract v6.2.
 
 ## Cancellation contract
 
@@ -46,7 +46,7 @@ For untrusted evaluators, deployment must add OS-level controls appropriate to t
 
 ## CoreEngine shutdown ordering
 
-CoreEngine.stop() closes protected-operation admission, requests policy shutdown, and waits for both policy shutdown and admitted handler drain before module cleanup. Policy shutdown has its own finite deadline (configurable with policyShutdownTimeoutMs, default 5 seconds). If that deadline expires, CoreEngine enters UNRESOLVED and does not begin module cleanup; a later explicit stop call can retry.
+CoreEngine.stop() closes protected-operation admission and cancels admitted handlers, then waits for both policy shutdown and admitted-handler drain before notifying modules through shutdownSignal and beginning module cleanup. This ordering prevents module shutdown listeners from releasing resources while admitted handlers still use them. Policy shutdown has its own finite deadline (configurable with policyShutdownTimeoutMs, default 5 seconds). If that deadline expires, CoreEngine enters UNRESOLVED and does not notify modules or begin module cleanup; a later explicit stop call can retry.
 
 For an arbitrary in-process PolicyEngine delegate, FailClosedPolicyEngine requests cancellation of active evaluations, awaits the delegate's optional shutdown() hook, and then awaits settlement of the underlying evaluation promises. Cancellation freezes the authorization result as deny, but does not itself terminate JavaScript execution. If a non-cooperative delegate never settles, CoreEngine's policy shutdown deadline expires and the Core lifecycle remains UNRESOLVED. Hard termination evidence is available only when the evaluator is executed through the child-process adapter.
 
