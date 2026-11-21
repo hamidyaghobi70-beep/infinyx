@@ -228,4 +228,38 @@ describe("LinuxCgroupV2Supervisor", () => {
     await disposing;
   });
 
+  it("does not register new message listeners after empty verification or during release", async () => {
+    const onMessage = vi.fn(() => () => undefined);
+    let finishRelease: (() => void) | undefined;
+    const brokerHandle = makeHandle({
+      onMessage,
+      releaseBoundary: vi.fn(() => new Promise<void>((resolve) => {
+        finishRelease = resolve;
+      }))
+    });
+    const handle = await new LinuxCgroupV2Supervisor(brokerFor(brokerHandle))
+      .launchContainedRunner(launchOptions);
+    const listener = vi.fn();
+
+    handle.onMessage(listener);
+    expect(onMessage).toHaveBeenCalledTimes(1);
+    await handle.waitForTreeExit();
+
+    const afterEmptyUnsubscribe = handle.onMessage(listener);
+    expect(onMessage).toHaveBeenCalledTimes(1);
+    afterEmptyUnsubscribe();
+
+    const disposing = handle.dispose();
+    const duringReleaseUnsubscribe = handle.onMessage(listener);
+    expect(onMessage).toHaveBeenCalledTimes(1);
+    duringReleaseUnsubscribe();
+
+    finishRelease?.();
+    await disposing;
+    const afterReleaseUnsubscribe = handle.onMessage(listener);
+    expect(onMessage).toHaveBeenCalledTimes(1);
+    afterReleaseUnsubscribe();
+  });
+
+
 });
