@@ -297,6 +297,36 @@ describe("FailClosedPolicyEngine caller and parent cancellation", () => {
   });
 
 
+  it("ignores a late Allow from an evaluator after caller cancellation", async () => {
+    const controller = new AbortController();
+    let release!: (decision: { effect: "allow"; reason: string }) => void;
+    let evaluatorStarted!: () => void;
+    const started = new Promise<void>((resolve) => { evaluatorStarted = resolve; });
+    let observedSignal: AbortSignal | undefined;
+    const policy = new FailClosedPolicyEngine({
+      evaluate: (_input, options) => {
+        observedSignal = options?.signal;
+        evaluatorStarted();
+        return new Promise((resolve) => { release = resolve; });
+      }
+    });
+
+    const pending = policy.evaluate(request, { signal: controller.signal });
+    await started;
+    controller.abort();
+
+    await expect(pending).resolves.toEqual({
+      effect: "deny",
+      reason: "Policy evaluation cancelled by caller; access denied."
+    });
+    expect(observedSignal?.aborted).toBe(true);
+
+    // The evaluator is deliberately non-cooperative and resolves after cancellation.
+    release({ effect: "allow", reason: "late grant must be ignored" });
+    await Promise.resolve();
+    await Promise.resolve();
+  });
+
   it("blocks new evaluations and cancels active work during policy runtime shutdown", async () => {
     let evaluatorStarted!: () => void;
     const started = new Promise<void>((resolve) => { evaluatorStarted = resolve; });
