@@ -122,4 +122,47 @@ describe("LinuxCgroupV2Supervisor", () => {
       .rejects.toThrow("cannot verify empty");
     expect(brokerHandle.releaseBoundary).not.toHaveBeenCalled();
   });
+
+  it("coalesces concurrent empty-state verification and release operations", async () => {
+    const brokerHandle = makeHandle();
+    const handle = await new LinuxCgroupV2Supervisor(brokerFor(brokerHandle))
+      .launchContainedRunner(launchOptions);
+
+    await Promise.all([
+      handle.waitForTreeExit(),
+      handle.waitForTreeExit(),
+      handle.waitForTreeExit()
+    ]);
+    await Promise.all([handle.dispose(), handle.dispose(), handle.dispose()]);
+
+    expect(brokerHandle.waitForBoundaryEmpty).toHaveBeenCalledTimes(1);
+    expect(brokerHandle.releaseBoundary).toHaveBeenCalledTimes(1);
+    expect(brokerHandle.calls).toEqual(["wait-empty", "release"]);
+  });
+
+  it("allows a safe retry when boundary release fails", async () => {
+    const brokerHandle = makeHandle();
+    const release = vi.fn()
+      .mockRejectedValueOnce(new Error("temporary release failure"))
+      .mockResolvedValueOnce(undefined);
+    brokerHandle.releaseBoundary = release;
+    const handle = await new LinuxCgroupV2Supervisor(brokerFor(brokerHandle))
+      .launchContainedRunner(launchOptions);
+
+    await handle.waitForTreeExit();
+    await expect(handle.dispose()).rejects.toThrow("temporary release failure");
+    expect(handle.send({ type: "after-release-failure" })).toBe(false);
+
+    await handle.dispose();
+    expect(release).toHaveBeenCalledTimes(2);
+  });
+
+  it("coalesces concurrent termination requests", async () => {
+    const brokerHandle = makeHandle();
+    const handle = await new LinuxCgroupV2Supervisor(brokerFor(brokerHandle))
+      .launchContainedRunner(launchOptions);
+
+    await Promise.all([handle.terminateTree(), handle.terminateTree()]);
+    expect(brokerHandle.terminateBoundary).toHaveBeenCalledTimes(1);
+  });
 });
