@@ -75,30 +75,60 @@ export class LinuxCgroupV2Supervisor implements ProcessTreeSupervisor {
 
     let emptyVerified = false;
     let disposed = false;
+    let releasing = false;
+    let terminationPromise: Promise<void> | undefined;
+    let emptyVerificationPromise: Promise<void> | undefined;
+    let releasePromise: Promise<void> | undefined;
 
     return {
       containmentId: handle.containmentId,
-      send: (message) => !disposed && !emptyVerified && handle.send(message),
+      send: (message) => !disposed && !releasing && !emptyVerified && handle.send(message),
       onMessage: (listener) => handle.onMessage(listener),
       onError: (listener) => handle.onError(listener),
       onRunnerExit: (listener) => handle.onRunnerExit(listener),
       terminateTree: async () => {
-        if (disposed || emptyVerified) return;
-        await handle.terminateBoundary();
+        if (disposed || releasing || emptyVerified) return;
+        if (!terminationPromise) {
+          terminationPromise = handle.terminateBoundary().catch((error: unknown) => {
+            terminationPromise = undefined;
+            throw error;
+          });
+        }
+        await terminationPromise;
       },
       waitForTreeExit: async () => {
-        if (disposed) throw new Error("Containment boundary has already been released.");
+        if (disposed || releasing) {
+          if (emptyVerified) return;
+          throw new Error("Containment boundary is being released without verified emptiness.");
+        }
         if (emptyVerified) return;
-        await handle.waitForBoundaryEmpty();
-        emptyVerified = true;
+        if (!emptyVerificationPromise) {
+          emptyVerificationPromise = handle.waitForBoundaryEmpty().then(() => {
+            emptyVerified = true;
+          }).catch((error: unknown) => {
+            // Permit a later independent verification attempt after transient broker failure.
+            emptyVerificationPromise = undefined;
+            throw error;
+          });
+        }
+        await emptyVerificationPromise;
       },
       dispose: async () => {
         if (disposed) return;
         if (!emptyVerified) {
           throw new Error("Cannot release Linux containment before boundary emptiness is verified.");
         }
-        await handle.releaseBoundary();
-        disposed = true;
+        if (!releasePromise) {
+          releasing = true;
+          releasePromise = handle.releaseBoundary().then(() => {
+            disposed = true;
+          }).catch((error: unknown) => {
+            releasing = false;
+            releasePromise = undefined;
+            throw error;
+          });
+        }
+        await releasePromise;
       }
     };
   }
