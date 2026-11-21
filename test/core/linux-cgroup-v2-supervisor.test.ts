@@ -144,6 +144,24 @@ describe("LinuxCgroupV2Supervisor", () => {
     expect(brokerHandle.waitForBoundaryEmpty).toHaveBeenCalledTimes(1);
   });
 
+  it("does not verify emptiness after termination fails until termination is retried successfully", async () => {
+    const terminate = vi.fn()
+      .mockRejectedValueOnce(new Error("termination request failed"))
+      .mockResolvedValueOnce(undefined);
+    const brokerHandle = makeHandle({ terminateBoundary: terminate });
+    const handle = await new LinuxCgroupV2Supervisor(brokerFor(brokerHandle))
+      .launchContainedRunner(launchOptions);
+
+    await expect(handle.terminateTree()).rejects.toThrow("termination request failed");
+    await expect(handle.waitForTreeExit()).rejects.toThrow("termination request failed");
+    expect(brokerHandle.waitForBoundaryEmpty).not.toHaveBeenCalled();
+
+    await handle.terminateTree();
+    await handle.waitForTreeExit();
+    expect(terminate).toHaveBeenCalledTimes(2);
+    expect(brokerHandle.waitForBoundaryEmpty).toHaveBeenCalledTimes(1);
+  });
+
   it("coalesces concurrent empty-state verification and release operations", async () => {
     const brokerHandle = makeHandle();
     const handle = await new LinuxCgroupV2Supervisor(brokerFor(brokerHandle))
