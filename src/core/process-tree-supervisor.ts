@@ -30,15 +30,24 @@ export interface ContainedProcessHandle {
   /** Send a parent-to-runner IPC message. Returns false if the channel is unavailable. */
   send(message: Readonly<Record<string, unknown>>): boolean;
 
-  /** Subscribe to untrusted runner IPC. Callers must authenticate every message. */
+  /**
+   * Subscribe to untrusted runner IPC. Callers must authenticate every message.
+   * Implementations must reject new subscriptions and suppress delivery once
+   * boundary emptiness is verified or resource release begins.
+   */
   onMessage(listener: (message: unknown) => void): () => void;
 
-  /** Subscribe to control-channel or runner errors. */
+  /**
+   * Subscribe to control-channel or runner errors. Like all event channels,
+   * reject new subscriptions and suppress delivery after verified emptiness
+   * or once boundary release begins.
+   */
   onError(listener: (error: unknown) => void): () => void;
 
   /**
    * Diagnostic notification only. Direct-runner exit MUST NOT be treated as
-   * proof that the complete containment boundary is empty.
+   * proof that the complete containment boundary is empty. New subscriptions
+   * and event delivery close after verified emptiness or when release begins.
    */
   onRunnerExit(listener: (exit: { readonly code: number | null; readonly signal: string | null }) => void): () => void;
 
