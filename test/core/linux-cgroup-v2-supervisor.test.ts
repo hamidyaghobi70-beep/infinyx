@@ -262,4 +262,31 @@ describe("LinuxCgroupV2Supervisor", () => {
   });
 
 
+  it("does not retry a successful boundary release when listener cleanup throws", async () => {
+    const failedUnsubscribe = vi.fn(() => {
+      throw new Error("listener cleanup failed");
+    });
+    const successfulUnsubscribe = vi.fn();
+    const brokerHandle = makeHandle({
+      onMessage: vi.fn(() => failedUnsubscribe),
+      onError: vi.fn(() => successfulUnsubscribe)
+    });
+    const handle = await new LinuxCgroupV2Supervisor(brokerFor(brokerHandle))
+      .launchContainedRunner(launchOptions);
+
+    handle.onMessage(() => undefined);
+    handle.onError(() => undefined);
+    await handle.waitForTreeExit();
+
+    await expect(handle.dispose()).rejects.toThrow(/boundary was released/i);
+    expect(brokerHandle.releaseBoundary).toHaveBeenCalledTimes(1);
+    expect(failedUnsubscribe).toHaveBeenCalledTimes(1);
+    expect(successfulUnsubscribe).toHaveBeenCalledTimes(1);
+    expect(handle.send({ type: "after-release" })).toBe(false);
+
+    await handle.dispose();
+    expect(brokerHandle.releaseBoundary).toHaveBeenCalledTimes(1);
+  });
+
+
 });
