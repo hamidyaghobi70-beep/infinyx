@@ -82,6 +82,29 @@ describe("CoreEngine policy runtime shutdown", () => {
     expect(engine.state).toBe("stopped");
   });
 
+  it("bounds a policy shutdown that never settles and blocks module cleanup", async () => {
+    let cleanupCalls = 0;
+    const engine = new CoreEngine({
+      policyShutdownTimeoutMs: 15,
+      policy: {
+        evaluate: async () => ({ effect: "deny" as const, reason: "test" }),
+        shutdown: () => new Promise<void>(() => undefined)
+      }
+    });
+    engine.register({
+      id: "worker",
+      version: "1.0.0",
+      stop: () => { cleanupCalls += 1; }
+    });
+    await engine.initialize();
+
+    await expect(engine.stop()).rejects.toMatchObject({
+      code: "POLICY_SHUTDOWN_TIMEOUT"
+    });
+    expect(engine.state).toBe("unresolved");
+    expect(cleanupCalls).toBe(0);
+  });
+
   it("shuts down a policy runtime even when CoreEngine was never initialized", async () => {
     let shutdownCalls = 0;
     const engine = new CoreEngine({
