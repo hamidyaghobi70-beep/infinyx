@@ -437,7 +437,12 @@ export class ProcessIsolatedPolicyEngine implements PolicyEngine {
       removeAbortListeners();
       this.active.delete(executionId);
       this.unresolvedExecutions.delete(executionId);
-      if (resolved) return;
+      if (resolved) {
+        // An UNRESOLVED result may already have been returned to the caller,
+        // but close is the authoritative signal that releases its capacity.
+        notify("TERMINAL");
+        return;
+      }
 
       if (!candidateFrozen || !candidate) {
         candidateFrozen = true;
