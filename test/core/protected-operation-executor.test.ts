@@ -298,16 +298,31 @@ describe("ProtectedOperationExecutor", () => {
     expect(context).toHaveProperty("protectedOperations");
   });
 
-  it("denies an in-flight policy result if shutdown begins before handler admission", async () => {
+  it("denies a late Allow when shutdown starts during policy evaluation", async () => {
+    let signalPolicyStarted!: () => void;
+    const policyStarted = new Promise<void>((resolve) => { signalPolicyStarted = resolve; });
     let release!: (decision: PolicyDecision) => void;
-    const { engine, operation, handler } = makeEngine(() =>
-      new Promise<PolicyDecision>((resolve) => { release = resolve; })
-    );
+    let evaluatorSignal: AbortSignal | undefined;
+    const { engine, operation, handler } = makeEngine((_request, options) => {
+      evaluatorSignal = options?.signal;
+      signalPolicyStarted();
+      return new Promise<PolicyDecision>((resolve) => { release = resolve; });
+    });
+
     await ensureStarted(engine);
-    const pending = engine.protectedOperations.execute(operation, { actorId: "race" }, { value: "x" });
-    await Promise.resolve();
+    const pending = engine.protectedOperations.execute(
+      operation,
+      { actorId: "shutdown-during-policy" },
+      { value: "x" }
+    );
+    await policyStarted;
+
     const stopping = engine.stop();
+    expect(evaluatorSignal?.aborted).toBe(true);
+
+    // Resolve with Allow after shutdown has closed admission and cancelled evaluation.
     release(allow);
+
     expect(await pending).toMatchObject({ status: "denied" });
     expect(handler).not.toHaveBeenCalled();
     await stopping;
