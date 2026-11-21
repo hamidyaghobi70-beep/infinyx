@@ -422,4 +422,19 @@ describe("LinuxCgroupV2Supervisor", () => {
     await disposing;
   });
 
+  it("does not verify or release an invalidly attested boundary when termination fails", async () => {
+    const brokerHandle = makeHandle({
+      containmentEstablished: false as true,
+      terminateBoundary: vi.fn(async () => {
+        throw new Error("termination unavailable");
+      })
+    });
+    const supervisor = new LinuxCgroupV2Supervisor(brokerFor(brokerHandle));
+
+    await expect(supervisor.launchContainedRunner(launchOptions))
+      .rejects.toThrow("termination unavailable");
+    expect(brokerHandle.waitForBoundaryEmpty).not.toHaveBeenCalled();
+    expect(brokerHandle.releaseBoundary).not.toHaveBeenCalled();
+  });
+
 });
