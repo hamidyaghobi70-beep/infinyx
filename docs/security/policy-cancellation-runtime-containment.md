@@ -57,9 +57,9 @@ CoreEngine.stop() emits shutdownSignal immediately as a notification that shutdo
 
 For an arbitrary in-process PolicyEngine delegate, FailClosedPolicyEngine requests cancellation of active evaluations, awaits the delegate's optional shutdown() hook, and then awaits settlement of the underlying evaluation promises. Cancellation freezes the authorization result as deny, but does not itself terminate JavaScript execution. If a non-cooperative delegate never settles, CoreEngine's policy shutdown deadline expires and the Core lifecycle remains UNRESOLVED. Hard termination evidence is available only when the evaluator is executed through the child-process adapter.
 
-The production composition root uses createProductionCoreEngine(), which always sets requireProcessIsolation: true. The server entrypoint constructs its CoreEngine through this factory and does not accept a custom policy evaluator from runtime configuration. The factory rejects any supplied custom in-process PolicyEngine and accepts a ProcessIsolatedPolicyEngine; tests cover the default-deny path and both custom-policy cases. This creates a fail-closed boundary for the shipped production composition path.
+The production composition root uses createProductionCoreEngine(), which always sets requireProcessIsolation: true. Until a verified OS-level process-tree supervisor is integrated, this factory now rejects **all** supplied custom PolicyEngine instances, including ProcessIsolatedPolicyEngine. The shipped server currently uses the built-in default-deny policy, so this restriction does not change its behavior. Regression tests cover rejection of both in-process and child-process custom evaluators. This is an intentional production gate: direct-child Node.js isolation is not represented as whole-tree containment.
 
-CoreEngine remains a lower-level public API and can still be constructed directly with a custom in-process PolicyEngine when requireProcessIsolation is omitted or false. Library consumers and alternate composition roots must therefore use createProductionCoreEngine() for production workloads, or explicitly set requireProcessIsolation: true. The API does not infer whether arbitrary policy code is trusted.
+CoreEngine remains a lower-level public API and can still be constructed directly with a custom in-process PolicyEngine when requireProcessIsolation is omitted or false, or with ProcessIsolatedPolicyEngine for direct-child isolation only. Those lower-level APIs do not establish process-tree containment. Library consumers and alternate composition roots must not use them for hostile evaluator code until a supervisor has been integrated and verified. The API does not infer whether arbitrary policy code is trusted.
 
 ## Shutdown signal semantics
 
@@ -90,6 +90,10 @@ Recommended operator response:
 5. Before restarting service traffic, verify that the old execution boundary is gone, the new parent has a clean capacity state, and any external side effects are reconciled by the owning application. This runtime does not roll back external effects and does not automatically retry policy work.
 
 This is an operational recommendation, not an implemented recovery controller. No administrative API currently clears unresolved entries, and none should be added unless it is backed by verifiable OS-level process termination evidence. Until deployment supervision is configured and tested, unresolved capacity exhaustion remains a manual availability incident.
+
+## Production evaluator gate
+
+The strict production factory intentionally rejects every custom policy evaluator until the repository has a supervisor that can create the evaluator inside an OS-managed process-tree boundary before evaluator code runs and can verify that the complete boundary is empty after termination. This includes evaluators that run in a Node.js child process: the current child adapter still terminates and accounts for only the direct child. The lower-level CoreEngine and ProcessIsolatedPolicyEngine APIs remain available for tests and controlled trusted use, but they must not be mistaken for hostile-code containment.
 
 ## Platform verification
 
