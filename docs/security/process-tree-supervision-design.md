@@ -28,6 +28,21 @@ The production runtime should depend on an injected process-tree supervisor abst
 
 The exact TypeScript types and ownership rules should be finalized before wiring this abstraction into `ProcessIsolatedPolicyEngine`. A supervisor must not offer a boolean “killed” result that merely means a termination request was issued.
 
+## Initial TypeScript contract
+
+The repository now defines the platform-neutral contract in `src/core/process-tree-supervisor.ts` and exports its types from `src/core/index.ts`:
+
+- `ProcessTreeSupervisor.launchContainedRunner(options)` launches the trusted bootstrap only. Its promise may resolve only after containment membership and runner readiness are verified.
+- `ContainedProcessHandle.send()` and `onMessage()` carry the existing authenticated IPC protocol. Every received message remains untrusted until the per-execution token is checked by the policy runtime.
+- `onRunnerExit()` is diagnostic and cannot release execution capacity.
+- `terminateTree()` means a termination request was issued; it is not proof of termination.
+- `waitForTreeExit()` is the sole completion proof and must resolve only after the complete boundary is verified empty.
+- `dispose()` must reject unless successful tree-exit verification has already completed.
+
+The launch options intentionally identify only the trusted runner artifact. The evaluator module is not part of the launch request; it may be named in the authenticated evaluate IPC message only after the supervisor returns a verified handle. The interface has no direct-child fallback.
+
+This is an API contract, not an implementation. It is not yet wired into `ProcessIsolatedPolicyEngine`, and it does not enable custom evaluators in `createProductionCoreEngine()`. A concrete Linux adapter still requires a protected cgroup delegation boundary (or a separate trusted broker/identity) and integration tests using the real evaluator credentials. Until that exists, production remains default-deny.
+
 ## Platform requirements
 
 ### Linux
