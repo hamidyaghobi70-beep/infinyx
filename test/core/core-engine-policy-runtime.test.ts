@@ -47,6 +47,12 @@ describe("CoreEngine policy runtime shutdown", () => {
       reason: "Policy deadline is invalid; access denied."
     });
     expect(runtime.activeExecutionCount).toBe(0);
+    expect(runtime.capacitySnapshot).toEqual({
+      activeCount: 0,
+      unresolvedCount: 0,
+      availableCapacity: 4,
+      maxConcurrent: 4
+    });
   });
 
   it("terminates active policy processes before cleaning modules", async () => {
@@ -71,6 +77,8 @@ describe("CoreEngine policy runtime shutdown", () => {
 
     expect(decision.effect).toBe("deny");
     expect(runtime.activeExecutionCount).toBe(0);
+    expect(runtime.unresolvedExecutionCount).toBe(0);
+    expect(runtime.capacitySnapshot.availableCapacity).toBe(4);
     expect(order).toEqual(["module-cleanup"]);
     expect(engine.state).toBe("stopped");
     await expect(engine.policy.evaluate({ ...request, action: "allow" }))
