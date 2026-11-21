@@ -276,6 +276,9 @@ export class ProcessIsolatedPolicyEngine implements PolicyEngine {
       resolved = true;
       clearTimers();
       removeAbortListeners();
+      // Keep this execution in the capacity map until the child emits close.
+      // UNRESOLVED means termination was not confirmed, so freeing the slot
+      // here could permit unbounded replacement processes.
       notify("UNRESOLVED");
       resolveCompletion(makeRecord(
         "UNRESOLVED",
