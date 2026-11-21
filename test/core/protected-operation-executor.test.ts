@@ -404,6 +404,12 @@ describe("ProtectedOperationExecutor", () => {
       validateInput: (value: unknown): value is string => typeof value === "string",
       handler
     });
+    const moduleStop = vi.fn(async () => undefined);
+    engine.register({
+      id: "cleanup-probe",
+      version: "1.0.0",
+      stop: moduleStop
+    });
     await ensureStarted(engine);
     const pending = engine.protectedOperations.execute(operation, { actorId: "in-flight" }, "work");
     await handlerStarted;
@@ -413,10 +419,12 @@ describe("ProtectedOperationExecutor", () => {
     await Promise.resolve();
     expect(handlerSignal?.aborted).toBe(true);
     expect(stopSettled).toBe(false);
+    expect(moduleStop).not.toHaveBeenCalled();
     release("completed");
     await stopping;
     expect(stopSettled).toBe(true);
     expect(await pending).toEqual({ status: "executed", value: "completed" });
+    expect(moduleStop).toHaveBeenCalledTimes(1);
   });
 
   it("fails closed for non-cloneable context values before PolicyEngine", async () => {
