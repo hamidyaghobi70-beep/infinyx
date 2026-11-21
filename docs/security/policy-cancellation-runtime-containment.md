@@ -19,7 +19,9 @@ This in-process wrapper is cooperative only. A delegate that ignores AbortSignal
 
 ## Process containment contract
 
-ProcessIsolatedPolicyEngine loads a policy module in a dedicated Node.js child process. The module must be an absolute filesystem path or file URL and export either a default PolicyEngine, a named policyEngine, or a createPolicyEngine factory.
+ProcessIsolatedPolicyEngine loads a policy module in a dedicated Node.js child process. The module must be an absolute filesystem path or a local file URL without credentials, query, or fragment, and export either a default PolicyEngine, a named policyEngine, or a createPolicyEngine factory. Non-file schemes, remote file URL hosts, and decorated file URLs are rejected during construction.
+
+The evaluator module location is trusted deployment configuration, not request data. Never derive moduleUrl from an HTTP request, tenant-controlled setting, or other user-writable source. An absolute path or local file URL is only a location check; it does not establish the integrity or trustworthiness of the code at that path. Deployments should pin the evaluator artifact through their normal build and release controls and ensure untrusted principals cannot replace it. The evaluator still executes with the child process's operating-system identity and permissions.
 
 The parent process:
 
