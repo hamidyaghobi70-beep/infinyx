@@ -82,6 +82,8 @@ export class LinuxCgroupV2Supervisor implements ProcessTreeSupervisor {
     let disposed = false;
     let releasing = false;
     let terminationPromise: Promise<void> | undefined;
+    let terminationFailed = false;
+    let terminationFailure: unknown;
     let emptyVerificationPromise: Promise<void> | undefined;
     let releasePromise: Promise<void> | undefined;
     const unsubscribeAll = new Set<() => void>();
@@ -134,8 +136,13 @@ export class LinuxCgroupV2Supervisor implements ProcessTreeSupervisor {
       terminateTree: async () => {
         if (disposed || releasing || emptyVerified) return;
         if (!terminationPromise) {
-          terminationPromise = handle.terminateBoundary().catch((error: unknown) => {
+          terminationPromise = handle.terminateBoundary().then(() => {
+            terminationFailed = false;
+            terminationFailure = undefined;
+          }).catch((error: unknown) => {
             terminationPromise = undefined;
+            terminationFailed = true;
+            terminationFailure = error;
             throw error;
           });
         }
@@ -151,6 +158,7 @@ export class LinuxCgroupV2Supervisor implements ProcessTreeSupervisor {
           emptyVerificationPromise = (async () => {
             // If termination has already been requested, do not verify emptiness
             // or permit release until that request has settled successfully.
+            if (terminationFailed) throw terminationFailure;
             if (terminationPromise) await terminationPromise;
             await handle.waitForBoundaryEmpty();
             emptyVerified = true;
