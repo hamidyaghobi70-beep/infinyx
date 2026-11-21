@@ -193,6 +193,11 @@ export class ProcessIsolatedPolicyEngine implements PolicyEngine {
         "NOT_STARTED", "NOT_REQUIRED", "PARENT_CANCELLED");
     }
 
+    if (options?.deadlineAt !== undefined && !Number.isFinite(options.deadlineAt)) {
+      return makeRecord("TERMINAL", "DENIED",
+        deny("Policy deadline is invalid; access denied."),
+        "NOT_STARTED", "NOT_REQUIRED");
+    }
     const deadlineRemaining = options?.deadlineAt === undefined
       ? this.timeoutMs
       : options.deadlineAt - Date.now();
