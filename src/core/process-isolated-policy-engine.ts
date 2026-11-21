@@ -136,6 +136,10 @@ export class ProcessIsolatedPolicyEngine implements PolicyEngine {
   private readonly maxOldSpaceSizeMb: number;
   private readonly onStateChange: ((event: PolicyExecutionEvent) => void) | undefined;
   private readonly active = new Map<string, ActiveExecution>();
+  // An unresolved execution remains active until the child emits close. Track
+  // it separately so operators can distinguish occupied capacity from
+  // confirmed termination without prematurely freeing a slot.
+  private readonly unresolvedExecutions = new Set<string>();
   private shuttingDown = false;
 
   constructor(options: ProcessIsolatedPolicyEngineOptions) {
@@ -158,6 +162,26 @@ export class ProcessIsolatedPolicyEngine implements PolicyEngine {
 
   get activeExecutionCount(): number {
     return this.active.size;
+  }
+
+  /** Number of child processes whose termination has not been confirmed. */
+  get unresolvedExecutionCount(): number {
+    return this.unresolvedExecutions.size;
+  }
+
+  /** Capacity snapshot; unresolved children remain included in activeCount. */
+  get capacitySnapshot(): Readonly<{
+    activeCount: number;
+    unresolvedCount: number;
+    availableCapacity: number;
+    maxConcurrent: number;
+  }> {
+    return Object.freeze({
+      activeCount: this.active.size,
+      unresolvedCount: this.unresolvedExecutions.size,
+      availableCapacity: Math.max(0, this.maxConcurrent - this.active.size),
+      maxConcurrent: this.maxConcurrent
+    });
   }
 
   async evaluate(
@@ -279,6 +303,7 @@ export class ProcessIsolatedPolicyEngine implements PolicyEngine {
       // Keep this execution in the capacity map until the child emits close.
       // UNRESOLVED means termination was not confirmed, so freeing the slot
       // here could permit unbounded replacement processes.
+      this.unresolvedExecutions.add(executionId);
       notify("UNRESOLVED");
       resolveCompletion(makeRecord(
         "UNRESOLVED",
@@ -411,6 +436,7 @@ export class ProcessIsolatedPolicyEngine implements PolicyEngine {
       clearTimers();
       removeAbortListeners();
       this.active.delete(executionId);
+      this.unresolvedExecutions.delete(executionId);
       if (resolved) return;
 
       if (!candidateFrozen || !candidate) {
