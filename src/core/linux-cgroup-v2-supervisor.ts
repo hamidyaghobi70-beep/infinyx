@@ -99,8 +99,11 @@ export class LinuxCgroupV2Supervisor implements ProcessTreeSupervisor {
       const cleanup = (): void => {
         if (!active) return;
         active = false;
-        unsubscribe();
-        unsubscribeAll.delete(cleanup);
+        try {
+          unsubscribe();
+        } finally {
+          unsubscribeAll.delete(cleanup);
+        }
       };
       unsubscribeAll.add(cleanup);
       return cleanup;
@@ -163,11 +166,28 @@ export class LinuxCgroupV2Supervisor implements ProcessTreeSupervisor {
         if (!releasePromise) {
           releasing = true;
           releasePromise = handle.releaseBoundary().then(() => {
+            // The OS boundary is now released. Never retry releaseBoundary
+            // merely because a local event-listener cleanup reports an error.
             disposed = true;
-            for (const unsubscribe of [...unsubscribeAll]) unsubscribe();
+            const cleanupErrors: unknown[] = [];
+            for (const unsubscribe of [...unsubscribeAll]) {
+              try {
+                unsubscribe();
+              } catch (error) {
+                cleanupErrors.push(error);
+              }
+            }
+            if (cleanupErrors.length > 0) {
+              throw new Error(
+                `Containment was released, but ${cleanupErrors.length} broker listener cleanup operation(s) failed.`
+              );
+            }
           }).catch((error: unknown) => {
-            releasing = false;
-            releasePromise = undefined;
+            // A cleanup failure after successful release must not reopen lifecycle state.
+            if (!disposed) {
+              releasing = false;
+              releasePromise = undefined;
+            }
             throw error;
           });
         }
