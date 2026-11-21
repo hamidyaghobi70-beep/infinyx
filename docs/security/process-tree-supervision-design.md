@@ -41,6 +41,20 @@ Preferred production boundary: a dedicated cgroup v2 per execution, created bene
 
 A process group alone is not an equivalent security boundary: descendants may create a new session or process group.
 
+#### Linux cgroup delegation and privilege boundary
+
+A delegated cgroup subtree is not automatically safe merely because it is a cgroup v2 subtree. The deployment MUST preserve the kernel's delegation-containment rules:
+
+- The per-execution cgroup MUST be below a supervisor-owned boundary cgroup. The evaluator identity MUST NOT have write access to the boundary's parent-level `cgroup.procs` file or any common-ancestor `cgroup.procs` file that would permit migration out of the boundary.
+- The trusted supervisor (or a narrowly scoped privileged broker) is responsible for creating the per-execution cgroup and placing the trusted runner into it before sending the authenticated evaluate message.
+- The evaluator MUST NOT receive write access to the supervisor's boundary directory, the boundary's `cgroup.procs`, or the boundary's `cgroup.kill`. In particular, do not expose a writable `cgroup.kill` file descriptor or broker operation to evaluator-controlled code.
+- If evaluator and supervisor share a UID, filesystem ownership and mode checks MUST demonstrate that evaluator code cannot modify or remove the supervisor-owned boundary or write to the boundary's parent-level migration control. If this cannot be established, use a separate evaluator identity or a trusted broker; otherwise refuse launch.
+- The supervisor MUST terminate and verify emptiness at the supervisor-owned boundary, not at a leaf cgroup that evaluator code can reorganize internally. Moving processes among descendants inside the boundary must not let them escape the boundary-wide kill and emptiness check.
+- Deployment validation MUST test attempted migration out of the boundary and attempted modification of supervisor-owned control files using the actual evaluator credentials. Static path checks alone are insufficient.
+
+The kernel documentation describes the common-ancestor permission rule that prevents a delegatee from moving processes across the delegated subtree boundary. This guarantee depends on the relevant permissions remaining outside the delegatee's control. See the Linux kernel cgroup v2 delegation and delegation-containment documentation.
+
+
 ### Windows
 
 Preferred production boundary: a Windows Job Object configured with kill-on-job-close semantics.
