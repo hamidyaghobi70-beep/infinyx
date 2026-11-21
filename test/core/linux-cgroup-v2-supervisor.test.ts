@@ -144,6 +144,45 @@ describe("LinuxCgroupV2Supervisor", () => {
     expect(brokerHandle.waitForBoundaryEmpty).toHaveBeenCalledTimes(1);
   });
 
+  it("does not race termination against an in-flight empty-state observation", async () => {
+    let finishEmptyCheck: (() => void) | undefined;
+    const brokerHandle = makeHandle({
+      waitForBoundaryEmpty: vi.fn(() => new Promise<void>((resolve) => {
+        finishEmptyCheck = resolve;
+      }))
+    });
+    const handle = await new LinuxCgroupV2Supervisor(brokerFor(brokerHandle))
+      .launchContainedRunner(launchOptions);
+
+    const waiting = handle.waitForTreeExit();
+    const terminating = handle.terminateTree();
+    await Promise.resolve();
+    expect(brokerHandle.terminateBoundary).not.toHaveBeenCalled();
+
+    finishEmptyCheck?.();
+    await Promise.all([waiting, terminating]);
+    expect(brokerHandle.terminateBoundary).not.toHaveBeenCalled();
+    expect(brokerHandle.waitForBoundaryEmpty).toHaveBeenCalledTimes(1);
+  });
+
+  it("requests termination after an in-flight empty-state observation fails", async () => {
+    let failEmptyCheck: ((error: Error) => void) | undefined;
+    const brokerHandle = makeHandle({
+      waitForBoundaryEmpty: vi.fn(() => new Promise<void>((_resolve, reject) => {
+        failEmptyCheck = reject;
+      }))
+    });
+    const handle = await new LinuxCgroupV2Supervisor(brokerFor(brokerHandle))
+      .launchContainedRunner(launchOptions);
+
+    const waiting = handle.waitForTreeExit();
+    const terminating = handle.terminateTree();
+    failEmptyCheck?.(new Error("empty check unavailable"));
+    await expect(waiting).rejects.toThrow("empty check unavailable");
+    await terminating;
+    expect(brokerHandle.terminateBoundary).toHaveBeenCalledTimes(1);
+  });
+
   it("does not verify emptiness after termination fails until termination is retried successfully", async () => {
     const terminate = vi.fn()
       .mockRejectedValueOnce(new Error("termination request failed"))
