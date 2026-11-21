@@ -87,10 +87,17 @@ function normalizeModuleUrl(value: string): string {
   } catch {
     throw new TypeError("Policy evaluator module must be an absolute path or file URL.");
   }
-  if (parsed.protocol !== "file:") {
-    throw new TypeError("Policy evaluator module must use a file URL.");
+  if (parsed.protocol !== "file:" || parsed.hostname.length > 0 ||
+      parsed.username.length > 0 || parsed.password.length > 0 ||
+      parsed.port.length > 0 || parsed.search.length > 0 || parsed.hash.length > 0) {
+    throw new TypeError("Policy evaluator module must be a local file URL without credentials, query, or fragment.");
   }
-  return parsed.href;
+  try {
+    // Validate and canonicalize the URL using Node's platform-aware file URL rules.
+    return pathToFileURL(fileURLToPath(parsed)).href;
+  } catch {
+    throw new TypeError("Policy evaluator module must identify a valid local file path.");
+  }
 }
 
 function reasonFromSignal(signal: AbortSignal, fallback: PolicyStopReason): PolicyStopReason {
