@@ -1,5 +1,6 @@
 export { CoreEngine } from "./core-engine.js";
 export type { CoreEngineOptions } from "./core-engine.js";
+export { createProductionCoreEngine } from "./production-core-engine.js";
 export { CoreError } from "./core-error.js";
 export type { CoreErrorCode } from "./core-error.js";
 export { DefaultDenyPolicyEngine } from "./default-policy-engine.js";
