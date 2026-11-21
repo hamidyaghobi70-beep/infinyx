@@ -46,7 +46,7 @@ For untrusted evaluators, deployment must add OS-level controls appropriate to t
 
 ## CoreEngine shutdown ordering
 
-CoreEngine.stop() closes protected-operation admission and cancels admitted handlers, then waits for both policy shutdown and admitted-handler drain before notifying modules through shutdownSignal and beginning module cleanup. This ordering prevents module shutdown listeners from releasing resources while admitted handlers still use them. Policy shutdown has its own finite deadline (configurable with policyShutdownTimeoutMs, default 5 seconds). If that deadline expires, CoreEngine enters UNRESOLVED and does not notify modules or begin module cleanup; a later explicit stop call can retry.
+CoreEngine.stop() emits shutdownSignal immediately as a notification that shutdown has begun, closes protected-operation admission, and cancels admitted handlers. Modules must not release shared resources in response to this notification; resource cleanup belongs exclusively in the module stop() hook. CoreEngine waits for both policy shutdown and admitted-handler drain before invoking that hook. Policy shutdown has its own finite deadline (configurable with policyShutdownTimeoutMs, default 5 seconds). If that deadline expires, CoreEngine enters UNRESOLVED and does not begin module cleanup; a later explicit stop call can retry.
 
 For an arbitrary in-process PolicyEngine delegate, FailClosedPolicyEngine requests cancellation of active evaluations, awaits the delegate's optional shutdown() hook, and then awaits settlement of the underlying evaluation promises. Cancellation freezes the authorization result as deny, but does not itself terminate JavaScript execution. If a non-cooperative delegate never settles, CoreEngine's policy shutdown deadline expires and the Core lifecycle remains UNRESOLVED. Hard termination evidence is available only when the evaluator is executed through the child-process adapter.
 
@@ -54,7 +54,7 @@ When untrusted policy code is supplied, configure CoreEngine with requireProcess
 
 ## Shutdown signal semantics
 
-The module-context shutdownSignal is an early notification that shutdown has begun and that new protected work is no longer admitted. It is not permission to release resources still needed by already-admitted handlers. Module resource cleanup belongs in the module stop() hook, which CoreEngine does not invoke until policy shutdown and protected-handler drain have completed.
+The module-context shutdownSignal is emitted synchronously at shutdown start. It is an early notification that new protected work is no longer admitted, not permission to release resources still needed by already-admitted handlers. Modules may stop accepting work and request cooperative cancellation in response, but resource release belongs in the module stop() hook, which CoreEngine does not invoke until policy shutdown and protected-handler drain have completed.
 
 ## Runtime outcomes
 
