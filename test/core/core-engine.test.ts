@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { CoreEngine } from "../../src/core/core-engine.js";
 
 describe("CoreEngine", () => {
@@ -221,7 +221,7 @@ describe("CoreEngine", () => {
     expect(engine.state).toBe("stopped");
   });
 
-  it("does not authorize actions without an explicit policy", async () => {
+  it("marks shutdown unresolved on handler drain timeout and retries after the handler settles", async () => {\n    const engine = new CoreEngine({ protectedOperationDrainTimeoutMs: 5, policy: { evaluate: async () => ({ effect: "allow" as const, reason: "test" }) } });\n    let release!: () => void;\n    let handlerStarted!: () => void;\n    const started = new Promise<void>((resolve) => { handlerStarted = resolve; });\n    const cleanup = vi.fn();\n    const operation = engine.registerProtectedOperation({\n      id: "drain-timeout", action: "record.write", resource: "record:timeout",\n      validateInput: (value: unknown): value is string => typeof value === "string",\n      handler: async () => { handlerStarted(); await new Promise<void>((resolve) => { release = resolve; }); return "done"; }\n    });\n    engine.register({ id: "cleanup-probe", version: "1.0.0", stop: cleanup });\n    await engine.initialize();\n    await engine.start();\n    const pending = engine.protectedOperations.execute(operation, { actorId: "timeout-test" }, "input");\n    await started;\n\n    await expect(engine.stop()).rejects.toMatchObject({ code: "PROTECTED_OPERATION_DRAIN_TIMEOUT" });\n    expect(engine.state).toBe("unresolved");\n    expect(cleanup).not.toHaveBeenCalled();\n\n    release();\n    expect(await pending).toEqual({ status: "executed", value: "done" });\n    await engine.stop();\n    expect(cleanup).toHaveBeenCalledTimes(1);\n    expect(engine.state).toBe("stopped");\n  });\n\n  it("does not authorize actions without an explicit policy", async () => {
     const engine = new CoreEngine();
     const decision = await engine.policy.evaluate({
       actorId: "system",

@@ -32,6 +32,8 @@ export interface CoreEngineOptions {
   readonly memory?: (moduleId: string) => GuardedMemoryPort;
   /** Maximum time allowed for an injected policy evaluation. Defaults to 5 seconds. */
   readonly policyTimeoutMs?: number;
+  /** Maximum time to wait for admitted protected-operation handlers during stop. Defaults to 30 seconds. */
+  readonly protectedOperationDrainTimeoutMs?: number;
 }
 
 export class CoreEngine {
@@ -51,6 +53,10 @@ export class CoreEngine {
   private readonly moduleMemory = new Map<string, GuardedMemoryPort>();
 
   constructor(private readonly options: CoreEngineOptions = {}) {
+    const drainTimeout = options.protectedOperationDrainTimeoutMs ?? 30_000;
+    if (!Number.isFinite(drainTimeout) || drainTimeout <= 0) {
+      throw new TypeError("protectedOperationDrainTimeoutMs must be a finite positive number.");
+    }
     this.events = options.events ?? new InMemoryEventBus();
     this.policy = options.policy
       ? new FailClosedPolicyEngine(options.policy, options.policyTimeoutMs)
@@ -179,7 +185,7 @@ export class CoreEngine {
     }
     if (this.stopPromise) return this.stopPromise;
     if (this.lifecycle === "stopped") return Promise.resolve();
-    if (!["created", "initialized", "running", "failed"].includes(this.lifecycle)) {
+    if (!["created", "initialized", "running", "failed", "unresolved"].includes(this.lifecycle)) {
       return Promise.reject(new CoreError(
         "INVALID_LIFECYCLE_TRANSITION",
         'Cannot stop Core Engine while it is "' + this.lifecycle + '".'
@@ -238,9 +244,15 @@ export class CoreEngine {
     protectedOperationDrain: Promise<void>
   ): Promise<void> {
     try {
-      await Promise.all([policyShutdown, protectedOperationDrain]);
+      await Promise.all([
+        policyShutdown,
+        this.waitForProtectedOperationDrain(protectedOperationDrain)
+      ]);
     } catch (error) {
-      this.lifecycle = "failed";
+      const drainTimedOut = error instanceof CoreError &&
+        error.code === "PROTECTED_OPERATION_DRAIN_TIMEOUT";
+      this.lifecycle = drainTimedOut ? "unresolved" : "failed";
+      if (drainTimedOut) throw error;
       throw new CoreError(
         "MODULE_STOP_FAILED",
         "Policy runtime shutdown or protected-operation drain failed; module cleanup was not started.",
@@ -260,7 +272,7 @@ export class CoreEngine {
     }
   }
 
-  private createContext(moduleId: string): ModuleContext {
+  private async waitForProtectedOperationDrain(drain: Promise<void>): Promise<void> {\n    const timeoutMs = this.options.protectedOperationDrainTimeoutMs ?? 30_000;\n    let timeout: ReturnType<typeof setTimeout> | undefined;\n    try {\n      await Promise.race([\n        drain,\n        new Promise<never>((_resolve, reject) => {\n          timeout = setTimeout(() => reject(new CoreError(\n            "PROTECTED_OPERATION_DRAIN_TIMEOUT",\n            "Protected-operation handlers did not settle before the shutdown deadline; module cleanup was not started."\n          )), timeoutMs);\n        })\n      ]);\n    } finally {\n      if (timeout !== undefined) clearTimeout(timeout);\n    }\n  }\n\n  private createContext(moduleId: string): ModuleContext {
     const base = {
       moduleId,
       shutdownSignal: this.shutdownController.signal,

@@ -5,6 +5,7 @@ export type CoreLifecycleState =
   | "starting"
   | "running"
   | "stopping"
+  | "unresolved"
   | "stopped"
   | "failed";
 
