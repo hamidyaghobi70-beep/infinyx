@@ -1,11 +1,11 @@
 import { app } from "./api/app.js";
-import { CoreEngine } from "./core/core-engine.js";
+import { createProductionCoreEngine } from "./core/production-core-engine.js";
 import { loadConfig } from "./core/config.js";
 import { logger } from "./core/logger.js";
 import { startServerRuntime } from "./core/server-runtime.js";
 
 const config = loadConfig();
-const core = new CoreEngine();
+const core = createProductionCoreEngine();
 
 await startServerRuntime({
   app,
