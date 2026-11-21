@@ -251,7 +251,6 @@ export class CoreEngine {
   ): Promise<void> {
     try {
       await Promise.all([
-        policyShutdown,
         this.waitForPolicyShutdown(policyShutdown),
         this.waitForProtectedOperationDrain(protectedOperationDrain)
       ]);
