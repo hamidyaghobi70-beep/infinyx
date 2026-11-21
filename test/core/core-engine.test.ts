@@ -249,6 +249,54 @@ describe("CoreEngine", () => {
     expect(engine.state).toBe("stopped");
   });
 
+  it("drains concurrent handlers independently and keeps cleanup blocked until all settle", async () => {
+    const engine = new CoreEngine({
+      protectedOperationDrainTimeoutMs: 20,
+      policy: { evaluate: async () => ({ effect: "allow" as const, reason: "test" }) }
+    });
+    const started: Array<() => void> = [];
+    const gates: Array<() => void> = [];
+    const startPromises = [0, 1].map(() => new Promise<void>((resolve) => { started.push(resolve); }));
+    const cleanup = vi.fn();
+    const handles = [0, 1].map((index) => engine.registerProtectedOperation({
+      id: `concurrent-${index}`,
+      action: "record.write",
+      resource: `record:${index}`,
+      validateInput: (value: unknown): value is string => typeof value === "string",
+      handler: async () => {
+        await new Promise<void>((resolve) => { gates[index] = resolve; });
+        return index;
+      }
+    }));
+    engine.register({ id: "cleanup-probe", version: "1.0.0", stop: cleanup });
+
+    await engine.initialize();
+    await engine.start();
+    const executions = handles.map((handle, index) => engine.protectedOperations.execute(
+      handle,
+      { actorId: `concurrent-caller-${index}` },
+      "input"
+    ));
+    await Promise.all(startPromises);
+
+    gates[0]();
+    expect(await executions[0]).toEqual({ status: "executed", value: 0 });
+    expect(cleanup).not.toHaveBeenCalled();
+
+    await expect(engine.stop()).rejects.toMatchObject({
+      code: "PROTECTED_OPERATION_DRAIN_TIMEOUT"
+    });
+    expect(engine.state).toBe("unresolved");
+    expect(cleanup).not.toHaveBeenCalled();
+
+    gates[1]();
+    expect(await executions[1]).toEqual({ status: "executed", value: 1 });
+    await engine.stop();
+
+    expect(cleanup).toHaveBeenCalledTimes(1);
+    expect(engine.state).toBe("stopped");
+  });
+
   it("does not authorize actions without an explicit policy", async () => {
     const engine = new CoreEngine();
     const decision = await engine.policy.evaluate({
