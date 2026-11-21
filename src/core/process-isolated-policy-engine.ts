@@ -236,6 +236,9 @@ export class ProcessIsolatedPolicyEngine implements PolicyEngine {
     }
 
     const executionId = randomUUID();
+    // The evaluator shares the child IPC channel, so accept responses only
+    // when they carry this per-execution capability token.
+    const ipcToken = randomUUID();
     const timeoutMs = Math.min(this.timeoutMs, deadlineRemaining);
     const deadlineAt = options?.deadlineAt === undefined
       ? Date.now() + timeoutMs
@@ -385,7 +388,7 @@ export class ProcessIsolatedPolicyEngine implements PolicyEngine {
         return;
       }
       try {
-        child.send({ type: "evaluate", request: input, deadlineAt });
+        child.send({ type: "evaluate", token: ipcToken, request: input, deadlineAt });
       } catch {
         freezeCandidate({
           outcome: "FAILED",
@@ -397,6 +400,7 @@ export class ProcessIsolatedPolicyEngine implements PolicyEngine {
     child.on("message", (raw: unknown) => {
       if (typeof raw !== "object" || raw === null || Array.isArray(raw)) return;
       const message = raw as Record<string, unknown>;
+      if (message.token !== ipcToken) return;
       if (message.type === "started") {
         if (!candidateFrozen && !resolved) notify("RUNNING");
         return;
