@@ -48,7 +48,7 @@ For untrusted evaluators, deployment must add OS-level controls appropriate to t
 
 CoreEngine.stop() asks the policy runtime to stop accepting work before module cleanup begins. With ProcessIsolatedPolicyEngine, shutdown waits for each child process to close; if any process remains UNRESOLVED, shutdown rejects and CoreEngine does not begin module cleanup. A later explicit stop call can retry after the process has actually closed.
 
-For an arbitrary in-process PolicyEngine delegate that does not implement shutdown(), FailClosedPolicyEngine can request cooperative cancellation but cannot prove that a non-cooperative delegate has stopped. Hard termination evidence is available only when the evaluator is executed through the child-process adapter.
+For an arbitrary in-process PolicyEngine delegate, FailClosedPolicyEngine requests cancellation of active evaluations and awaits the delegate's optional shutdown() hook. It does not await settlement of each underlying evaluation promise: a non-cooperative delegate may continue executing after the wrapper has returned deny and shutdown() has resolved. Hard termination evidence is available only when the evaluator is executed through the child-process adapter.
 
 ## Runtime outcomes
 
