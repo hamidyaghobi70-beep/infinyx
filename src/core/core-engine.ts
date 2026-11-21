@@ -15,6 +15,7 @@ import type {
 } from "./contracts.js";
 import { DefaultDenyPolicyEngine } from "./default-policy-engine.js";
 import { FailClosedPolicyEngine } from "./fail-closed-policy-engine.js";
+import { ProcessIsolatedPolicyEngine } from "./process-isolated-policy-engine.js";
 import { InMemoryEventBus } from "./event-bus.js";
 import { CoreError } from "./core-error.js";
 import { ModuleRegistry } from "./module-registry.js";
@@ -28,6 +29,8 @@ interface CleanupExecutionContext {
 export interface CoreEngineOptions {
   readonly events?: EventBusPort;
   readonly policy?: PolicyEngine;
+  /** Require a child-process policy runtime when a custom policy evaluator is supplied. */
+  readonly requireProcessIsolation?: boolean;
   /** Creates a module-specific guarded memory capability; raw MemoryPort values are rejected. */
   readonly memory?: (moduleId: string) => GuardedMemoryPort;
   /** Maximum time allowed for an injected policy evaluation. Defaults to 5 seconds. */
@@ -64,6 +67,12 @@ export class CoreEngine {
       throw new TypeError("policyShutdownTimeoutMs must be a finite positive number.");
     }
     this.events = options.events ?? new InMemoryEventBus();
+    if (options.requireProcessIsolation && options.policy &&
+        !(options.policy instanceof ProcessIsolatedPolicyEngine)) {
+      throw new TypeError(
+        "requireProcessIsolation requires a ProcessIsolatedPolicyEngine for custom policy evaluators."
+      );
+    }
     this.policy = options.policy
       ? new FailClosedPolicyEngine(options.policy, options.policyTimeoutMs)
       : new DefaultDenyPolicyEngine();
