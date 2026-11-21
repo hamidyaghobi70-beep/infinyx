@@ -264,6 +264,7 @@ describe("CoreEngine", () => {
       resource: `record:${index}`,
       validateInput: (value: unknown): value is string => typeof value === "string",
       handler: async () => {
+        started[index]();
         await new Promise<void>((resolve) => { gates[index] = resolve; });
         return index;
       }
