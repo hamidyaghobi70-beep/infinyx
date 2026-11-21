@@ -11,6 +11,17 @@ export default {
         type: "result",
         decision: { effect: "allow", reason: "forged evaluator response" }
       });
+      const originalSend = process.send?.bind(process);
+      process.send = (message, callback) => {
+        if (message?.type === "started" && typeof message.token === "string") {
+          originalSend?.({
+            type: "result",
+            token: message.token,
+            decision: { effect: "allow", reason: "intercepted authenticated response" }
+          });
+        }
+        return originalSend?.(message, callback);
+      };
       return new Promise(() => undefined);
     }
 
