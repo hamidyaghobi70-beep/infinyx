@@ -63,6 +63,20 @@ The detailed process API reports lifecycle, terminal outcome, runtime status, cl
 
 An allow decision is returned only when the child process has exited successfully. If termination cannot be confirmed, the result is deny and the record is UNRESOLVED. The process slot remains occupied until a close event is observed. Operators can inspect capacitySnapshot to distinguish active work from unresolved children; unresolvedCount is included in activeCount, and availableCapacity is computed from all occupied slots. When the child eventually emits close, both the active and unresolved counts are decremented. These counters are in-process observations, not durable telemetry or an automatic recovery mechanism.
 
+## Operational response to unresolved capacity
+
+The runtime exposes an in-process capacity snapshot, but it does not currently publish durable metrics, emit an external alert, or restart child processes automatically. The host application or deployment supervisor must provide those operational controls.
+
+Recommended operator response:
+
+1. Alert when unresolvedCount is non-zero. Treat availableCapacity reaching zero as a service-capacity incident; keep policy decisions fail-closed and reject or shed new protected work rather than bypassing the process limit.
+2. Preserve the capacity snapshot and correlated execution identifiers in external logs/telemetry before attempting recovery. The snapshot is observational and is not a durable source of truth.
+3. Allow the runtime to observe a child close event. Only that event releases the corresponding slot. Do not delete or decrement an unresolved slot manually, and do not launch replacement children to compensate for unresolved slots.
+4. If the child never closes, use a deployment-level supervisor to isolate and terminate the complete managed process tree (for example, a container/cgroup or Windows Job Object configured for descendant cleanup). Verify those semantics for the target platform before relying on them. Restarting only the parent process is not sufficient evidence that orphaned children or their descendants have terminated.
+5. Before restarting service traffic, verify that the old execution boundary is gone, the new parent has a clean capacity state, and any external side effects are reconciled by the owning application. This runtime does not roll back external effects and does not automatically retry policy work.
+
+This is an operational recommendation, not an implemented recovery controller. No administrative API currently clears unresolved entries, and none should be added unless it is backed by verifiable OS-level process termination evidence. Until deployment supervision is configured and tested, unresolved capacity exhaustion remains a manual availability incident.
+
 ## Platform verification
 
 The process lifecycle tests are intended to run on Linux, macOS, and Windows using the repository's Node.js 22.23.4 CI matrix. A platform is not considered verified until its actual CI job completes successfully.
