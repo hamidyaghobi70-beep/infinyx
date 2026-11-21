@@ -32,6 +32,8 @@ export interface CoreEngineOptions {
   readonly memory?: (moduleId: string) => GuardedMemoryPort;
   /** Maximum time allowed for an injected policy evaluation. Defaults to 5 seconds. */
   readonly policyTimeoutMs?: number;
+  /** Maximum time to wait for policy runtime shutdown. Defaults to 5 seconds. */
+  readonly policyShutdownTimeoutMs?: number;
   /** Maximum time to wait for admitted protected-operation handlers during stop. Defaults to 30 seconds. */
   readonly protectedOperationDrainTimeoutMs?: number;
 }
@@ -56,6 +58,10 @@ export class CoreEngine {
     const drainTimeout = options.protectedOperationDrainTimeoutMs ?? 30_000;
     if (!Number.isFinite(drainTimeout) || drainTimeout <= 0) {
       throw new TypeError("protectedOperationDrainTimeoutMs must be a finite positive number.");
+    }
+    const policyShutdownTimeout = options.policyShutdownTimeoutMs ?? 5_000;
+    if (!Number.isFinite(policyShutdownTimeout) || policyShutdownTimeout <= 0) {
+      throw new TypeError("policyShutdownTimeoutMs must be a finite positive number.");
     }
     this.events = options.events ?? new InMemoryEventBus();
     this.policy = options.policy
@@ -246,13 +252,16 @@ export class CoreEngine {
     try {
       await Promise.all([
         policyShutdown,
+        this.waitForPolicyShutdown(policyShutdown),
         this.waitForProtectedOperationDrain(protectedOperationDrain)
       ]);
     } catch (error) {
       const drainTimedOut = error instanceof CoreError &&
         error.code === "PROTECTED_OPERATION_DRAIN_TIMEOUT";
-      this.lifecycle = drainTimedOut ? "unresolved" : "failed";
-      if (drainTimedOut) throw error;
+      const policyShutdownTimedOut = error instanceof CoreError &&
+        error.code === "POLICY_SHUTDOWN_TIMEOUT";
+      this.lifecycle = drainTimedOut || policyShutdownTimedOut ? "unresolved" : "failed";
+      if (drainTimedOut || policyShutdownTimedOut) throw error;
       throw new CoreError(
         "MODULE_STOP_FAILED",
         "Policy runtime shutdown or protected-operation drain failed; module cleanup was not started.",
@@ -269,6 +278,24 @@ export class CoreEngine {
         "One or more modules failed to stop.",
         { cause: new AggregateError(errors) }
       );
+    }
+  }
+
+  private async waitForPolicyShutdown(shutdown: Promise<void>): Promise<void> {
+    const timeoutMs = this.options.policyShutdownTimeoutMs ?? 5_000;
+    let timeout: ReturnType<typeof setTimeout> | undefined;
+    try {
+      await Promise.race([
+        shutdown,
+        new Promise<never>((_resolve, reject) => {
+          timeout = setTimeout(() => reject(new CoreError(
+            "POLICY_SHUTDOWN_TIMEOUT",
+            "Policy runtime shutdown did not settle before the shutdown deadline; module cleanup was not started."
+          )), timeoutMs);
+        })
+      ]);
+    } finally {
+      if (timeout !== undefined) clearTimeout(timeout);
     }
   }
 
