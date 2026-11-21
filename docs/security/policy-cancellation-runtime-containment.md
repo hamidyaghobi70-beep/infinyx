@@ -2,7 +2,7 @@
 
 ## Status
 
-Proposed in pull request #57 on `security/shutdown-containment-hardening`; the changes have not been merged into `integration/infinyx-core-runtime-v1`. CI run #484 passed on the prior code head `fbbf4ac7e98cbfe96c395df460db1154090ef9ca` on Linux, macOS, and Windows. CI for the production-factory revision is tracked separately and must complete before that revision is considered verified. Independent governance/security review remains pending. This document does not authorize merge, release, deployment, activation of Agent Runtime, or changes to Shutdown Timeout Contract v6.2.
+Proposed in pull request #57 on `security/shutdown-containment-hardening`; the changes have not been merged into `integration/infinyx-core-runtime-v1`. CI run #494 passed on prior head `6eb80bb6117b5325e247d3d6b1f6cd263e0f3c37` on Linux, macOS, and Windows. The latest evaluator-module URL validation and trust-boundary documentation revision is head `499a8a62074b0b94d605b65d819deba5984c12fc`; no PR-triggered CI run or commit status has been reported for that head, so it is not yet CI-verified. Independent governance/security review remains pending. This document does not authorize merge, release, deployment, activation of Agent Runtime, or changes to Shutdown Timeout Contract v6.2.
 
 ## Cancellation contract
 
