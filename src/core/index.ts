@@ -59,3 +59,9 @@ export type {
   ContainedRunnerLaunchOptions,
   ProcessTreeSupervisor
 } from "./process-tree-supervisor.js";
+
+export { LinuxCgroupV2Supervisor } from "./linux-cgroup-v2-supervisor.js";
+export type {
+  LinuxCgroupV2Broker,
+  LinuxCgroupV2BrokerHandle
+} from "./linux-cgroup-v2-supervisor.js";
