@@ -29,7 +29,8 @@ The parent process:
 - sends cooperative cancellation first;
 - requests hard process termination after the configured grace interval;
 - waits for the child close event before releasing its capacity slot;
-- returns UNRESOLVED and retains the capacity slot if process termination cannot be confirmed; and
+- returns UNRESOLVED and retains the capacity slot if process termination cannot be confirmed;
+- exposes activeCount, unresolvedCount, availableCapacity, and maxConcurrent through a read-only capacitySnapshot (plus unresolvedExecutionCount); and
 - freezes the first terminal candidate so late messages or cancellation cannot rewrite it.
 
 No automatic retry is performed. No external side-effect rollback is attempted.
@@ -60,7 +61,7 @@ The module-context shutdownSignal is emitted synchronously at shutdown start. It
 
 The detailed process API reports lifecycle, terminal outcome, runtime status, cleanup status, stop reason, and whether the terminal candidate was frozen.
 
-An allow decision is returned only when the child process has exited successfully. If termination cannot be confirmed, the result is deny and the record is UNRESOLVED. The process slot remains occupied until a close event is observed.
+An allow decision is returned only when the child process has exited successfully. If termination cannot be confirmed, the result is deny and the record is UNRESOLVED. The process slot remains occupied until a close event is observed. Operators can inspect capacitySnapshot to distinguish active work from unresolved children; unresolvedCount is included in activeCount, and availableCapacity is computed from all occupied slots. When the child eventually emits close, both the active and unresolved counts are decremented. These counters are in-process observations, not durable telemetry or an automatic recovery mechanism.
 
 ## Platform verification
 
