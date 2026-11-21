@@ -123,16 +123,23 @@ export class LinuxCgroupV2Supervisor implements ProcessTreeSupervisor {
           () => !releasing && !emptyVerified && !disposed
         );
       },
-      onError: (listener) => subscribe(
-        (callback) => handle.onError(callback),
-        listener,
-        () => !disposed
-      ),
-      onRunnerExit: (listener) => subscribe(
-        (callback) => handle.onRunnerExit(callback),
-        listener,
-        () => !disposed
-      ),
+      onError: (listener) => {
+        // All broker event channels close once emptiness is verified or release starts.
+        if (releasing || emptyVerified || disposed) return () => undefined;
+        return subscribe(
+          (callback) => handle.onError(callback),
+          listener,
+          () => !releasing && !emptyVerified && !disposed
+        );
+      },
+      onRunnerExit: (listener) => {
+        if (releasing || emptyVerified || disposed) return () => undefined;
+        return subscribe(
+          (callback) => handle.onRunnerExit(callback),
+          listener,
+          () => !releasing && !emptyVerified && !disposed
+        );
+      },
       terminateTree: async () => {
         if (disposed || releasing || emptyVerified) return;
         // Do not race a termination request against an already-running
