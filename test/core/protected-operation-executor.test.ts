@@ -364,7 +364,29 @@ describe("ProtectedOperationExecutor", () => {
   });
 
 
-  it("keeps an already-admitted handler in flight during shutdown without claiming cancellation", async () => {
+  it("assigns a distinct operationId to every invocation of one registration", async () => {
+    const observedIds: string[] = [];
+    const engine = new CoreEngine({ policy: { evaluate: async () => allow } });
+    const operation = engine.registerProtectedOperation({
+      id: "records.unique-id",
+      action: "record.read",
+      resource: "record:unique",
+      validateInput: (value: unknown): value is string => typeof value === "string",
+      handler: async (_input, context) => {
+        observedIds.push(context.operationId);
+        return "ok";
+      }
+    });
+    await ensureStarted(engine);
+    await engine.protectedOperations.execute(operation, { actorId: "one" }, "a");
+    await engine.protectedOperations.execute(operation, { actorId: "two" }, "b");
+    expect(observedIds).toHaveLength(2);
+    expect(observedIds[0]).not.toBe(observedIds[1]);
+    expect(observedIds.every((id) => id !== operation.id)).toBe(true);
+    await engine.stop();
+  });
+
+  it("aborts and drains an already-admitted handler before module cleanup", async () => {
     let release!: (value: string) => void;
     let signalHandlerStarted!: () => void;
     const handlerStarted = new Promise<void>((resolve) => { signalHandlerStarted = resolve; });
@@ -386,10 +408,14 @@ describe("ProtectedOperationExecutor", () => {
     const pending = engine.protectedOperations.execute(operation, { actorId: "in-flight" }, "work");
     await handlerStarted;
     expect(handler).toHaveBeenCalledTimes(1);
-    const stopping = engine.stop();
-    await stopping;
-    expect(handlerSignal?.aborted).toBe(false);
+    let stopSettled = false;
+    const stopping = engine.stop().then(() => { stopSettled = true; });
+    await Promise.resolve();
+    expect(handlerSignal?.aborted).toBe(true);
+    expect(stopSettled).toBe(false);
     release("completed");
+    await stopping;
+    expect(stopSettled).toBe(true);
     expect(await pending).toEqual({ status: "executed", value: "completed" });
   });
 

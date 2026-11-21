@@ -4,6 +4,20 @@ export default {
       return new Promise(() => undefined);
     }
 
+    if (request.action === "ignore-sigterm") {
+      process.on("SIGTERM", () => {});
+      return new Promise(() => undefined);
+    }
+
+    if (request.action === "error-secret") {
+      throw new Error("fixture-secret-error-text");
+    }
+
+    if (request.action === "stderr-secret") {
+      process.stderr.write("fixture-secret-stderr-text");
+      process.exit(19);
+    }
+
     if (request.action === "cooperative") {
       return new Promise((resolve) => {
         if (options.signal.aborted) {

@@ -187,26 +187,14 @@ export class CoreEngine {
     }
 
     this.lifecycle = "stopping";
-    // Notify modules synchronously before awaiting policy shutdown or cleanup.
+    // Signal modules and close protected-handler admission synchronously.
     this.shutdownController.abort("core_shutdown");
-    // Install the shared promise before invoking shutdown hooks. The policy
-    // runtime stops accepting new work synchronously before module cleanup.
+    const protectedOperationDrain = this.protectedOperationExecutor.closeAdmissionAndDrain();
+    // Install the shared promise before invoking shutdown hooks. Module cleanup
+    // cannot begin until policy shutdown and admitted handlers have settled.
     const stopPromise = this.installStopPromise(() => {
       const policyShutdown = this.beginPolicyShutdown();
-      if (this.initializedModules.length === 0) {
-        return policyShutdown.then(
-          () => { this.lifecycle = "stopped"; },
-          (error: unknown) => {
-            this.lifecycle = "failed";
-            throw new CoreError(
-              "MODULE_STOP_FAILED",
-              "Policy runtime failed to stop.",
-              { cause: error }
-            );
-          }
-        );
-      }
-      return this.performStop(policyShutdown);
+      return this.performStop(policyShutdown, protectedOperationDrain);
     });
     return stopPromise;
   }
@@ -245,14 +233,17 @@ export class CoreEngine {
     }
   }
 
-  private async performStop(policyShutdown: Promise<void>): Promise<void> {
+  private async performStop(
+    policyShutdown: Promise<void>,
+    protectedOperationDrain: Promise<void>
+  ): Promise<void> {
     try {
-      await policyShutdown;
+      await Promise.all([policyShutdown, protectedOperationDrain]);
     } catch (error) {
       this.lifecycle = "failed";
       throw new CoreError(
         "MODULE_STOP_FAILED",
-        "Policy runtime failed to stop; module cleanup was not started.",
+        "Policy runtime shutdown or protected-operation drain failed; module cleanup was not started.",
         { cause: error }
       );
     }

@@ -118,6 +118,31 @@ describe("ProcessIsolatedPolicyEngine", () => {
     expect(engine.activeExecutionCount).toBe(0);
   });
 
+  it("force-kills an evaluator that deliberately ignores SIGTERM", async () => {
+    const engine = new ProcessIsolatedPolicyEngine({
+      moduleUrl: fixtureUrl,
+      timeoutMs: 80,
+      terminationGraceMs: 20,
+      killWaitMs: 1_000
+    });
+    const result = await engine.evaluateDetailed(request("ignore-sigterm"));
+    expect(result.outcome).toBe("TIMED_OUT");
+    expect(result.stopReason).toBe("POLICY_TIMEOUT");
+    expect(result.runtimeStatus).toBe("STOPPED");
+    expect(result.cleanupStatus).toBe("COMPLETED");
+    expect(engine.activeExecutionCount).toBe(0);
+  });
+
+  it("never exposes evaluator exception text or stderr in PolicyDecision.reason", async () => {
+    const engine = new ProcessIsolatedPolicyEngine({ moduleUrl: fixtureUrl });
+    const errorResult = await engine.evaluateDetailed(request("error-secret"));
+    const stderrResult = await engine.evaluateDetailed(request("stderr-secret"));
+    expect(errorResult.decision.reason).not.toContain("fixture-secret-error-text");
+    expect(stderrResult.decision.reason).not.toContain("fixture-secret-stderr-text");
+    expect(errorResult.decision.reason).toBe("Policy evaluator process failed; access denied.");
+    expect(stderrResult.decision.reason).toBe("Policy evaluator process exited without a valid result; access denied.");
+  });
+
   it("propagates parent cancellation as a distinct stop reason", async () => {
     const observer = stateObserver("RUNNING");
     const engine = new ProcessIsolatedPolicyEngine({
