@@ -135,6 +135,17 @@ export class LinuxCgroupV2Supervisor implements ProcessTreeSupervisor {
       ),
       terminateTree: async () => {
         if (disposed || releasing || emptyVerified) return;
+        // Do not race a termination request against an already-running
+        // emptiness observation. If that observation fails, termination may
+        // proceed; if it succeeds, the boundary is already empty.
+        if (emptyVerificationPromise) {
+          try {
+            await emptyVerificationPromise;
+          } catch {
+            // A failed observation is not proof of emptiness; request termination below.
+          }
+          if (emptyVerified || disposed || releasing) return;
+        }
         if (!terminationPromise) {
           terminationPromise = handle.terminateBoundary().then(() => {
             terminationFailed = false;
