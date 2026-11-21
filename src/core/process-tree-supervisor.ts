@@ -52,6 +52,9 @@ export interface ContainedProcessHandle {
    * Resolves only after the supervisor independently verifies that the entire
    * boundary is empty. If terminateTree() is already in flight, verification
    * must not complete until that termination request has settled successfully.
+   * Implementations must also serialize a new termination request against an
+   * in-flight emptiness observation: successful emptiness proof wins; if the
+   * observation fails, termination may then be requested.
    * Rejects if termination or emptiness verification cannot be established.
    */
   waitForTreeExit(): Promise<void>;
