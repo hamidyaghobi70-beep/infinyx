@@ -26,6 +26,20 @@ function observeRunning(): { reached: Promise<void>; onStateChange: (event: { st
 }
 
 describe("CoreEngine policy runtime shutdown", () => {
+  it("requires ProcessIsolatedPolicyEngine when process isolation is configured", () => {
+    expect(() => new CoreEngine({
+      requireProcessIsolation: true,
+      policy: {
+        evaluate: async () => ({ effect: "allow" as const, reason: "in-process" })
+      }
+    })).toThrow(/requires a ProcessIsolatedPolicyEngine/i);
+
+    expect(() => new CoreEngine({
+      requireProcessIsolation: true,
+      policy: new ProcessIsolatedPolicyEngine({ moduleUrl: fixtureUrl })
+    })).not.toThrow();
+  });
+
   it("terminates active policy processes before cleaning modules", async () => {
     const observer = observeRunning();
     const runtime = new ProcessIsolatedPolicyEngine({
