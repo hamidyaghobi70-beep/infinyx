@@ -41,11 +41,15 @@ No automatic retry is performed. No external side-effect rollback is attempted.
 
 A child process is a stronger execution-termination boundary than Promise.race or AbortSignal alone. It is not a complete operating-system security sandbox.
 
-The child runs under the same operating-system user and inherits the host's general filesystem and network permissions unless the deployment environment imposes additional controls. A configurable V8 old-space ceiling is passed with max-old-space-size; this limits the V8 old generation, not total resident memory or native allocations. Wall-clock deadlines bound CPU time indirectly, but no OS CPU quota is configured. The child can also attempt to create its own subprocesses. This implementation does not claim filesystem isolation, network isolation, syscall filtering, CPU quotas, or a memory hard limit.
+The child runs under the same operating-system user and inherits the host's general filesystem and network permissions unless the deployment environment imposes additional controls. A configurable V8 old-space ceiling is passed with max-old-space-size; this limits the V8 old generation, not total resident memory or native allocations. Wall-clock deadlines bound CPU time indirectly, but no OS CPU quota is configured.
+
+**Termination currently targets only the direct child process.** The parent calls `child.kill("SIGKILL")` and treats the child's `close` event as confirmation that that child has exited. Neither operation proves that subprocesses or further descendants created by evaluator code have exited. A descendant may outlive the evaluator child, retain inherited resources, or continue external activity. Therefore, the runtime's UNRESOLVED state and capacity accounting describe the direct child only; they are not proof of process-tree containment.
+
+The child can create subprocesses. This implementation does not create a POSIX process group for the evaluator, assign it to a Windows Job Object, or install a cgroup/container supervisor. It also does not claim filesystem isolation, network isolation, syscall filtering, CPU quotas, a memory hard limit, or descendant cleanup.
 
 Worker Threads are not selected as the hard containment boundary because they share the parent process and are not an OS privilege boundary. Worker termination can stop a worker thread, but does not provide process-level fault separation.
 
-For untrusted evaluators, deployment must add OS-level controls appropriate to the threat model, such as a dedicated low-privilege identity, restricted filesystem view, outbound network policy, process-tree supervision, and platform-specific resource limits. These controls are not implemented or verified by this change.
+For untrusted evaluators, deployment must establish and verify an OS-level containment boundary **before evaluator code begins executing**. That boundary must account for descendants, not just the direct child, and should include a dedicated low-privilege identity, restricted filesystem view, outbound network policy, process-tree supervision (for example, a correctly configured cgroup/container or Windows Job Object), and platform-specific resource limits. These controls are not implemented or verified by this change. Do not treat restarting the parent, observing the direct child's `close` event, or freeing its capacity slot as proof that all descendants have terminated.
 
 ## CoreEngine shutdown ordering
 
