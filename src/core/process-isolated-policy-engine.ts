@@ -287,13 +287,22 @@ export class ProcessIsolatedPolicyEngine implements PolicyEngine {
       ));
     };
 
+    const requestHardKill = (): void => {
+      if (closed || resolved) return;
+      try {
+        child.kill("SIGKILL");
+      } catch {
+        // A failed kill request is not evidence of process termination.
+      } finally {
+        if (!closed && !resolved && killWaitTimer === undefined) {
+          killWaitTimer = setTimeout(finishUnresolved, this.killWaitMs);
+        }
+      }
+    };
+
     const scheduleHardTermination = (): void => {
       if (graceTimer !== undefined || closed || resolved) return;
-      graceTimer = setTimeout(() => {
-        if (closed || resolved) return;
-        child.kill("SIGKILL");
-        killWaitTimer = setTimeout(finishUnresolved, this.killWaitMs);
-      }, this.terminationGraceMs);
+      graceTimer = setTimeout(requestHardKill, this.terminationGraceMs);
     };
 
     const requestStop = (reason: PolicyStopReason): void => {
@@ -344,8 +353,7 @@ export class ProcessIsolatedPolicyEngine implements PolicyEngine {
       if (candidateFrozen || this.shuttingDown) {
         if (!candidateFrozen) requestStop("RUNTIME_SHUTDOWN");
         if (graceTimer !== undefined) clearTimeout(graceTimer);
-        child.kill("SIGKILL");
-        killWaitTimer = setTimeout(finishUnresolved, this.killWaitMs);
+        requestHardKill();
         return;
       }
       try {
