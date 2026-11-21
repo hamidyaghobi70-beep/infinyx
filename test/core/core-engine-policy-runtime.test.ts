@@ -40,6 +40,15 @@ describe("CoreEngine policy runtime shutdown", () => {
     })).not.toThrow();
   });
 
+  it("denies a non-finite deadline before spawning a policy process", async () => {
+    const runtime = new ProcessIsolatedPolicyEngine({ moduleUrl: fixtureUrl });
+    await expect(runtime.evaluate(request, { deadlineAt: Number.NaN })).resolves.toEqual({
+      effect: "deny",
+      reason: "Policy deadline is invalid; access denied."
+    });
+    expect(runtime.activeExecutionCount).toBe(0);
+  });
+
   it("terminates active policy processes before cleaning modules", async () => {
     const observer = observeRunning();
     const runtime = new ProcessIsolatedPolicyEngine({
