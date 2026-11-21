@@ -1,5 +1,6 @@
+import { ChildProcess } from "node:child_process";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { CoreEngine } from "../../src/core/core-engine.js";
 import { ProcessIsolatedPolicyEngine } from "../../src/core/process-isolated-policy-engine.js";
 import type { PolicyRequest } from "../../src/core/contracts.js";
@@ -52,6 +53,82 @@ describe("CoreEngine policy runtime shutdown", () => {
       unresolvedCount: 0,
       availableCapacity: 4,
       maxConcurrent: 4
+    });
+  });
+
+  it("retains unresolved capacity until the child close event", async () => {
+    let reachedRunning!: () => void;
+    let reachedUnresolved!: () => void;
+    let reachedTerminal!: () => void;
+    const running = new Promise<void>((resolve) => { reachedRunning = resolve; });
+    const unresolved = new Promise<void>((resolve) => { reachedUnresolved = resolve; });
+    const terminal = new Promise<void>((resolve) => { reachedTerminal = resolve; });
+    const runtime = new ProcessIsolatedPolicyEngine({
+      moduleUrl: fixtureUrl,
+      timeoutMs: 2_000,
+      terminationGraceMs: 0,
+      killWaitMs: 30,
+      maxConcurrent: 1,
+      onStateChange: ({ state }) => {
+        if (state === "RUNNING") reachedRunning();
+        if (state === "UNRESOLVED") reachedUnresolved();
+        if (state === "TERMINAL") reachedTerminal();
+      }
+    });
+    const controller = new AbortController();
+    let child: ChildProcess | undefined;
+    const originalKill = ChildProcess.prototype.kill;
+    const killSpy = vi.spyOn(ChildProcess.prototype, "kill").mockImplementation(
+      function (this: ChildProcess, signal?: NodeJS.Signals | number): boolean {
+        if (signal === "SIGKILL") {
+          child = this;
+          throw new Error("simulated kill request failure");
+        }
+        return originalKill.call(this, signal);
+      }
+    );
+
+    try {
+      const evaluation = runtime.evaluateDetailed(
+        { ...request, action: "hang" },
+        { signal: controller.signal }
+      );
+      await running;
+      expect(runtime.capacitySnapshot).toEqual({
+        activeCount: 1,
+        unresolvedCount: 0,
+        availableCapacity: 0,
+        maxConcurrent: 1
+      });
+
+      controller.abort();
+      await expect(evaluation).resolves.toMatchObject({
+        lifecycle: "UNRESOLVED",
+        outcome: "UNRESOLVED",
+        runtimeStatus: "UNRESOLVED"
+      });
+      await unresolved;
+
+      expect(runtime.unresolvedExecutionCount).toBe(1);
+      expect(runtime.capacitySnapshot).toEqual({
+        activeCount: 1,
+        unresolvedCount: 1,
+        availableCapacity: 0,
+        maxConcurrent: 1
+      });
+      expect(child).toBeDefined();
+    } finally {
+      killSpy.mockRestore();
+      if (child && !child.killed) child.kill("SIGKILL");
+    }
+
+    await terminal;
+    expect(runtime.unresolvedExecutionCount).toBe(0);
+    expect(runtime.capacitySnapshot).toEqual({
+      activeCount: 0,
+      unresolvedCount: 0,
+      availableCapacity: 1,
+      maxConcurrent: 1
     });
   });
 
