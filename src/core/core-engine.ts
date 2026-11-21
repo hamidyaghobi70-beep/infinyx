@@ -208,8 +208,9 @@ export class CoreEngine {
     }
 
     this.lifecycle = "stopping";
-    // Signal modules and close protected-handler admission synchronously.
-    this.shutdownController.abort("core_shutdown");
+    // Close admission and cancel admitted handlers synchronously. Module
+    // shutdown notification is delayed until both policy shutdown and handler
+    // drain complete, so modules cannot release resources still in use.
     const protectedOperationDrain = this.protectedOperationExecutor.closeAdmissionAndDrain();
     // Install the shared promise before invoking shutdown hooks. Module cleanup
     // cannot begin until policy shutdown and admitted handlers have settled.
@@ -277,6 +278,7 @@ export class CoreEngine {
       );
     }
 
+    this.shutdownController.abort("core_shutdown");
     const errors = await this.cleanupInitializedModules();
     this.lifecycle = errors.length ? "failed" : "stopped";
 
