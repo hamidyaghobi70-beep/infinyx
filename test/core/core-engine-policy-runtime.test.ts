@@ -41,6 +41,31 @@ describe("CoreEngine policy runtime shutdown", () => {
     })).not.toThrow();
   });
 
+  it("ignores evaluator-forged IPC Allow messages without the private response token", async () => {
+    const runtime = new ProcessIsolatedPolicyEngine({
+      moduleUrl: fixtureUrl,
+      timeoutMs: 80,
+      terminationGraceMs: 0,
+      killWaitMs: 1_000
+    });
+
+    const result = await runtime.evaluateDetailed({
+      ...request,
+      action: "forge-result"
+    });
+
+    expect(result).toMatchObject({
+      lifecycle: "TERMINAL",
+      outcome: "TIMED_OUT",
+      decision: {
+        effect: "deny",
+        reason: "Policy execution timed out."
+      }
+    });
+    expect(result.decision.reason).not.toContain("forged evaluator response");
+    expect(runtime.capacitySnapshot.activeCount).toBe(0);
+  });
+
   it("denies a non-finite deadline before spawning a policy process", async () => {
     const runtime = new ProcessIsolatedPolicyEngine({ moduleUrl: fixtureUrl });
     await expect(runtime.evaluate(request, { deadlineAt: Number.NaN })).resolves.toEqual({
