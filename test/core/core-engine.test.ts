@@ -221,7 +221,35 @@ describe("CoreEngine", () => {
     expect(engine.state).toBe("stopped");
   });
 
-  it("marks shutdown unresolved on handler drain timeout and retries after the handler settles", async () => {\n    const engine = new CoreEngine({ protectedOperationDrainTimeoutMs: 5, policy: { evaluate: async () => ({ effect: "allow" as const, reason: "test" }) } });\n    let release!: () => void;\n    let handlerStarted!: () => void;\n    const started = new Promise<void>((resolve) => { handlerStarted = resolve; });\n    const cleanup = vi.fn();\n    const operation = engine.registerProtectedOperation({\n      id: "drain-timeout", action: "record.write", resource: "record:timeout",\n      validateInput: (value: unknown): value is string => typeof value === "string",\n      handler: async () => { handlerStarted(); await new Promise<void>((resolve) => { release = resolve; }); return "done"; }\n    });\n    engine.register({ id: "cleanup-probe", version: "1.0.0", stop: cleanup });\n    await engine.initialize();\n    await engine.start();\n    const pending = engine.protectedOperations.execute(operation, { actorId: "timeout-test" }, "input");\n    await started;\n\n    await expect(engine.stop()).rejects.toMatchObject({ code: "PROTECTED_OPERATION_DRAIN_TIMEOUT" });\n    expect(engine.state).toBe("unresolved");\n    expect(cleanup).not.toHaveBeenCalled();\n\n    release();\n    expect(await pending).toEqual({ status: "executed", value: "done" });\n    await engine.stop();\n    expect(cleanup).toHaveBeenCalledTimes(1);\n    expect(engine.state).toBe("stopped");\n  });\n\n  it("does not authorize actions without an explicit policy", async () => {
+  it("marks shutdown unresolved on handler drain timeout and retries after the handler settles", async () => {
+    const engine = new CoreEngine({ protectedOperationDrainTimeoutMs: 5, policy: { evaluate: async () => ({ effect: "allow" as const, reason: "test" }) } });
+    let release!: () => void;
+    let handlerStarted!: () => void;
+    const started = new Promise<void>((resolve) => { handlerStarted = resolve; });
+    const cleanup = vi.fn();
+    const operation = engine.registerProtectedOperation({
+      id: "drain-timeout", action: "record.write", resource: "record:timeout",
+      validateInput: (value: unknown): value is string => typeof value === "string",
+      handler: async () => { handlerStarted(); await new Promise<void>((resolve) => { release = resolve; }); return "done"; }
+    });
+    engine.register({ id: "cleanup-probe", version: "1.0.0", stop: cleanup });
+    await engine.initialize();
+    await engine.start();
+    const pending = engine.protectedOperations.execute(operation, { actorId: "timeout-test" }, "input");
+    await started;
+
+    await expect(engine.stop()).rejects.toMatchObject({ code: "PROTECTED_OPERATION_DRAIN_TIMEOUT" });
+    expect(engine.state).toBe("unresolved");
+    expect(cleanup).not.toHaveBeenCalled();
+
+    release();
+    expect(await pending).toEqual({ status: "executed", value: "done" });
+    await engine.stop();
+    expect(cleanup).toHaveBeenCalledTimes(1);
+    expect(engine.state).toBe("stopped");
+  });
+
+  it("does not authorize actions without an explicit policy", async () => {
     const engine = new CoreEngine();
     const decision = await engine.policy.evaluate({
       actorId: "system",

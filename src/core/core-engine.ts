@@ -272,7 +272,25 @@ export class CoreEngine {
     }
   }
 
-  private async waitForProtectedOperationDrain(drain: Promise<void>): Promise<void> {\n    const timeoutMs = this.options.protectedOperationDrainTimeoutMs ?? 30_000;\n    let timeout: ReturnType<typeof setTimeout> | undefined;\n    try {\n      await Promise.race([\n        drain,\n        new Promise<never>((_resolve, reject) => {\n          timeout = setTimeout(() => reject(new CoreError(\n            "PROTECTED_OPERATION_DRAIN_TIMEOUT",\n            "Protected-operation handlers did not settle before the shutdown deadline; module cleanup was not started."\n          )), timeoutMs);\n        })\n      ]);\n    } finally {\n      if (timeout !== undefined) clearTimeout(timeout);\n    }\n  }\n\n  private createContext(moduleId: string): ModuleContext {
+  private async waitForProtectedOperationDrain(drain: Promise<void>): Promise<void> {
+    const timeoutMs = this.options.protectedOperationDrainTimeoutMs ?? 30_000;
+    let timeout: ReturnType<typeof setTimeout> | undefined;
+    try {
+      await Promise.race([
+        drain,
+        new Promise<never>((_resolve, reject) => {
+          timeout = setTimeout(() => reject(new CoreError(
+            "PROTECTED_OPERATION_DRAIN_TIMEOUT",
+            "Protected-operation handlers did not settle before the shutdown deadline; module cleanup was not started."
+          )), timeoutMs);
+        })
+      ]);
+    } finally {
+      if (timeout !== undefined) clearTimeout(timeout);
+    }
+  }
+
+  private createContext(moduleId: string): ModuleContext {
     const base = {
       moduleId,
       shutdownSignal: this.shutdownController.signal,
