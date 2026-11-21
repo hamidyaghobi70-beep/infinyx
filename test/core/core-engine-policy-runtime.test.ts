@@ -182,12 +182,15 @@ describe("CoreEngine policy runtime shutdown", () => {
     expect(engine.state).toBe("stopped");
   });
 
-  it("signals modules only after admitted protected handlers have drained", async () => {
+  it("notifies modules immediately but defers cleanup until handlers drain", async () => {
     let handlerStarted!: () => void;
     const started = new Promise<void>((resolve) => { handlerStarted = resolve; });
+    let releaseHandler!: () => void;
     let moduleShutdownSignal: AbortSignal | undefined;
-    let moduleSawSignalDuringHandler: boolean | undefined;
-    let moduleStopSawSignal = false;
+    let cancellationRequested = false;
+    let handlerSettled = false;
+    let cleanupCalls = 0;
+    let cleanupSawSettledHandler = false;
     const engine = new CoreEngine({
       policy: {
         evaluate: async () => ({ effect: "allow" as const, reason: "test allow" })
@@ -200,9 +203,12 @@ describe("CoreEngine policy runtime shutdown", () => {
       validateInput: (value: unknown): value is string => typeof value === "string",
       handler: (_input, context) => new Promise<string>((resolve) => {
         handlerStarted();
-        context.signal.addEventListener("abort", () => {
-          moduleSawSignalDuringHandler = moduleShutdownSignal?.aborted;
+        releaseHandler = () => {
+          handlerSettled = true;
           resolve("drained");
+        };
+        context.signal.addEventListener("abort", () => {
+          cancellationRequested = true;
         }, { once: true });
       })
     });
@@ -210,7 +216,10 @@ describe("CoreEngine policy runtime shutdown", () => {
       id: "worker",
       version: "1.0.0",
       initialize: (context) => { moduleShutdownSignal = context.shutdownSignal; },
-      stop: (context) => { moduleStopSawSignal = context.shutdownSignal.aborted; }
+      stop: () => {
+        cleanupCalls += 1;
+        cleanupSawSettledHandler = handlerSettled;
+      }
     });
     await engine.initialize();
     await engine.start();
@@ -221,12 +230,18 @@ describe("CoreEngine policy runtime shutdown", () => {
       "input"
     );
     await started;
-    await engine.stop();
-    await expect(pending).resolves.toMatchObject({ status: "executed", value: "drained" });
+    const stopping = engine.stop();
 
-    expect(moduleSawSignalDuringHandler).toBe(false);
-    expect(moduleStopSawSignal).toBe(true);
     expect(moduleShutdownSignal?.aborted).toBe(true);
+    expect(cancellationRequested).toBe(true);
+    expect(cleanupCalls).toBe(0);
+
+    releaseHandler();
+    await expect(pending).resolves.toMatchObject({ status: "executed", value: "drained" });
+    await stopping;
+
+    expect(cleanupCalls).toBe(1);
+    expect(cleanupSawSettledHandler).toBe(true);
     expect(engine.state).toBe("stopped");
   });
 
