@@ -109,11 +109,15 @@ export class LinuxCgroupV2Supervisor implements ProcessTreeSupervisor {
     return {
       containmentId: handle.containmentId,
       send: (message) => !disposed && !releasing && !emptyVerified && handle.send(message),
-      onMessage: (listener) => subscribe(
-        (callback) => handle.onMessage(callback),
-        listener,
-        () => !releasing && !emptyVerified && !disposed
-      ),
+      onMessage: (listener) => {
+        // Do not create broker subscriptions once message delivery is permanently closed.
+        if (releasing || emptyVerified || disposed) return () => undefined;
+        return subscribe(
+          (callback) => handle.onMessage(callback),
+          listener,
+          () => !releasing && !emptyVerified && !disposed
+        );
+      },
       onError: (listener) => subscribe(
         (callback) => handle.onError(callback),
         listener,
