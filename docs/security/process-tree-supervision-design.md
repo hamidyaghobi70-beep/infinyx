@@ -43,6 +43,14 @@ The launch options intentionally identify only the trusted runner artifact. The 
 
 This is an API contract, not an implementation. It is not yet wired into `ProcessIsolatedPolicyEngine`, and it does not enable custom evaluators in `createProductionCoreEngine()`. A concrete Linux adapter still requires a protected cgroup delegation boundary (or a separate trusted broker/identity) and integration tests using the real evaluator credentials. Until that exists, production remains default-deny.
 
+## Broker-backed Linux adapter boundary
+
+The repository now includes `src/core/linux-cgroup-v2-supervisor.ts`. It adapts a separately trusted `LinuxCgroupV2Broker` to the platform-neutral handle contract. The adapter itself performs no cgroup filesystem operations and has no direct-child fallback.
+
+The broker contract requires a versioned launch attestation that the trusted runner is already inside the protected boundary and ready, while evaluator code is still unloaded. The adapter preserves the lifecycle distinction between requesting termination and proving the boundary empty; it refuses to release resources before the latter succeeds.
+
+**Important limitation:** this is an orchestration adapter and broker interface, not a broker daemon or a verified cgroup implementation. It does not establish kernel permissions, process credentials, cgroup placement, `cgroup.kill`, or empty-state observation on its own. A production broker still must be implemented and reviewed, and integration tests must exercise it with the actual evaluator identity. The production factory remains default-deny and the existing process-isolated engine is not yet wired to this adapter.
+
 ## Platform requirements
 
 ### Linux
