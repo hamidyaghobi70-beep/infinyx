@@ -31,6 +31,17 @@ function stateObserver(target: string): {
 }
 
 describe("ProcessIsolatedPolicyEngine", () => {
+  it("rejects non-local or decorated evaluator module URLs at construction", () => {
+    expect(() => new ProcessIsolatedPolicyEngine({ moduleUrl: "https://example.invalid/policy.mjs" }))
+      .toThrow(/file URL/i);
+    expect(() => new ProcessIsolatedPolicyEngine({ moduleUrl: "./policy.mjs" }))
+      .toThrow(/absolute path or file URL/i);
+    expect(() => new ProcessIsolatedPolicyEngine({ moduleUrl: "file:///tmp/policy.mjs?mode=1" }))
+      .toThrow(/local file URL/i);
+    expect(() => new ProcessIsolatedPolicyEngine({ moduleUrl: "file://remote-host/tmp/policy.mjs" }))
+      .toThrow(/local file URL/i);
+  });
+
   it("returns an immutable allow decision only after the child process exits", async () => {
     const engine = new ProcessIsolatedPolicyEngine({ moduleUrl: fixtureUrl });
     const result = await engine.evaluateDetailed(request());
