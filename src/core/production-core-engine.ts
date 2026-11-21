@@ -2,15 +2,22 @@ import { CoreEngine } from "./core-engine.js";
 import type { CoreEngineOptions } from "./core-engine.js";
 
 /**
- * Composition-root factory for production runtimes.
+ * Strict production composition root.
  *
- * Any custom policy evaluator supplied here must use the child-process
- * ProcessIsolatedPolicyEngine. Keep direct CoreEngine construction for
- * lower-level/test use where the caller owns the trust decision.
+ * Until an OS-level process-tree supervisor is integrated and verified, this
+ * factory intentionally permits only the built-in default-deny policy. A
+ * Node.js child process alone is not sufficient containment for evaluator
+ * code that may create descendants.
  */
 export function createProductionCoreEngine(
   options: Omit<CoreEngineOptions, "requireProcessIsolation"> = {}
 ): CoreEngine {
+  if (options.policy) {
+    throw new TypeError(
+      "Custom policy evaluators are disabled in the production factory until verified OS-level process-tree supervision is available."
+    );
+  }
+
   return new CoreEngine({
     ...options,
     requireProcessIsolation: true
