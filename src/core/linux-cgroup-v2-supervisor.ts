@@ -84,13 +84,46 @@ export class LinuxCgroupV2Supervisor implements ProcessTreeSupervisor {
     let terminationPromise: Promise<void> | undefined;
     let emptyVerificationPromise: Promise<void> | undefined;
     let releasePromise: Promise<void> | undefined;
+    const unsubscribeAll = new Set<() => void>();
+
+    const subscribe = <T>(
+      register: (callback: (value: T) => void) => () => void,
+      listener: (value: T) => void,
+      shouldDeliver: () => boolean
+    ): (() => void) => {
+      if (disposed) return () => undefined;
+      let active = true;
+      const unsubscribe = register((value) => {
+        if (active && shouldDeliver()) listener(value);
+      });
+      const cleanup = (): void => {
+        if (!active) return;
+        active = false;
+        unsubscribe();
+        unsubscribeAll.delete(cleanup);
+      };
+      unsubscribeAll.add(cleanup);
+      return cleanup;
+    };
 
     return {
       containmentId: handle.containmentId,
       send: (message) => !disposed && !releasing && !emptyVerified && handle.send(message),
-      onMessage: (listener) => handle.onMessage(listener),
-      onError: (listener) => handle.onError(listener),
-      onRunnerExit: (listener) => handle.onRunnerExit(listener),
+      onMessage: (listener) => subscribe(
+        (callback) => handle.onMessage(callback),
+        listener,
+        () => !releasing && !emptyVerified && !disposed
+      ),
+      onError: (listener) => subscribe(
+        (callback) => handle.onError(callback),
+        listener,
+        () => !disposed
+      ),
+      onRunnerExit: (listener) => subscribe(
+        (callback) => handle.onRunnerExit(callback),
+        listener,
+        () => !disposed
+      ),
       terminateTree: async () => {
         if (disposed || releasing || emptyVerified) return;
         if (!terminationPromise) {
@@ -127,6 +160,7 @@ export class LinuxCgroupV2Supervisor implements ProcessTreeSupervisor {
           releasing = true;
           releasePromise = handle.releaseBoundary().then(() => {
             disposed = true;
+            for (const unsubscribe of [...unsubscribeAll]) unsubscribe();
           }).catch((error: unknown) => {
             releasing = false;
             releasePromise = undefined;
