@@ -367,4 +367,59 @@ describe("LinuxCgroupV2Supervisor", () => {
   });
 
 
+  it("closes error and runner-exit subscriptions after empty verification and during release", async () => {
+    const errorListeners: Array<(error: unknown) => void> = [];
+    const exitListeners: Array<(exit: { readonly code: number | null; readonly signal: string | null }) => void> = [];
+    let finishRelease: (() => void) | undefined;
+    const onError = vi.fn((listener: (error: unknown) => void) => {
+      errorListeners.push(listener);
+      return () => undefined;
+    });
+    const onRunnerExit = vi.fn((listener: (exit: { readonly code: number | null; readonly signal: string | null }) => void) => {
+      exitListeners.push(listener);
+      return () => undefined;
+    });
+    const brokerHandle = makeHandle({
+      onError,
+      onRunnerExit,
+      releaseBoundary: vi.fn(() => new Promise<void>((resolve) => {
+        finishRelease = resolve;
+      }))
+    });
+    const handle = await new LinuxCgroupV2Supervisor(brokerFor(brokerHandle))
+      .launchContainedRunner(launchOptions);
+    const receivedErrors: unknown[] = [];
+    const receivedExits: unknown[] = [];
+
+    handle.onError((error) => receivedErrors.push(error));
+    handle.onRunnerExit((exit) => receivedExits.push(exit));
+    errorListeners[0]?.(new Error("before-empty"));
+    exitListeners[0]?.({ code: 1, signal: null });
+    expect(receivedErrors).toHaveLength(1);
+    expect(receivedExits).toHaveLength(1);
+
+    await handle.waitForTreeExit();
+    errorListeners[0]?.(new Error("after-empty"));
+    exitListeners[0]?.({ code: 2, signal: null });
+    handle.onError((error) => receivedErrors.push(error));
+    handle.onRunnerExit((exit) => receivedExits.push(exit));
+    expect(onError).toHaveBeenCalledTimes(1);
+    expect(onRunnerExit).toHaveBeenCalledTimes(1);
+    expect(receivedErrors).toHaveLength(1);
+    expect(receivedExits).toHaveLength(1);
+
+    const disposing = handle.dispose();
+    errorListeners[0]?.(new Error("during-release"));
+    exitListeners[0]?.({ code: 3, signal: null });
+    handle.onError((error) => receivedErrors.push(error));
+    handle.onRunnerExit((exit) => receivedExits.push(exit));
+    expect(onError).toHaveBeenCalledTimes(1);
+    expect(onRunnerExit).toHaveBeenCalledTimes(1);
+    expect(receivedErrors).toHaveLength(1);
+    expect(receivedExits).toHaveLength(1);
+
+    finishRelease?.();
+    await disposing;
+  });
+
 });
