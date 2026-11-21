@@ -42,6 +42,12 @@ export interface LinuxCgroupV2Broker {
   ): Promise<LinuxCgroupV2BrokerHandle>;
 }
 
+function isValidContainmentId(value: unknown): value is string {
+  // Opaque IDs may be logged or correlated by callers; reject control chars,
+  // whitespace, path separators, and unbounded broker-controlled values.
+  return typeof value === "string" && /^[A-Za-z0-9._:-]{1,128}$/.test(value);
+}
+
 /**
  * Adapts a trusted broker to the platform-neutral supervisor contract.
  *
@@ -62,8 +68,7 @@ export class LinuxCgroupV2Supervisor implements ProcessTreeSupervisor {
       handle.protocolVersion !== 1 ||
       handle.containmentEstablished !== true ||
       handle.evaluatorNotLoaded !== true ||
-      typeof handle.containmentId !== "string" ||
-      handle.containmentId.length === 0
+      !isValidContainmentId(handle.containmentId)
     ) {
       // A failed attestation is not permission to release resources. Attempt
       // boundary termination and require independent emptiness proof first.
