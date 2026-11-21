@@ -123,6 +123,27 @@ describe("LinuxCgroupV2Supervisor", () => {
     expect(brokerHandle.releaseBoundary).not.toHaveBeenCalled();
   });
 
+  it("waits for an in-flight termination request before verifying boundary emptiness", async () => {
+    let finishTermination: (() => void) | undefined;
+    const brokerHandle = makeHandle({
+      terminateBoundary: vi.fn(() => new Promise<void>((resolve) => {
+        finishTermination = resolve;
+      }))
+    });
+    const handle = await new LinuxCgroupV2Supervisor(brokerFor(brokerHandle))
+      .launchContainedRunner(launchOptions);
+
+    const terminating = handle.terminateTree();
+    const waiting = handle.waitForTreeExit();
+    await Promise.resolve();
+    expect(brokerHandle.waitForBoundaryEmpty).not.toHaveBeenCalled();
+
+    finishTermination?.();
+    await Promise.all([terminating, waiting]);
+    expect(brokerHandle.calls).toEqual(["wait-empty"]);
+    expect(brokerHandle.waitForBoundaryEmpty).toHaveBeenCalledTimes(1);
+  });
+
   it("coalesces concurrent empty-state verification and release operations", async () => {
     const brokerHandle = makeHandle();
     const handle = await new LinuxCgroupV2Supervisor(brokerFor(brokerHandle))
