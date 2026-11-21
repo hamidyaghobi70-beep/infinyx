@@ -51,7 +51,9 @@ CoreEngine.stop() emits shutdownSignal immediately as a notification that shutdo
 
 For an arbitrary in-process PolicyEngine delegate, FailClosedPolicyEngine requests cancellation of active evaluations, awaits the delegate's optional shutdown() hook, and then awaits settlement of the underlying evaluation promises. Cancellation freezes the authorization result as deny, but does not itself terminate JavaScript execution. If a non-cooperative delegate never settles, CoreEngine's policy shutdown deadline expires and the Core lifecycle remains UNRESOLVED. Hard termination evidence is available only when the evaluator is executed through the child-process adapter.
 
-When untrusted policy code is supplied, configure CoreEngine with requireProcessIsolation: true. This rejects a custom in-process PolicyEngine and requires a ProcessIsolatedPolicyEngine. This is an explicit composition-time enforcement option; it does not infer whether arbitrary policy code is trusted.
+The production composition root uses createProductionCoreEngine(), which always sets requireProcessIsolation: true. The server entrypoint constructs its CoreEngine through this factory and does not accept a custom policy evaluator from runtime configuration. The factory rejects any supplied custom in-process PolicyEngine and accepts a ProcessIsolatedPolicyEngine; tests cover the default-deny path and both custom-policy cases. This creates a fail-closed boundary for the shipped production composition path.
+
+CoreEngine remains a lower-level public API and can still be constructed directly with a custom in-process PolicyEngine when requireProcessIsolation is omitted or false. Library consumers and alternate composition roots must therefore use createProductionCoreEngine() for production workloads, or explicitly set requireProcessIsolation: true. The API does not infer whether arbitrary policy code is trusted.
 
 ## Shutdown signal semantics
 
