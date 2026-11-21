@@ -182,6 +182,54 @@ describe("CoreEngine policy runtime shutdown", () => {
     expect(engine.state).toBe("stopped");
   });
 
+  it("signals modules only after admitted protected handlers have drained", async () => {
+    let handlerStarted!: () => void;
+    const started = new Promise<void>((resolve) => { handlerStarted = resolve; });
+    let moduleShutdownSignal: AbortSignal | undefined;
+    let moduleSawSignalDuringHandler: boolean | undefined;
+    let moduleStopSawSignal = false;
+    const engine = new CoreEngine({
+      policy: {
+        evaluate: async () => ({ effect: "allow" as const, reason: "test allow" })
+      }
+    });
+    const operation = engine.registerProtectedOperation({
+      id: "shutdown-order",
+      action: "record.read",
+      resource: "record:shutdown-order",
+      validateInput: (value: unknown): value is string => typeof value === "string",
+      handler: (_input, context) => new Promise<string>((resolve) => {
+        handlerStarted();
+        context.signal.addEventListener("abort", () => {
+          moduleSawSignalDuringHandler = moduleShutdownSignal?.aborted;
+          resolve("drained");
+        }, { once: true });
+      })
+    });
+    engine.register({
+      id: "worker",
+      version: "1.0.0",
+      initialize: (context) => { moduleShutdownSignal = context.shutdownSignal; },
+      stop: (context) => { moduleStopSawSignal = context.shutdownSignal.aborted; }
+    });
+    await engine.initialize();
+    await engine.start();
+
+    const pending = engine.protectedOperations.execute(
+      operation,
+      { actorId: "shutdown-order-test" },
+      "input"
+    );
+    await started;
+    await engine.stop();
+    await expect(pending).resolves.toMatchObject({ status: "executed", value: "drained" });
+
+    expect(moduleSawSignalDuringHandler).toBe(false);
+    expect(moduleStopSawSignal).toBe(true);
+    expect(moduleShutdownSignal?.aborted).toBe(true);
+    expect(engine.state).toBe("stopped");
+  });
+
   it("shuts down a policy runtime even when CoreEngine was never initialized", async () => {
     let shutdownCalls = 0;
     const engine = new CoreEngine({
