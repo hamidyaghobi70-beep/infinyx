@@ -165,4 +165,15 @@ describe("LinuxCgroupV2Supervisor", () => {
     await Promise.all([handle.terminateTree(), handle.terminateTree()]);
     expect(brokerHandle.terminateBoundary).toHaveBeenCalledTimes(1);
   });
+  it("rejects malformed or unbounded containment identifiers and cleans up fail-closed", async () => {
+    for (const containmentId of ["../outside", "id with spaces", "line\\nbreak", "x".repeat(129)]) {
+      const brokerHandle = makeHandle({ containmentId });
+      const supervisor = new LinuxCgroupV2Supervisor(brokerFor(brokerHandle));
+
+      await expect(supervisor.launchContainedRunner(launchOptions))
+        .rejects.toThrow(/invalid launch attestation/i);
+      expect(brokerHandle.calls).toEqual(["terminate", "wait-empty", "release"]);
+    }
+  });
+
 });
