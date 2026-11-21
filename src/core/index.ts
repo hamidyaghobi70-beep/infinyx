@@ -53,3 +53,9 @@ export type {
   ProtectedOperationPort,
   ProtectedOperationResult
 } from "./contracts.js";
+
+export type {
+  ContainedProcessHandle,
+  ContainedRunnerLaunchOptions,
+  ProcessTreeSupervisor
+} from "./process-tree-supervisor.js";
