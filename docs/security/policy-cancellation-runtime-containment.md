@@ -46,9 +46,15 @@ For untrusted evaluators, deployment must add OS-level controls appropriate to t
 
 ## CoreEngine shutdown ordering
 
-CoreEngine.stop() asks the policy runtime to stop accepting work before module cleanup begins. With ProcessIsolatedPolicyEngine, shutdown waits for each child process to close; if any process remains UNRESOLVED, shutdown rejects and CoreEngine does not begin module cleanup. A later explicit stop call can retry after the process has actually closed.
+CoreEngine.stop() closes protected-operation admission, requests policy shutdown, and waits for both policy shutdown and admitted handler drain before module cleanup. Policy shutdown has its own finite deadline (configurable with policyShutdownTimeoutMs, default 5 seconds). If that deadline expires, CoreEngine enters UNRESOLVED and does not begin module cleanup; a later explicit stop call can retry.
 
-For an arbitrary in-process PolicyEngine delegate, FailClosedPolicyEngine requests cancellation of active evaluations and awaits the delegate's optional shutdown() hook. It does not await settlement of each underlying evaluation promise: a non-cooperative delegate may continue executing after the wrapper has returned deny and shutdown() has resolved. Hard termination evidence is available only when the evaluator is executed through the child-process adapter.
+For an arbitrary in-process PolicyEngine delegate, FailClosedPolicyEngine requests cancellation of active evaluations, awaits the delegate's optional shutdown() hook, and then awaits settlement of the underlying evaluation promises. Cancellation freezes the authorization result as deny, but does not itself terminate JavaScript execution. If a non-cooperative delegate never settles, CoreEngine's policy shutdown deadline expires and the Core lifecycle remains UNRESOLVED. Hard termination evidence is available only when the evaluator is executed through the child-process adapter.
+
+When untrusted policy code is supplied, configure CoreEngine with requireProcessIsolation: true. This rejects a custom in-process PolicyEngine and requires a ProcessIsolatedPolicyEngine. This is an explicit composition-time enforcement option; it does not infer whether arbitrary policy code is trusted.
+
+## Shutdown signal semantics
+
+The module-context shutdownSignal is an early notification that shutdown has begun and that new protected work is no longer admitted. It is not permission to release resources still needed by already-admitted handlers. Module resource cleanup belongs in the module stop() hook, which CoreEngine does not invoke until policy shutdown and protected-handler drain have completed.
 
 ## Runtime outcomes
 
