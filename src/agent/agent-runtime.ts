@@ -175,6 +175,8 @@ export class AgentRuntime {
     let timeout: ReturnType<typeof setTimeout> | undefined;
     let callerAbort: (() => void) | undefined;
     let parentAbort: (() => void) | undefined;
+    let resolveEarly!: (result: AgentTaskResult) => void;
+    const earlyResult = new Promise<AgentTaskResult>((resolve) => { resolveEarly = resolve; });
 
     const recordCancellation = (status: "cancelled" | "timed_out", reason: string): void => {
       if (record.status !== "running") return;
@@ -182,6 +184,7 @@ export class AgentRuntime {
       record.executionState = providerSettled ? "settled" : "unresolved";
       record.reason = reason;
       if (providerSettled) record.finishedAt = Date.now();
+      resolveEarly({ status, taskId, executionState: record.executionState });
     };
 
     const controllerAbort = (): void => {
