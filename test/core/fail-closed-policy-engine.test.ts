@@ -355,7 +355,7 @@ describe("FailClosedPolicyEngine caller and parent cancellation", () => {
       reason: "Runtime shutdown cancelled policy evaluation; access denied."
     });
     expect(observedSignal?.aborted).toBe(true);
-    expect(delegateShutdownCalls).toBe(1);
+    expect(delegateShutdownCalls).toBe(0);
     await Promise.resolve();
     expect(shutdownSettled).toBe(false);
 
@@ -363,6 +363,7 @@ describe("FailClosedPolicyEngine caller and parent cancellation", () => {
     release({ effect: "allow", reason: "late grant must remain ignored" });
     await shutdown;
     expect(shutdownSettled).toBe(true);
+    expect(delegateShutdownCalls).toBe(1);
   });
 
   it("blocks new evaluations and cancels active work during policy runtime shutdown", async () => {
