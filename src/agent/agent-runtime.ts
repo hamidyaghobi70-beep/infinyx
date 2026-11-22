@@ -123,7 +123,20 @@ export class AgentRuntime {
     return record ? Object.freeze({ ...record }) : undefined;
   }
 
-  async execute(request: AgentTaskRequest | unknown, parentSignal?: AbortSignal): Promise<AgentTaskResult> {
+  execute(request: AgentTaskRequest | unknown): Promise<AgentTaskResult> {
+    return this.executeInternal(request, undefined, false);
+  }
+
+  /** Execute for a Core protected operation and wait for actual provider settlement. */
+  executeAndSettle(request: AgentTaskRequest | unknown, parentSignal?: AbortSignal): Promise<AgentTaskResult> {
+    return this.executeInternal(request, parentSignal, true);
+  }
+
+  private async executeInternal(
+    request: AgentTaskRequest | unknown,
+    parentSignal: AbortSignal | undefined,
+    waitForSettlement: boolean
+  ): Promise<AgentTaskResult> {
     if (!this.accepting) {
       return { status: "rejected", taskId: "unknown", reason: "Agent runtime is not accepting tasks." };
     }
@@ -265,9 +278,11 @@ export class AgentRuntime {
     );
 
     try {
-      // Never race cancellation against the provider promise. The protected-operation
-      // handler remains active until the underlying ModelPort work truly settles.
-      return await observedProvider;
+      // Preserve the public Runtime's established early cancellation response.
+      // Core's protected-operation path opts into settlement-aware execution.
+      return waitForSettlement
+        ? await observedProvider
+        : await Promise.race([observedProvider, earlyResult]);
     } finally {
       if (timeout !== undefined) clearTimeout(timeout);
       if (callerAbort && signal) signal.removeEventListener("abort", callerAbort);
@@ -277,13 +292,16 @@ export class AgentRuntime {
     }
   }
 
-  async shutdown(): Promise<void> {
+  shutdown(): void {
     this.accepting = false;
-    const active = [...this.active.values()];
-    for (const task of active) {
+    for (const task of this.active.values()) {
       if (!task.controller.signal.aborted) task.controller.abort("runtime_shutdown");
     }
-    // Shutdown is complete only after every actual ModelPort promise settles.
+  }
+
+  /** Close admission and wait for actual settlement of every active provider. */
+  async shutdownAndDrain(): Promise<void> {
+    this.shutdown();
     while (this.active.size > 0) {
       await Promise.all([...this.active.values()].map((task) => task.settled));
     }
