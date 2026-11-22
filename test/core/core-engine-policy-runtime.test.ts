@@ -1,6 +1,7 @@
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { describe, expect, it } from "vitest";
 import { CoreEngine } from "../../src/core/core-engine.js";
+import { CoreError } from "../../src/core/core-error.js";
 import { ProcessIsolatedPolicyEngine } from "../../src/core/process-isolated-policy-engine.js";
 import type { PolicyRequest } from "../../src/core/contracts.js";
 
@@ -30,6 +31,8 @@ describe("CoreEngine policy runtime shutdown", () => {
     const observer = observeRunning();
     const runtime = new ProcessIsolatedPolicyEngine({
       moduleUrl: fixtureUrl,
+      terminationGraceMs: 20,
+      killWaitMs: 1_000,
       onStateChange: observer.onStateChange
     });
     const order: string[] = [];
@@ -117,6 +120,43 @@ describe("CoreEngine policy runtime shutdown", () => {
     await engine.stop();
     expect(cleanupCalls).toBe(1);
     expect(engine.state).toBe("stopped");
+  });
+
+  it("maps a structured unresolved child-process shutdown to unresolved and permits retry", async () => {
+    let shutdownAttempts = 0;
+    let cleanupCalls = 0;
+    const policy = {
+      evaluate: async () => ({ effect: "deny" as const, reason: "test" }),
+      shutdown: async () => {
+        shutdownAttempts += 1;
+        if (shutdownAttempts === 1) {
+          throw new CoreError("POLICY_RUNTIME_UNRESOLVED", "child exit not yet confirmed");
+        }
+      }
+    };
+    const engine = new CoreEngine({ policy });
+    engine.register({
+      id: "worker",
+      version: "1.0.0",
+      stop: () => { cleanupCalls += 1; }
+    });
+    await engine.initialize();
+
+    await expect(engine.stop()).rejects.toMatchObject({ code: "POLICY_RUNTIME_UNRESOLVED" });
+    expect(engine.state).toBe("unresolved");
+    expect(cleanupCalls).toBe(0);
+
+    await engine.stop();
+    expect(shutdownAttempts).toBe(2);
+    expect(cleanupCalls).toBe(1);
+    expect(engine.state).toBe("stopped");
+  });
+
+  it("rejects shutdown timer values outside the supported Node.js timer range", () => {
+    expect(() => new CoreEngine({ policyShutdownTimeoutMs: 2_147_483_648 }))
+      .toThrow(/positive safe integer/);
+    expect(() => new CoreEngine({ protectedOperationDrainTimeoutMs: 1.5 }))
+      .toThrow(/positive safe integer/);
   });
 
   it("shuts down a policy runtime even when CoreEngine was never initialized", async () => {
