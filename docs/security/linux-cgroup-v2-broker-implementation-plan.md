@@ -99,3 +99,18 @@ CI must report these privileged Linux integration tests separately from mocked T
 ## Acceptance gate
 
 The Linux implementation is not complete until the native broker, service deployment, Node transport, engine integration, crash recovery, and privileged integration suite are all reviewed together. The PR must remain Draft and production custom evaluators must remain disabled until then. This plan does not authorize merge, release, deployment, or production activation.
+
+## CI environment finding (2026-11-22)
+
+A read-only inspection on GitHub-hosted `ubuntu-latest` (workflow run `44971572408`, Ubuntu job `137052307606`) observed:
+
+- Linux kernel `7.0.0-1016-aws x86_64`; cgroup v2 controller file present.
+- Controllers listed: `cpuset`, `cpu`, `io`, `memory`, `hugetlb`, `pids`, `rdma`, `misc`, `dmem`.
+- The runner process was in `/system.slice/hosted-compute-agent.service`.
+- The cgroup root path was not writable by the runner; root `cgroup.events` was absent or unreadable.
+
+**Conclusion:** this hosted runner is not a provisioned delegated cgroup environment and cannot serve as the privileged Linux containment integration runner. The presence of cgroup v2 and controllers is insufficient. Do not attempt to gain broader host privileges from an ordinary hosted workflow.
+
+The next infrastructure prerequisite is a disposable, administrator-managed Linux integration runner whose operator explicitly provisions a broker-owned delegated subtree and distinct application/evaluator identities. Before any broker implementation is considered deployable, that runner must independently demonstrate the exact delegation, ownership, and permission boundary required above. The ordinary cross-platform CI matrix remains useful for build and mocked tests, but must not be labelled as OS-containment evidence.
+
+This inspection was read-only: no cgroups were created or modified, and no broker was installed or activated.
