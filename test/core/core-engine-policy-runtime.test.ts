@@ -1,3 +1,6 @@
+import { EventEmitter } from "node:events";
+import { PassThrough } from "node:stream";
+import { fork } from "node:child_process";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { describe, expect, it } from "vitest";
 import { CoreEngine } from "../../src/core/core-engine.js";
@@ -150,6 +153,73 @@ describe("CoreEngine policy runtime shutdown", () => {
     expect(shutdownAttempts).toBe(2);
     expect(cleanupCalls).toBe(1);
     expect(engine.state).toBe("stopped");
+  });
+
+  it("keeps CoreEngine unresolved until a real child close event, then retries cleanup exactly once", async () => {
+    const child = Object.assign(new EventEmitter(), {
+      connected: true,
+      stdout: new PassThrough(),
+      stderr: new PassThrough(),
+      send: (message: unknown): boolean => {
+        if (typeof message === "object" && message !== null &&
+            (message as { type?: unknown }).type === "evaluate") {
+          queueMicrotask(() => child.emit("message", { type: "started" }));
+        }
+        return true;
+      },
+      kill: (_signal?: NodeJS.Signals): boolean => true
+    });
+    const controlledFork = (() => {
+      queueMicrotask(() => child.emit("spawn"));
+      return child as unknown as ReturnType<typeof fork>;
+    }) as typeof fork;
+    const observer = observeRunning();
+    const runtime = new ProcessIsolatedPolicyEngine({
+      moduleUrl: fixtureUrl,
+      terminationGraceMs: 5,
+      killWaitMs: 25,
+      forkProcess: controlledFork,
+      onStateChange: observer.onStateChange
+    });
+    let cleanupCalls = 0;
+    const engine = new CoreEngine({
+      policy: runtime,
+      policyShutdownTimeoutMs: 1_000
+    });
+    engine.register({
+      id: "worker",
+      version: "1.0.0",
+      stop: () => { cleanupCalls += 1; }
+    });
+    await engine.initialize();
+
+    const evaluation = engine.policy.evaluate(request);
+    await observer.reached;
+
+    await expect(engine.stop()).rejects.toMatchObject({
+      code: "POLICY_RUNTIME_UNRESOLVED"
+    });
+    await expect(evaluation).resolves.toMatchObject({ effect: "deny" });
+    expect(engine.state).toBe("unresolved");
+    expect(runtime.activeExecutionCount).toBe(1);
+    expect(cleanupCalls).toBe(0);
+
+    // A retry before the actual close event must remain unresolved and must not clean up.
+    await expect(engine.stop()).rejects.toMatchObject({
+      code: "POLICY_RUNTIME_UNRESOLVED"
+    });
+    expect(runtime.activeExecutionCount).toBe(1);
+    expect(cleanupCalls).toBe(0);
+
+    child.connected = false;
+    child.emit("close", 0, null);
+    expect(runtime.activeExecutionCount).toBe(0);
+
+    await engine.stop();
+    expect(engine.state).toBe("stopped");
+    expect(cleanupCalls).toBe(1);
+    await engine.stop();
+    expect(cleanupCalls).toBe(1);
   });
 
   it("rejects shutdown timer values outside the supported Node.js timer range", () => {
