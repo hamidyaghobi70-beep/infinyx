@@ -8,6 +8,7 @@ import type {
 } from "./contracts.js";
 
 const DEFAULT_POLICY_TIMEOUT_MS = 5_000;
+const MAX_TIMER_DELAY_MS = 2_147_483_647;
 
 function deny(reason: string): PolicyDecision {
   return Object.freeze({ effect: "deny", reason });
@@ -127,8 +128,8 @@ export class FailClosedPolicyEngine implements PolicyEngine {
     private readonly delegate: PolicyEngine,
     private readonly timeoutMs = DEFAULT_POLICY_TIMEOUT_MS
   ) {
-    if (!Number.isFinite(timeoutMs) || timeoutMs <= 0) {
-      throw new RangeError("Policy evaluation timeout must be a positive finite number.");
+    if (!Number.isSafeInteger(timeoutMs) || timeoutMs <= 0 || timeoutMs > MAX_TIMER_DELAY_MS) {
+      throw new RangeError(`Policy evaluation timeout must be a positive safe integer no greater than ${MAX_TIMER_DELAY_MS}.`);
     }
   }
 
@@ -238,6 +239,9 @@ export class FailClosedPolicyEngine implements PolicyEngine {
   async shutdown(): Promise<void> {
     this.shuttingDown = true;
     for (const stop of [...this.activeStops]) stop("RUNTIME_SHUTDOWN");
+    // Cancellation is requested first, but delegate-owned resources must remain
+    // available until every evaluator has actually settled.
+    await Promise.allSettled([...this.activeEvaluations]);
     if (!this.delegateShutdownPromise) {
       const attempt = Promise.resolve().then(async () => { await this.delegate.shutdown?.(); });
       this.delegateShutdownPromise = attempt;
@@ -247,8 +251,5 @@ export class FailClosedPolicyEngine implements PolicyEngine {
       });
     }
     await this.delegateShutdownPromise;
-    // Do not report shutdown complete while an in-process delegate is still executing.
-    // CoreEngine applies an independent deadline and exposes UNRESOLVED on timeout.
-    await Promise.allSettled([...this.activeEvaluations]);
   }
 }
