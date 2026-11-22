@@ -20,6 +20,15 @@ import { CoreError } from "./core-error.js";
 import { ModuleRegistry } from "./module-registry.js";
 import { ProtectedOperationExecutor } from "./protected-operation-executor.js";
 
+const MAX_TIMER_DELAY_MS = 2_147_483_647;
+
+function assertTimerDelay(name: string, value: number | undefined): void {
+  if (value === undefined) return;
+  if (!Number.isSafeInteger(value) || value <= 0 || value > MAX_TIMER_DELAY_MS) {
+    throw new TypeError(`${name} must be a positive safe integer no greater than ${MAX_TIMER_DELAY_MS}.`);
+  }
+}
+
 interface CleanupExecutionContext {
   readonly engine: CoreEngine;
   active: boolean;
@@ -55,14 +64,8 @@ export class CoreEngine {
   private readonly moduleMemory = new Map<string, GuardedMemoryPort>();
 
   constructor(private readonly options: CoreEngineOptions = {}) {
-    const policyShutdownTimeout = options.policyShutdownTimeoutMs ?? 30_000;
-    if (!Number.isFinite(policyShutdownTimeout) || policyShutdownTimeout <= 0) {
-      throw new TypeError("policyShutdownTimeoutMs must be a finite positive number.");
-    }
-    const drainTimeout = options.protectedOperationDrainTimeoutMs ?? 30_000;
-    if (!Number.isFinite(drainTimeout) || drainTimeout <= 0) {
-      throw new TypeError("protectedOperationDrainTimeoutMs must be a finite positive number.");
-    }
+    assertTimerDelay("policyShutdownTimeoutMs", options.policyShutdownTimeoutMs);
+    assertTimerDelay("protectedOperationDrainTimeoutMs", options.protectedOperationDrainTimeoutMs);
     this.events = options.events ?? new InMemoryEventBus();
     this.policy = options.policy
       ? new FailClosedPolicyEngine(options.policy, options.policyTimeoutMs)
@@ -259,8 +262,11 @@ export class CoreEngine {
         error.code === "PROTECTED_OPERATION_DRAIN_TIMEOUT";
       const policyShutdownTimedOut = error instanceof CoreError &&
         error.code === "POLICY_SHUTDOWN_TIMEOUT";
-      this.lifecycle = drainTimedOut || policyShutdownTimedOut ? "unresolved" : "failed";
-      if (drainTimedOut || policyShutdownTimedOut) throw error;
+      const policyRuntimeUnresolved = error instanceof CoreError &&
+        error.code === "POLICY_RUNTIME_UNRESOLVED";
+      const unresolved = drainTimedOut || policyShutdownTimedOut || policyRuntimeUnresolved;
+      this.lifecycle = unresolved ? "unresolved" : "failed";
+      if (unresolved) throw error;
       throw new CoreError(
         "MODULE_STOP_FAILED",
         "Policy runtime shutdown or protected-operation drain failed; module cleanup was not started.",
