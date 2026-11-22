@@ -53,8 +53,6 @@ export interface ProcessIsolatedPolicyEngineOptions {
   readonly maxConcurrent?: number;
   readonly maxOldSpaceSizeMb?: number;
   readonly onStateChange?: (event: PolicyExecutionEvent) => void;
-  /** Process creation seam for deterministic lifecycle tests. */
-  readonly forkProcess?: typeof fork;
 }
 
 function deny(reason: string): PolicyDecision {
@@ -131,7 +129,7 @@ function getChildRunnerPath(): { path: string; execArgv: string[] } {
   throw new Error("Policy evaluator child-process runner was not found.");
 }
 
-export class ProcessIsolatedPolicyEngine implements PolicyEngine {
+class ProcessIsolatedPolicyEngineBase implements PolicyEngine {
   private readonly moduleUrl: string;
   private readonly timeoutMs: number;
   private readonly terminationGraceMs: number;
@@ -143,7 +141,7 @@ export class ProcessIsolatedPolicyEngine implements PolicyEngine {
   private readonly active = new Map<string, ActiveExecution>();
   private shuttingDown = false;
 
-  constructor(options: ProcessIsolatedPolicyEngineOptions) {
+  constructor(options: ProcessIsolatedPolicyEngineOptions, forkProcess: typeof fork) {
     this.moduleUrl = normalizeModuleUrl(options.moduleUrl);
     this.timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
     this.terminationGraceMs = options.terminationGraceMs ?? DEFAULT_TERMINATION_GRACE_MS;
@@ -151,7 +149,7 @@ export class ProcessIsolatedPolicyEngine implements PolicyEngine {
     this.maxConcurrent = options.maxConcurrent ?? DEFAULT_MAX_CONCURRENT;
     this.maxOldSpaceSizeMb = options.maxOldSpaceSizeMb ?? DEFAULT_MAX_OLD_SPACE_SIZE_MB;
     this.onStateChange = options.onStateChange;
-    this.forkProcess = options.forkProcess ?? fork;
+    this.forkProcess = forkProcess;
 
     if (!Number.isSafeInteger(this.timeoutMs) || this.timeoutMs <= 0 || this.timeoutMs > MAX_TIMER_DELAY_MS ||
         !Number.isSafeInteger(this.terminationGraceMs) || this.terminationGraceMs < 0 || this.terminationGraceMs > MAX_TIMER_DELAY_MS ||
@@ -450,5 +448,20 @@ export class ProcessIsolatedPolicyEngine implements PolicyEngine {
         "One or more policy child processes remain unresolved; cleanup is not safe."
       );
     }
+  }
+}
+
+
+/** @internal Test-only factory; intentionally omitted from the public core barrel. */
+export function createProcessIsolatedPolicyEngineForTest(
+  options: ProcessIsolatedPolicyEngineOptions,
+  forkProcess: typeof fork
+): ProcessIsolatedPolicyEngineBase {
+  return new ProcessIsolatedPolicyEngineBase(options, forkProcess);
+}
+
+export class ProcessIsolatedPolicyEngine extends ProcessIsolatedPolicyEngineBase {
+  constructor(options: ProcessIsolatedPolicyEngineOptions) {
+    super(options, fork);
   }
 }
