@@ -42,6 +42,7 @@ jobs:
           rustc --version
           cargo --version
           cargo test --manifest-path native/linux-cgroup-broker/Cargo.toml
+          cargo run --manifest-path native/linux-cgroup-broker/Cargo.toml --bin infinyx-cgroup-preflight -- /sys/fs/cgroup
       - name: Record runtime versions
         shell: bash
         run: |
