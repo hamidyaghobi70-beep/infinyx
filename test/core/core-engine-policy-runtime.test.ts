@@ -156,6 +156,7 @@ describe("CoreEngine policy runtime shutdown", () => {
   });
 
   it("keeps CoreEngine unresolved until a real child close event, then retries cleanup exactly once", async () => {
+    const killSignals: (NodeJS.Signals | undefined)[] = [];
     const child = Object.assign(new EventEmitter(), {
       connected: true,
       stdout: new PassThrough(),
@@ -167,7 +168,10 @@ describe("CoreEngine policy runtime shutdown", () => {
         }
         return true;
       },
-      kill: (_signal?: NodeJS.Signals): boolean => true
+      kill: (signal?: NodeJS.Signals): boolean => {
+        killSignals.push(signal);
+        return true;
+      }
     });
     const controlledFork = (() => {
       queueMicrotask(() => child.emit("spawn"));
@@ -201,6 +205,7 @@ describe("CoreEngine policy runtime shutdown", () => {
     });
     await expect(evaluation).resolves.toMatchObject({ effect: "deny" });
     expect(engine.state).toBe("unresolved");
+    expect(killSignals).toContain("SIGKILL");
     expect(runtime.activeExecutionCount).toBe(1);
     expect(cleanupCalls).toBe(0);
 
