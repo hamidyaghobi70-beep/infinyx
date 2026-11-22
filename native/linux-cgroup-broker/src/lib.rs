@@ -22,6 +22,7 @@ pub struct PeerCredentials {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(deny_unknown_fields)]
 pub struct Request {
     pub version: u16,
     pub request_id: String,
@@ -29,7 +30,7 @@ pub struct Request {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-#[serde(tag = "op", rename_all = "SCREAMING_SNAKE_CASE")]
+#[serde(tag = "op", rename_all = "SCREAMING_SNAKE_CASE", deny_unknown_fields)]
 pub enum Operation {
     LaunchTrustedRunner,
     RunnerSend {
@@ -52,6 +53,7 @@ pub enum Operation {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(deny_unknown_fields)]
 pub struct Response {
     pub version: u16,
     pub request_id: String,
@@ -63,6 +65,7 @@ pub struct Response {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
 pub struct ProtocolError {
     pub code: String,
     pub message: String,
@@ -107,6 +110,33 @@ impl Request {
         }
         Ok(())
     }
+}
+
+/// Decode and validate one complete request payload.
+pub fn decode_request(payload: &[u8]) -> Result<Request, ProtocolError> {
+    if payload.is_empty() || payload.len() > MAX_FRAME_BYTES {
+        return Err(ProtocolError::new(
+            "invalid_frame_length",
+            "The request frame length is outside the allowed range.",
+        ));
+    }
+    let request: Request = serde_json::from_slice(payload).map_err(|_| {
+        ProtocolError::new("invalid_json", "The request payload is not valid protocol JSON.")
+    })?;
+    request.validate()?;
+    Ok(request)
+}
+
+/// Authorize the kernel-reported peer UID against one administrator-configured UID.
+/// This function does not read identity claims from the wire protocol.
+pub fn authorize_peer(peer: PeerCredentials, allowed_uid: u32) -> Result<(), ProtocolError> {
+    if peer.pid <= 0 || peer.uid != allowed_uid {
+        return Err(ProtocolError::new(
+            "peer_not_authorized",
+            "The connected Unix socket peer is not authorized.",
+        ));
+    }
+    Ok(())
 }
 
 impl ProtocolError {
@@ -236,6 +266,36 @@ mod tests {
             timeout_ms: 0,
         };
         assert_eq!(bad.validate().unwrap_err().code, "invalid_timeout");
+    }
+
+    #[test]
+    fn decoder_rejects_unknown_fields_and_malformed_json() {
+        let unknown = br#"{"version":1,"request_id":"r1","operation":{"op":"LAUNCH_TRUSTED_RUNNER"},"uid":0}"#;
+        assert_eq!(decode_request(unknown).unwrap_err().code, "invalid_json");
+        assert_eq!(decode_request(b"{").unwrap_err().code, "invalid_json");
+        assert_eq!(decode_request(&[]).unwrap_err().code, "invalid_frame_length");
+    }
+
+    #[test]
+    fn peer_authorization_uses_kernel_uid_value() {
+        let peer = PeerCredentials { pid: 123, uid: 1001, gid: 1001 };
+        assert!(authorize_peer(peer, 1001).is_ok());
+        assert_eq!(authorize_peer(peer, 1002).unwrap_err().code, "peer_not_authorized");
+        assert_eq!(
+            authorize_peer(PeerCredentials { pid: -1, uid: 1001, gid: 1001 }, 1001)
+                .unwrap_err().code,
+            "peer_not_authorized"
+        );
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn reads_peer_credentials_from_local_unix_socket() {
+        use std::os::unix::net::UnixStream;
+        let (left, _right) = UnixStream::pair().unwrap();
+        let peer = peer_credentials(&left).unwrap();
+        assert!(peer.pid > 0);
+        assert_eq!(peer.uid, unsafe { libc::geteuid() });
     }
 
     #[test]
