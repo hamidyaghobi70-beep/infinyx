@@ -1,5 +1,3 @@
-import { EventEmitter } from "node:events";
-import { PassThrough } from "node:stream";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { describe, expect, it, vi } from "vitest";
 
