@@ -82,6 +82,43 @@ describe("CoreEngine policy runtime shutdown", () => {
     expect(engine.state).toBe("stopped");
   });
 
+  it("marks CoreEngine unresolved and blocks cleanup until an evaluator really settles", async () => {
+    let release!: (decision: { effect: "allow"; reason: string }) => void;
+    let evaluatorStarted!: () => void;
+    const started = new Promise<void>((resolve) => { evaluatorStarted = resolve; });
+    let cleanupCalls = 0;
+    const policy = {
+      evaluate: () => {
+        evaluatorStarted();
+        return new Promise<{ effect: "allow"; reason: string }>((resolve) => {
+          release = resolve;
+        });
+      }
+    };
+    const engine = new CoreEngine({ policy, policyShutdownTimeoutMs: 15 });
+    engine.register({
+      id: "worker",
+      version: "1.0.0",
+      stop: () => { cleanupCalls += 1; }
+    });
+    await engine.initialize();
+
+    const evaluation = engine.policy.evaluate(request);
+    await started;
+    await expect(engine.stop()).rejects.toMatchObject({
+      code: "POLICY_SHUTDOWN_TIMEOUT"
+    });
+    await expect(evaluation).resolves.toMatchObject({ effect: "deny" });
+    expect(engine.state).toBe("unresolved");
+    expect(cleanupCalls).toBe(0);
+
+    // Retry is safe only after the original delegate promise settles.
+    release({ effect: "allow", reason: "late result must not authorize" });
+    await engine.stop();
+    expect(cleanupCalls).toBe(1);
+    expect(engine.state).toBe("stopped");
+  });
+
   it("shuts down a policy runtime even when CoreEngine was never initialized", async () => {
     let shutdownCalls = 0;
     const engine = new CoreEngine({
