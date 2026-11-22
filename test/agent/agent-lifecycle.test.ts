@@ -45,6 +45,24 @@ describe("Agent CoreModule lifecycle", () => {
     await core.stop();
   });
 
+  it("supports a host provider that reuses one immutable principal object", async () => {
+    const principal = Object.freeze({ actorId: "trusted:shared-principal" });
+    const core = new CoreEngine({ policy: allowAgent });
+    const agent = new AgentModule({
+      modelPort: { complete: async () => "ok" },
+      callerProvider: () => principal
+    });
+    agent.registerWithCore(core);
+    await core.initialize();
+    await core.start();
+
+    await expect(agent.execute({ taskId: "first", prompt: "hello" }))
+      .resolves.toMatchObject({ status: "completed" });
+    await expect(agent.execute({ taskId: "second", prompt: "hello again" }))
+      .resolves.toMatchObject({ status: "completed" });
+    await core.stop();
+  });
+
   it("stops accepting new work as shutdown begins", async () => {
     const core = new CoreEngine({ policy: allowAgent });
     const agent = new AgentModule({
