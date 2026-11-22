@@ -59,7 +59,7 @@ describe("FailClosedPolicyEngine", () => {
     expect(() => new FailClosedPolicyEngine({ evaluate: async () => ({
       effect: "deny",
       reason: "unused"
-    }) }, 0)).toThrow(/positive finite number/);
+    }) }, 0)).toThrow(/positive safe integer/);
   });
 
   it.each([
@@ -328,7 +328,7 @@ describe("FailClosedPolicyEngine caller and parent cancellation", () => {
   });
 
 
-  it("does not wait for a non-cooperative in-process evaluation during shutdown", async () => {
+  it("waits for actual non-cooperative evaluator settlement during shutdown", async () => {
     let release!: (decision: { effect: "allow"; reason: string }) => void;
     let evaluatorStarted!: () => void;
     const started = new Promise<void>((resolve) => { evaluatorStarted = resolve; });
@@ -348,18 +348,22 @@ describe("FailClosedPolicyEngine caller and parent cancellation", () => {
     const inFlight = policy.evaluate(request);
     await started;
 
-    await expect(policy.shutdown()).resolves.toBeUndefined();
+    let shutdownSettled = false;
+    const shutdown = policy.shutdown().then(() => { shutdownSettled = true; });
     await expect(inFlight).resolves.toEqual({
       effect: "deny",
       reason: "Runtime shutdown cancelled policy evaluation; access denied."
     });
     expect(observedSignal?.aborted).toBe(true);
-    expect(delegateShutdownCalls).toBe(1);
+    expect(delegateShutdownCalls).toBe(0);
+    await Promise.resolve();
+    expect(shutdownSettled).toBe(false);
 
-    // Shutdown is cooperative-only here; the underlying promise can still settle later.
+    // The caller-facing result is already deny, but shutdown waits for delegate settlement.
     release({ effect: "allow", reason: "late grant must remain ignored" });
-    await Promise.resolve();
-    await Promise.resolve();
+    await shutdown;
+    expect(shutdownSettled).toBe(true);
+    expect(delegateShutdownCalls).toBe(1);
   });
 
   it("blocks new evaluations and cancels active work during policy runtime shutdown", async () => {

@@ -31,6 +31,17 @@ function stateObserver(target: string): {
 }
 
 describe("ProcessIsolatedPolicyEngine", () => {
+  it("rejects timer settings outside the supported Node.js timer range", () => {
+    expect(() => new ProcessIsolatedPolicyEngine({
+      moduleUrl: fixtureUrl,
+      timeoutMs: 2_147_483_648
+    })).toThrow(/limits must be finite and positive/);
+    expect(() => new ProcessIsolatedPolicyEngine({
+      moduleUrl: fixtureUrl,
+      terminationGraceMs: 1.5
+    })).toThrow(/limits must be finite and positive/);
+  });
+
   it("returns an immutable allow decision only after the child process exits", async () => {
     const engine = new ProcessIsolatedPolicyEngine({ moduleUrl: fixtureUrl });
     const result = await engine.evaluateDetailed(request());

@@ -8,6 +8,7 @@ import type {
 } from "./contracts.js";
 
 const DEFAULT_POLICY_TIMEOUT_MS = 5_000;
+const MAX_TIMER_DELAY_MS = 2_147_483_647;
 
 function deny(reason: string): PolicyDecision {
   return Object.freeze({ effect: "deny", reason });
@@ -119,13 +120,16 @@ function reasonFromSignal(signal: AbortSignal, fallback: PolicyStopReason): Poli
 export class FailClosedPolicyEngine implements PolicyEngine {
   private shuttingDown = false;
   private readonly activeStops = new Set<(reason: PolicyStopReason) => void>();
+  /** Tracks delegate settlement independently from the caller-facing fail-closed result. */
+  private readonly activeEvaluations = new Set<Promise<unknown>>();
+  private delegateShutdownPromise: Promise<void> | undefined;
 
   constructor(
     private readonly delegate: PolicyEngine,
     private readonly timeoutMs = DEFAULT_POLICY_TIMEOUT_MS
   ) {
-    if (!Number.isFinite(timeoutMs) || timeoutMs <= 0) {
-      throw new RangeError("Policy evaluation timeout must be a positive finite number.");
+    if (!Number.isSafeInteger(timeoutMs) || timeoutMs <= 0 || timeoutMs > MAX_TIMER_DELAY_MS) {
+      throw new RangeError(`Policy evaluation timeout must be a positive safe integer no greater than ${MAX_TIMER_DELAY_MS}.`);
     }
   }
 
@@ -208,6 +212,11 @@ export class FailClosedPolicyEngine implements PolicyEngine {
           candidateFrozen = true;
           return decision;
         });
+      this.activeEvaluations.add(evaluation);
+      void evaluation.then(
+        () => this.activeEvaluations.delete(evaluation),
+        () => this.activeEvaluations.delete(evaluation)
+      );
       const result = await Promise.race([evaluation, aborted]);
       if (stopReason !== undefined) return deny(cancellationMessage(stopReason));
       return result ?? deny("Policy evaluator returned an invalid decision; access denied.");
@@ -230,6 +239,17 @@ export class FailClosedPolicyEngine implements PolicyEngine {
   async shutdown(): Promise<void> {
     this.shuttingDown = true;
     for (const stop of [...this.activeStops]) stop("RUNTIME_SHUTDOWN");
-    await this.delegate.shutdown?.();
+    // Cancellation is requested first, but delegate-owned resources must remain
+    // available until every evaluator has actually settled.
+    await Promise.allSettled([...this.activeEvaluations]);
+    if (!this.delegateShutdownPromise) {
+      const attempt = Promise.resolve().then(async () => { await this.delegate.shutdown?.(); });
+      this.delegateShutdownPromise = attempt;
+      // A rejected hook may be retried; an in-flight or successful hook is never duplicated.
+      void attempt.catch(() => {
+        if (this.delegateShutdownPromise === attempt) this.delegateShutdownPromise = undefined;
+      });
+    }
+    await this.delegateShutdownPromise;
   }
 }

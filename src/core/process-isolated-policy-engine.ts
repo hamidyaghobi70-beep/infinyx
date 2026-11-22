@@ -3,6 +3,7 @@ import { fork } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { dirname, isAbsolute, join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import { CoreError } from "./core-error.js";
 import type {
   PolicyCleanupStatus,
   PolicyDecision,
@@ -26,6 +27,7 @@ const DEFAULT_TERMINATION_GRACE_MS = 100;
 const DEFAULT_KILL_WAIT_MS = 1_000;
 const DEFAULT_MAX_CONCURRENT = 4;
 const DEFAULT_MAX_OLD_SPACE_SIZE_MB = 128;
+const MAX_TIMER_DELAY_MS = 2_147_483_647;
 
 interface Candidate {
   readonly outcome: PolicyTerminalOutcome;
@@ -147,9 +149,9 @@ export class ProcessIsolatedPolicyEngine implements PolicyEngine {
     this.maxOldSpaceSizeMb = options.maxOldSpaceSizeMb ?? DEFAULT_MAX_OLD_SPACE_SIZE_MB;
     this.onStateChange = options.onStateChange;
 
-    if (!Number.isFinite(this.timeoutMs) || this.timeoutMs <= 0 ||
-        !Number.isFinite(this.terminationGraceMs) || this.terminationGraceMs < 0 ||
-        !Number.isFinite(this.killWaitMs) || this.killWaitMs <= 0 ||
+    if (!Number.isSafeInteger(this.timeoutMs) || this.timeoutMs <= 0 || this.timeoutMs > MAX_TIMER_DELAY_MS ||
+        !Number.isSafeInteger(this.terminationGraceMs) || this.terminationGraceMs < 0 || this.terminationGraceMs > MAX_TIMER_DELAY_MS ||
+        !Number.isSafeInteger(this.killWaitMs) || this.killWaitMs <= 0 || this.killWaitMs > MAX_TIMER_DELAY_MS ||
         !Number.isInteger(this.maxConcurrent) || this.maxConcurrent < 1 ||
         !Number.isInteger(this.maxOldSpaceSizeMb) || this.maxOldSpaceSizeMb < 16) {
       throw new RangeError("Policy runtime limits must be finite and positive.");
@@ -439,7 +441,11 @@ export class ProcessIsolatedPolicyEngine implements PolicyEngine {
     for (const execution of executions) execution.cancel("RUNTIME_SHUTDOWN");
     const results = await Promise.all(executions.map((execution) => execution.completion));
     if (results.some((result) => result.outcome === "UNRESOLVED")) {
-      throw new Error("One or more policy child processes remain unresolved.");
+      throw new CoreError(
+        "POLICY_RUNTIME_UNRESOLVED",
+        "One or more policy child processes remain unresolved; cleanup is not safe."
+      );
     }
   }
 }
+
