@@ -52,7 +52,7 @@ export class AgentModule implements CoreModule {
     this.shutdownSignal?.removeEventListener("abort", this.onCoreShutdown);
     // ProtectedOperationExecutor also aborts the operation context. Its handler
     // awaits AgentRuntime.execute() until the actual ModelPort promise settles.
-    void this.runtime.shutdown();
+    void this.runtime.shutdownAndDrain();
     this.started = false;
   };
 
@@ -73,7 +73,7 @@ export class AgentModule implements CoreModule {
       action: "agent.execute",
       resource: "agent:agent",
       validateInput: isPlainAgentRequest,
-      handler: (request, context) => this.runtime.execute(request, context.signal)
+      handler: (request, context) => this.runtime.executeAndSettle(request, context.signal)
     });
     core.register(this);
   }
@@ -100,7 +100,7 @@ export class AgentModule implements CoreModule {
     if (context.moduleId !== this.id) throw new Error("Agent module received an invalid Core context.");
     this.shutdownSignal?.removeEventListener("abort", this.onCoreShutdown);
     this.started = false;
-    await this.runtime.shutdown();
+    await this.runtime.shutdownAndDrain();
   }
 
   async execute(request: AgentTaskRequest | unknown): Promise<AgentTaskResult> {
