@@ -125,6 +125,12 @@ mod tests {
     }
 
     #[test]
+    fn rejects_a_regular_file_as_a_cgroup_directory() {
+        let error = inspect(Path::new("/proc/self/status")).unwrap_err();
+        assert_eq!(error.kind(), io::ErrorKind::InvalidInput);
+    }
+
+    #[test]
     fn report_is_never_broker_activation_eligible() {
         let report = PreflightReport {
             inspected_path: PathBuf::from("/sys/fs/cgroup"),
