@@ -239,7 +239,7 @@ export class FailClosedPolicyEngine implements PolicyEngine {
     this.shuttingDown = true;
     for (const stop of [...this.activeStops]) stop("RUNTIME_SHUTDOWN");
     if (!this.delegateShutdownPromise) {
-      const attempt = Promise.resolve().then(() => this.delegate.shutdown?.());
+      const attempt = Promise.resolve().then(async () => { await this.delegate.shutdown?.(); });
       this.delegateShutdownPromise = attempt;
       // A rejected hook may be retried; an in-flight or successful hook is never duplicated.
       void attempt.catch(() => {
