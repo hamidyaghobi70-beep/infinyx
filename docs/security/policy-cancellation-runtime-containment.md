@@ -2,7 +2,7 @@
 
 ## Status
 
-Proposed in pull request #57 on `security/shutdown-containment-hardening`; the changes have not been merged into `integration/infinyx-core-runtime-v1`. The last runtime-validation head was `45cd36a53a9155b4eec87aa20308826c3a1a0d33` (`Fix broker release cleanup assertion`); CI run #44965105885 completed successfully for that exact head. This documentation-only status correction is newer than that runtime-validation head, and its CI result is pending. The configured CI checks do not provide Linux cgroup v2 or Windows Job Object integration evidence. Independent governance/security review remains pending. This document does not authorize merge, release, deployment, activation of Agent Runtime, or changes to Shutdown Timeout Contract v6.2.
+Proposed in pull request #57 on `security/shutdown-containment-hardening`; the changes have not been merged into `integration/infinyx-core-runtime-v1`. The current branch head reviewed for this snapshot is `5bae8aa29e4b13c2cafcfa4263012ea8998729ae`; CI run #539 (`44968137873`) completed successfully for that exact commit, including Ubuntu, macOS, Windows, and Dependency Security Audit. These are the repository's configured CI jobs only: they do not provision or exercise a real Linux cgroup v2 broker/boundary or a Windows Job Object/native launcher, and therefore do not prove OS-level process-tree containment. Independent governance/security review remains pending. This document does not authorize merge, release, deployment, activation of Agent Runtime, or changes to Shutdown Timeout Contract v6.2.
 
 ## Cancellation contract
 
