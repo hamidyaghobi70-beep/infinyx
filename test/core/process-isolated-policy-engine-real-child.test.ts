@@ -43,6 +43,23 @@ function observeRunning(): { reached: Promise<void>; onStateChange: (event: { st
   };
 }
 
+async function waitForEvent(promise: Promise<void>, timeoutMs: number): Promise<void> {
+  let timeoutHandle: ReturnType<typeof setTimeout> | undefined;
+  try {
+    await Promise.race([
+      promise,
+      new Promise<never>((_, reject) => {
+        timeoutHandle = setTimeout(
+          () => reject(new Error("Timed out waiting for the real child close event.")),
+          timeoutMs
+        );
+      })
+    ]);
+  } finally {
+    if (timeoutHandle !== undefined) clearTimeout(timeoutHandle);
+  }
+}
+
 describe("ProcessIsolatedPolicyEngine real child shutdown", () => {
   it("waits for the actual child close event before retrying cleanup and records SIGKILL", async () => {
     const killSignals: (NodeJS.Signals | undefined)[] = [];
@@ -93,7 +110,7 @@ describe("ProcessIsolatedPolicyEngine real child shutdown", () => {
       const evaluation = engine.policy.evaluate(request);
       await observer.reached;
       const stop = engine.stop();
-      await closeHeld;
+      await waitForEvent(closeHeld, 2_000);
       await expect(stop).rejects.toMatchObject({ code: "POLICY_RUNTIME_UNRESOLVED" });
       await expect(evaluation).resolves.toMatchObject({ effect: "deny" });
 
