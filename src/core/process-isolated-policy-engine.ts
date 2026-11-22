@@ -53,6 +53,8 @@ export interface ProcessIsolatedPolicyEngineOptions {
   readonly maxConcurrent?: number;
   readonly maxOldSpaceSizeMb?: number;
   readonly onStateChange?: (event: PolicyExecutionEvent) => void;
+  /** Process creation seam for deterministic lifecycle tests. */
+  readonly forkProcess?: typeof fork;
 }
 
 function deny(reason: string): PolicyDecision {
@@ -137,6 +139,7 @@ export class ProcessIsolatedPolicyEngine implements PolicyEngine {
   private readonly maxConcurrent: number;
   private readonly maxOldSpaceSizeMb: number;
   private readonly onStateChange: ((event: PolicyExecutionEvent) => void) | undefined;
+  private readonly forkProcess: typeof fork;
   private readonly active = new Map<string, ActiveExecution>();
   private shuttingDown = false;
 
@@ -148,6 +151,7 @@ export class ProcessIsolatedPolicyEngine implements PolicyEngine {
     this.maxConcurrent = options.maxConcurrent ?? DEFAULT_MAX_CONCURRENT;
     this.maxOldSpaceSizeMb = options.maxOldSpaceSizeMb ?? DEFAULT_MAX_OLD_SPACE_SIZE_MB;
     this.onStateChange = options.onStateChange;
+    this.forkProcess = options.forkProcess ?? fork;
 
     if (!Number.isSafeInteger(this.timeoutMs) || this.timeoutMs <= 0 || this.timeoutMs > MAX_TIMER_DELAY_MS ||
         !Number.isSafeInteger(this.terminationGraceMs) || this.terminationGraceMs < 0 || this.terminationGraceMs > MAX_TIMER_DELAY_MS ||
@@ -214,7 +218,7 @@ export class ProcessIsolatedPolicyEngine implements PolicyEngine {
       ? Date.now() + timeoutMs
       : Math.min(options.deadlineAt, Date.now() + this.timeoutMs);
     const runner = getChildRunnerPath();
-    const child = fork(runner.path, [this.moduleUrl], {
+    const child = this.forkProcess(runner.path, [this.moduleUrl], {
       cwd: process.cwd(),
       env: { NODE_ENV: "production" },
       execArgv: [...runner.execArgv, `--max-old-space-size=${this.maxOldSpaceSizeMb}`],
