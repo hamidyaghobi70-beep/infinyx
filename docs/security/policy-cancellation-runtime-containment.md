@@ -2,7 +2,7 @@
 
 ## Status
 
-Proposed in pull request #57 on `security/shutdown-containment-hardening`; the changes have not been merged into `integration/infinyx-core-runtime-v1`. CI run #540 (`44968920671`) passed for commit `943e9121fea1f6fec33ac9b9fbcf32798bcc7f91`, including Ubuntu, macOS, Windows, and Dependency Security Audit. The current documentation-only head is `130c1e2e2ba6de804392ccafa7a626c2ca5a3fbf`; no PR-triggered workflow run has been returned for this new commit, so its CI is pending/unverified. Neither run #540 nor the documentation update exercises a real Linux cgroup v2 broker/boundary or a Windows Job Object/native launcher, and neither proves OS-level process-tree containment. Independent governance/security review remains pending. This document does not authorize merge, release, deployment, activation of Agent Runtime, or changes to Shutdown Timeout Contract v6.2.
+Proposed in pull request #57 on `security/shutdown-containment-hardening`; the changes have not been merged into `integration/infinyx-core-runtime-v1`. CI run #540 (`44968920671`) passed for commit `943e9121fea1f6fec33ac9b9fbcf32798bcc7f91`, including Ubuntu, macOS, Windows, and Dependency Security Audit. The latest follow-up on this branch is documentation-only; no PR-triggered workflow run has yet been returned for that follow-up, so its CI is pending/unverified. Neither run #540 nor the documentation update exercises a real Linux cgroup v2 broker/boundary or a Windows Job Object/native launcher, and neither proves OS-level process-tree containment. Independent governance/security review remains pending. This document does not authorize merge, release, deployment, activation of Agent Runtime, or changes to Shutdown Timeout Contract v6.2.
 
 ## Cancellation contract
 
