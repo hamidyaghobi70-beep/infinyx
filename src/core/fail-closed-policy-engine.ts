@@ -121,6 +121,7 @@ export class FailClosedPolicyEngine implements PolicyEngine {
   private readonly activeStops = new Set<(reason: PolicyStopReason) => void>();
   /** Tracks delegate settlement independently from the caller-facing fail-closed result. */
   private readonly activeEvaluations = new Set<Promise<unknown>>();
+  private delegateShutdownPromise: Promise<void> | undefined;
 
   constructor(
     private readonly delegate: PolicyEngine,
@@ -237,7 +238,15 @@ export class FailClosedPolicyEngine implements PolicyEngine {
   async shutdown(): Promise<void> {
     this.shuttingDown = true;
     for (const stop of [...this.activeStops]) stop("RUNTIME_SHUTDOWN");
-    await this.delegate.shutdown?.();
+    if (!this.delegateShutdownPromise) {
+      const attempt = Promise.resolve().then(() => this.delegate.shutdown?.());
+      this.delegateShutdownPromise = attempt;
+      // A rejected hook may be retried; an in-flight or successful hook is never duplicated.
+      void attempt.catch(() => {
+        if (this.delegateShutdownPromise === attempt) this.delegateShutdownPromise = undefined;
+      });
+    }
+    await this.delegateShutdownPromise;
     // Do not report shutdown complete while an in-process delegate is still executing.
     // CoreEngine applies an independent deadline and exposes UNRESOLVED on timeout.
     await Promise.allSettled([...this.activeEvaluations]);
