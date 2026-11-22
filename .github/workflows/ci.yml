@@ -34,6 +34,14 @@ jobs:
         with:
           node-version: 22
           cache: npm
+      - name: Test Linux broker protocol primitives
+        if: matrix.os == 'ubuntu-latest'
+        shell: bash
+        run: |
+          set -euo pipefail
+          rustc --version
+          cargo --version
+          cargo test --manifest-path native/linux-cgroup-broker/Cargo.toml
       - name: Record runtime versions
         shell: bash
         run: |
