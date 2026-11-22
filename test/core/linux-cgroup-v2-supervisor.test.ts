@@ -438,3 +438,25 @@ describe("LinuxCgroupV2Supervisor", () => {
   });
 
 });
+  it("propagates an atomic broker subscription failure without tracking a phantom listener", async () => {
+    const listener = vi.fn();
+    const unsubscribe = vi.fn();
+    const onMessage = vi.fn()
+      .mockImplementationOnce(() => {
+        // Atomic broker contract: throwing means no registration was installed.
+        throw new Error("subscription unavailable");
+      })
+      .mockImplementationOnce(() => unsubscribe);
+    const brokerHandle = makeHandle({ onMessage });
+    const handle = await new LinuxCgroupV2Supervisor(brokerFor(brokerHandle))
+      .launchContainedRunner(launchOptions);
+
+    expect(() => handle.onMessage(listener)).toThrow("subscription unavailable");
+    expect(() => handle.onMessage(listener)).not.toThrow();
+    await handle.waitForTreeExit();
+    await handle.dispose();
+
+    expect(onMessage).toHaveBeenCalledTimes(2);
+    expect(unsubscribe).toHaveBeenCalledTimes(1);
+  });
+
