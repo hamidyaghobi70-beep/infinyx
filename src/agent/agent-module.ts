@@ -107,27 +107,32 @@ export class AgentModule implements CoreModule {
     if (!this.started || !this.operationHandle || !this.protectedOperations) {
       return { status: "rejected", taskId: "unknown", reason: "Agent module is not available." };
     }
-    let caller: ProtectedOperationCaller | undefined;
+    let providedCaller: ProtectedOperationCaller | undefined;
     try {
-      caller = this.callerProvider?.();
+      providedCaller = this.callerProvider?.();
+      if (!providedCaller) {
+        return { status: "rejected", taskId: "unknown", reason: "Trusted Agent caller is unavailable; execution denied." };
+      }
+      // Create a fresh request envelope for Core's in-memory duplicate suppression.
+      // The trusted principal provider may legitimately reuse an immutable principal object.
+      const caller: ProtectedOperationCaller = Object.freeze({
+        actorId: providedCaller.actorId,
+        ...(providedCaller.context === undefined ? {} : { context: providedCaller.context })
+      });
+      const result = await this.protectedOperations.execute(
+        this.operationHandle,
+        caller,
+        request as AgentTaskRequest
+      );
+      if (result.status === "executed") return result.value;
+      return {
+        status: "rejected",
+        taskId: "unknown",
+        reason: result.reason
+      };
     } catch {
       return { status: "rejected", taskId: "unknown", reason: "Trusted Agent caller could not be established." };
     }
-    if (!caller) {
-      return { status: "rejected", taskId: "unknown", reason: "Trusted Agent caller is unavailable; execution denied." };
-    }
-
-    const result = await this.protectedOperations.execute(
-      this.operationHandle,
-      caller,
-      request as AgentTaskRequest
-    );
-    if (result.status === "executed") return result.value;
-    return {
-      status: "rejected",
-      taskId: "unknown",
-      reason: result.reason
-    };
   }
 
   getTaskStatus(taskId: string) {
