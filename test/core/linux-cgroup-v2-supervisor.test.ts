@@ -356,7 +356,7 @@ describe("LinuxCgroupV2Supervisor", () => {
     handle.onError(() => undefined);
     await handle.waitForTreeExit();
 
-    await expect(handle.dispose()).rejects.toThrow(/boundary was released/i);
+    await expect(handle.dispose()).rejects.toThrow(/containment was released/i);
     expect(brokerHandle.releaseBoundary).toHaveBeenCalledTimes(1);
     expect(failedUnsubscribe).toHaveBeenCalledTimes(1);
     expect(successfulUnsubscribe).toHaveBeenCalledTimes(1);
