@@ -42,7 +42,7 @@ export class AgentModule implements CoreModule {
   readonly id = AGENT_MODULE_ID;
   readonly version = AGENT_MODULE_VERSION;
   private readonly runtime: AgentRuntime;
-  private readonly callerProvider?: TrustedAgentCallerProvider;
+  private readonly callerProvider: TrustedAgentCallerProvider | undefined;
   private operationHandle?: ProtectedOperationHandle<AgentTaskRequest, AgentTaskResult>;
   private protectedOperations?: ProtectedOperationPort;
   private initialized = false;
