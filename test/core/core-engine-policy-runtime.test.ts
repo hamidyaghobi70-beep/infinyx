@@ -1,5 +1,6 @@
+import { ChildProcess } from "node:child_process";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { CoreEngine } from "../../src/core/core-engine.js";
 import { ProcessIsolatedPolicyEngine } from "../../src/core/process-isolated-policy-engine.js";
 import type { PolicyRequest } from "../../src/core/contracts.js";
@@ -26,6 +27,136 @@ function observeRunning(): { reached: Promise<void>; onStateChange: (event: { st
 }
 
 describe("CoreEngine policy runtime shutdown", () => {
+  it("requires ProcessIsolatedPolicyEngine when process isolation is configured", () => {
+    expect(() => new CoreEngine({
+      requireProcessIsolation: true,
+      policy: {
+        evaluate: async () => ({ effect: "allow" as const, reason: "in-process" })
+      }
+    })).toThrow(/requires a ProcessIsolatedPolicyEngine/i);
+
+    expect(() => new CoreEngine({
+      requireProcessIsolation: true,
+      policy: new ProcessIsolatedPolicyEngine({ moduleUrl: fixtureUrl })
+    })).not.toThrow();
+  });
+
+  it("ignores evaluator-forged IPC Allow messages without the private response token", async () => {
+    const runtime = new ProcessIsolatedPolicyEngine({
+      moduleUrl: fixtureUrl,
+      timeoutMs: 80,
+      terminationGraceMs: 0,
+      killWaitMs: 1_000
+    });
+
+    const result = await runtime.evaluateDetailed({
+      ...request,
+      action: "forge-result"
+    });
+
+    expect(result).toMatchObject({
+      lifecycle: "TERMINAL",
+      outcome: "TIMED_OUT",
+      decision: {
+        effect: "deny",
+        reason: "Policy execution timed out."
+      }
+    });
+    expect(result.decision.reason).not.toContain("forged evaluator response");
+    expect(runtime.capacitySnapshot.activeCount).toBe(0);
+  });
+
+  it("denies a non-finite deadline before spawning a policy process", async () => {
+    const runtime = new ProcessIsolatedPolicyEngine({ moduleUrl: fixtureUrl });
+    await expect(runtime.evaluate(request, { deadlineAt: Number.NaN })).resolves.toEqual({
+      effect: "deny",
+      reason: "Policy deadline is invalid; access denied."
+    });
+    expect(runtime.activeExecutionCount).toBe(0);
+    expect(runtime.capacitySnapshot).toEqual({
+      activeCount: 0,
+      unresolvedCount: 0,
+      availableCapacity: 4,
+      maxConcurrent: 4
+    });
+  });
+
+  it("retains unresolved capacity until the child close event", async () => {
+    let reachedRunning!: () => void;
+    let reachedUnresolved!: () => void;
+    let reachedTerminal!: () => void;
+    const running = new Promise<void>((resolve) => { reachedRunning = resolve; });
+    const unresolved = new Promise<void>((resolve) => { reachedUnresolved = resolve; });
+    const terminal = new Promise<void>((resolve) => { reachedTerminal = resolve; });
+    const runtime = new ProcessIsolatedPolicyEngine({
+      moduleUrl: fixtureUrl,
+      timeoutMs: 2_000,
+      terminationGraceMs: 0,
+      killWaitMs: 30,
+      maxConcurrent: 1,
+      onStateChange: ({ state }) => {
+        if (state === "RUNNING") reachedRunning();
+        if (state === "UNRESOLVED") reachedUnresolved();
+        if (state === "TERMINAL") reachedTerminal();
+      }
+    });
+    const controller = new AbortController();
+    let child: ChildProcess | undefined;
+    const originalKill = ChildProcess.prototype.kill;
+    const killSpy = vi.spyOn(ChildProcess.prototype, "kill").mockImplementation(
+      function (this: ChildProcess, signal?: NodeJS.Signals | number): boolean {
+        if (signal === "SIGKILL") {
+          child = this;
+          throw new Error("simulated kill request failure");
+        }
+        return originalKill.call(this, signal);
+      }
+    );
+
+    try {
+      const evaluation = runtime.evaluateDetailed(
+        { ...request, action: "hang" },
+        { signal: controller.signal }
+      );
+      await running;
+      expect(runtime.capacitySnapshot).toEqual({
+        activeCount: 1,
+        unresolvedCount: 0,
+        availableCapacity: 0,
+        maxConcurrent: 1
+      });
+
+      controller.abort();
+      await expect(evaluation).resolves.toMatchObject({
+        lifecycle: "UNRESOLVED",
+        outcome: "UNRESOLVED",
+        runtimeStatus: "UNRESOLVED"
+      });
+      await unresolved;
+
+      expect(runtime.unresolvedExecutionCount).toBe(1);
+      expect(runtime.capacitySnapshot).toEqual({
+        activeCount: 1,
+        unresolvedCount: 1,
+        availableCapacity: 0,
+        maxConcurrent: 1
+      });
+      expect(child).toBeDefined();
+    } finally {
+      killSpy.mockRestore();
+      if (child && !child.killed) child.kill("SIGKILL");
+    }
+
+    await terminal;
+    expect(runtime.unresolvedExecutionCount).toBe(0);
+    expect(runtime.capacitySnapshot).toEqual({
+      activeCount: 0,
+      unresolvedCount: 0,
+      availableCapacity: 1,
+      maxConcurrent: 1
+    });
+  });
+
   it("terminates active policy processes before cleaning modules", async () => {
     const observer = observeRunning();
     const runtime = new ProcessIsolatedPolicyEngine({
@@ -48,6 +179,8 @@ describe("CoreEngine policy runtime shutdown", () => {
 
     expect(decision.effect).toBe("deny");
     expect(runtime.activeExecutionCount).toBe(0);
+    expect(runtime.unresolvedExecutionCount).toBe(0);
+    expect(runtime.capacitySnapshot.availableCapacity).toBe(4);
     expect(order).toEqual(["module-cleanup"]);
     expect(engine.state).toBe("stopped");
     await expect(engine.policy.evaluate({ ...request, action: "allow" }))
@@ -79,6 +212,146 @@ describe("CoreEngine policy runtime shutdown", () => {
     await engine.stop();
     expect(shutdownAttempts).toBe(2);
     expect(cleanupCalls).toBe(1);
+    expect(engine.state).toBe("stopped");
+  });
+
+  it("bounds a policy shutdown that never settles and blocks module cleanup", async () => {
+    let cleanupCalls = 0;
+    const engine = new CoreEngine({
+      policyShutdownTimeoutMs: 15,
+      policy: {
+        evaluate: async () => ({ effect: "deny" as const, reason: "test" }),
+        shutdown: () => new Promise<void>(() => undefined)
+      }
+    });
+    engine.register({
+      id: "worker",
+      version: "1.0.0",
+      stop: () => { cleanupCalls += 1; }
+    });
+    await engine.initialize();
+
+    await expect(engine.stop()).rejects.toMatchObject({
+      code: "POLICY_SHUTDOWN_TIMEOUT"
+    });
+    expect(engine.state).toBe("unresolved");
+    expect(cleanupCalls).toBe(0);
+  });
+
+  it("keeps shutdown unresolved and never runs a handler after a late Allow", async () => {
+    let release!: (decision: { effect: "allow"; reason: string }) => void;
+    let evaluatorStarted!: () => void;
+    const started = new Promise<void>((resolve) => { evaluatorStarted = resolve; });
+    let handlerCalls = 0;
+    let cleanupCalls = 0;
+    const engine = new CoreEngine({
+      policyShutdownTimeoutMs: 20,
+      policy: {
+        evaluate: () => new Promise((resolve) => {
+          evaluatorStarted();
+          release = resolve;
+        }),
+        shutdown: async () => undefined
+      }
+    });
+    const operation = engine.registerProtectedOperation({
+      id: "late-allow",
+      action: "record.write",
+      resource: "record:late-allow",
+      validateInput: (value: unknown): value is string => typeof value === "string",
+      handler: () => { handlerCalls += 1; return "executed"; }
+    });
+    engine.register({
+      id: "worker",
+      version: "1.0.0",
+      stop: () => { cleanupCalls += 1; }
+    });
+    await engine.initialize();
+    await engine.start();
+
+    const pending = engine.protectedOperations.execute(
+      operation,
+      { actorId: "late-allow-test" },
+      "input"
+    );
+    await started;
+
+    await expect(engine.stop()).rejects.toMatchObject({
+      code: "POLICY_SHUTDOWN_TIMEOUT"
+    });
+    expect(engine.state).toBe("unresolved");
+    expect(cleanupCalls).toBe(0);
+    expect(handlerCalls).toBe(0);
+
+    release({ effect: "allow", reason: "late allow after stop" });
+    await expect(pending).resolves.toMatchObject({ status: "denied" });
+    await engine.stop();
+
+    expect(handlerCalls).toBe(0);
+    expect(cleanupCalls).toBe(1);
+    expect(engine.state).toBe("stopped");
+  });
+
+  it("notifies modules immediately but defers cleanup until handlers drain", async () => {
+    let handlerStarted!: () => void;
+    const started = new Promise<void>((resolve) => { handlerStarted = resolve; });
+    let releaseHandler!: () => void;
+    let moduleShutdownSignal: AbortSignal | undefined;
+    let cancellationRequested = false;
+    let handlerSettled = false;
+    let cleanupCalls = 0;
+    let cleanupSawSettledHandler = false;
+    const engine = new CoreEngine({
+      policy: {
+        evaluate: async () => ({ effect: "allow" as const, reason: "test allow" })
+      }
+    });
+    const operation = engine.registerProtectedOperation({
+      id: "shutdown-order",
+      action: "record.read",
+      resource: "record:shutdown-order",
+      validateInput: (value: unknown): value is string => typeof value === "string",
+      handler: (_input, context) => new Promise<string>((resolve) => {
+        handlerStarted();
+        releaseHandler = () => {
+          handlerSettled = true;
+          resolve("drained");
+        };
+        context.signal.addEventListener("abort", () => {
+          cancellationRequested = true;
+        }, { once: true });
+      })
+    });
+    engine.register({
+      id: "worker",
+      version: "1.0.0",
+      initialize: (context) => { moduleShutdownSignal = context.shutdownSignal; },
+      stop: () => {
+        cleanupCalls += 1;
+        cleanupSawSettledHandler = handlerSettled;
+      }
+    });
+    await engine.initialize();
+    await engine.start();
+
+    const pending = engine.protectedOperations.execute(
+      operation,
+      { actorId: "shutdown-order-test" },
+      "input"
+    );
+    await started;
+    const stopping = engine.stop();
+
+    expect(moduleShutdownSignal?.aborted).toBe(true);
+    expect(cancellationRequested).toBe(true);
+    expect(cleanupCalls).toBe(0);
+
+    releaseHandler();
+    await expect(pending).resolves.toMatchObject({ status: "executed", value: "drained" });
+    await stopping;
+
+    expect(cleanupCalls).toBe(1);
+    expect(cleanupSawSettledHandler).toBe(true);
     expect(engine.state).toBe("stopped");
   });
 

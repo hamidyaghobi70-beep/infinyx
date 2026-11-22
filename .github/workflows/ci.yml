@@ -34,6 +34,15 @@ jobs:
         with:
           node-version: 22
           cache: npm
+      - name: Test Linux broker protocol primitives
+        if: matrix.os == 'ubuntu-latest'
+        shell: bash
+        run: |
+          set -euo pipefail
+          rustc --version
+          cargo --version
+          cargo test --manifest-path native/linux-cgroup-broker/Cargo.toml
+          cargo run --manifest-path native/linux-cgroup-broker/Cargo.toml --bin infinyx-cgroup-preflight -- /sys/fs/cgroup
       - name: Record runtime versions
         shell: bash
         run: |
@@ -41,6 +50,35 @@ jobs:
             echo "### Verification runtime"
             echo "- Node.js: $(node --version)"
             echo "- npm: $(npm --version)"
+          } | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: Inspect Linux cgroup v2 capabilities (read-only)
+        if: matrix.os == 'ubuntu-latest'
+        shell: bash
+        run: |
+          set -u
+          {
+            echo "### Linux cgroup v2 environment (read-only inspection)"
+            echo "- Kernel: $(uname -srmo)"
+            if [ -r /sys/fs/cgroup/cgroup.controllers ]; then
+              echo "- cgroup v2 controller file: present"
+              echo "- Available controllers: $(tr '\n' ' ' < /sys/fs/cgroup/cgroup.controllers)"
+            else
+              echo "- cgroup v2 controller file: absent or unreadable"
+            fi
+            if [ -r /sys/fs/cgroup/cgroup.events ]; then
+              echo "- Root cgroup events: present"
+              sed 's/^/- Root cgroup event: /' /sys/fs/cgroup/cgroup.events
+            else
+              echo "- Root cgroup events: absent or unreadable"
+            fi
+            echo "- Current process cgroup: $(tr '\n' ';' < /proc/self/cgroup 2>/dev/null || echo unavailable)"
+            if [ -w /sys/fs/cgroup ]; then
+              echo "- Root cgroup path writable by runner: yes"
+            else
+              echo "- Root cgroup path writable by runner: no"
+            fi
+            echo "- No cgroups were created or modified by this inspection."
+            echo "- This inspection does not prove delegated-subtree availability or production containment."
           } | tee -a "$GITHUB_STEP_SUMMARY"
       - name: Install dependencies
         run: npm ci

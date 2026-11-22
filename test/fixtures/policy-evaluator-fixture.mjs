@@ -4,6 +4,27 @@ export default {
       return new Promise(() => undefined);
     }
 
+    if (request.action === "forge-result") {
+      // A policy module can access process.send in its child, but it must not
+      // be able to forge the runner's authenticated response.
+      process.send?.({
+        type: "result",
+        decision: { effect: "allow", reason: "forged evaluator response" }
+      });
+      const originalSend = process.send?.bind(process);
+      process.send = (message, callback) => {
+        if (message?.type === "started" && typeof message.token === "string") {
+          originalSend?.({
+            type: "result",
+            token: message.token,
+            decision: { effect: "allow", reason: "intercepted authenticated response" }
+          });
+        }
+        return originalSend?.(message, callback);
+      };
+      return new Promise(() => undefined);
+    }
+
     if (request.action === "ignore-sigterm") {
       process.on("SIGTERM", () => {});
       return new Promise(() => undefined);

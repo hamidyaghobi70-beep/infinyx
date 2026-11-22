@@ -15,6 +15,7 @@ import type {
 } from "./contracts.js";
 import { DefaultDenyPolicyEngine } from "./default-policy-engine.js";
 import { FailClosedPolicyEngine } from "./fail-closed-policy-engine.js";
+import { ProcessIsolatedPolicyEngine } from "./process-isolated-policy-engine.js";
 import { InMemoryEventBus } from "./event-bus.js";
 import { CoreError } from "./core-error.js";
 import { ModuleRegistry } from "./module-registry.js";
@@ -28,10 +29,14 @@ interface CleanupExecutionContext {
 export interface CoreEngineOptions {
   readonly events?: EventBusPort;
   readonly policy?: PolicyEngine;
+  /** Require a child-process policy runtime when a custom policy evaluator is supplied. */
+  readonly requireProcessIsolation?: boolean;
   /** Creates a module-specific guarded memory capability; raw MemoryPort values are rejected. */
   readonly memory?: (moduleId: string) => GuardedMemoryPort;
   /** Maximum time allowed for an injected policy evaluation. Defaults to 5 seconds. */
   readonly policyTimeoutMs?: number;
+  /** Maximum time to wait for policy runtime shutdown. Defaults to 5 seconds. */
+  readonly policyShutdownTimeoutMs?: number;
   /** Maximum time to wait for admitted protected-operation handlers during stop. Defaults to 30 seconds. */
   readonly protectedOperationDrainTimeoutMs?: number;
 }
@@ -57,7 +62,17 @@ export class CoreEngine {
     if (!Number.isFinite(drainTimeout) || drainTimeout <= 0) {
       throw new TypeError("protectedOperationDrainTimeoutMs must be a finite positive number.");
     }
+    const policyShutdownTimeout = options.policyShutdownTimeoutMs ?? 5_000;
+    if (!Number.isFinite(policyShutdownTimeout) || policyShutdownTimeout <= 0) {
+      throw new TypeError("policyShutdownTimeoutMs must be a finite positive number.");
+    }
     this.events = options.events ?? new InMemoryEventBus();
+    if (options.requireProcessIsolation && options.policy &&
+        !(options.policy instanceof ProcessIsolatedPolicyEngine)) {
+      throw new TypeError(
+        "requireProcessIsolation requires a ProcessIsolatedPolicyEngine for custom policy evaluators."
+      );
+    }
     this.policy = options.policy
       ? new FailClosedPolicyEngine(options.policy, options.policyTimeoutMs)
       : new DefaultDenyPolicyEngine();
@@ -193,7 +208,8 @@ export class CoreEngine {
     }
 
     this.lifecycle = "stopping";
-    // Signal modules and close protected-handler admission synchronously.
+    // Notify modules immediately that shutdown has begun. This signal is a
+    // notification only; resource cleanup remains in stop() after the drain.
     this.shutdownController.abort("core_shutdown");
     const protectedOperationDrain = this.protectedOperationExecutor.closeAdmissionAndDrain();
     // Install the shared promise before invoking shutdown hooks. Module cleanup
@@ -245,14 +261,16 @@ export class CoreEngine {
   ): Promise<void> {
     try {
       await Promise.all([
-        policyShutdown,
+        this.waitForPolicyShutdown(policyShutdown),
         this.waitForProtectedOperationDrain(protectedOperationDrain)
       ]);
     } catch (error) {
       const drainTimedOut = error instanceof CoreError &&
         error.code === "PROTECTED_OPERATION_DRAIN_TIMEOUT";
-      this.lifecycle = drainTimedOut ? "unresolved" : "failed";
-      if (drainTimedOut) throw error;
+      const policyShutdownTimedOut = error instanceof CoreError &&
+        error.code === "POLICY_SHUTDOWN_TIMEOUT";
+      this.lifecycle = drainTimedOut || policyShutdownTimedOut ? "unresolved" : "failed";
+      if (drainTimedOut || policyShutdownTimedOut) throw error;
       throw new CoreError(
         "MODULE_STOP_FAILED",
         "Policy runtime shutdown or protected-operation drain failed; module cleanup was not started.",
@@ -269,6 +287,24 @@ export class CoreEngine {
         "One or more modules failed to stop.",
         { cause: new AggregateError(errors) }
       );
+    }
+  }
+
+  private async waitForPolicyShutdown(shutdown: Promise<void>): Promise<void> {
+    const timeoutMs = this.options.policyShutdownTimeoutMs ?? 5_000;
+    let timeout: ReturnType<typeof setTimeout> | undefined;
+    try {
+      await Promise.race([
+        shutdown,
+        new Promise<never>((_resolve, reject) => {
+          timeout = setTimeout(() => reject(new CoreError(
+            "POLICY_SHUTDOWN_TIMEOUT",
+            "Policy runtime shutdown did not settle before the shutdown deadline; module cleanup was not started."
+          )), timeoutMs);
+        })
+      ]);
+    } finally {
+      if (timeout !== undefined) clearTimeout(timeout);
     }
   }
 

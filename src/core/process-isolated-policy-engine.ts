@@ -87,10 +87,17 @@ function normalizeModuleUrl(value: string): string {
   } catch {
     throw new TypeError("Policy evaluator module must be an absolute path or file URL.");
   }
-  if (parsed.protocol !== "file:") {
-    throw new TypeError("Policy evaluator module must use a file URL.");
+  if (parsed.protocol !== "file:" || parsed.hostname.length > 0 ||
+      parsed.username.length > 0 || parsed.password.length > 0 ||
+      parsed.port.length > 0 || parsed.search.length > 0 || parsed.hash.length > 0) {
+    throw new TypeError("Policy evaluator module must be a local file URL without credentials, query, or fragment.");
   }
-  return parsed.href;
+  try {
+    // Validate and canonicalize the URL using Node's platform-aware file URL rules.
+    return pathToFileURL(fileURLToPath(parsed)).href;
+  } catch {
+    throw new TypeError("Policy evaluator module must identify a valid local file path.");
+  }
 }
 
 function reasonFromSignal(signal: AbortSignal, fallback: PolicyStopReason): PolicyStopReason {
@@ -136,6 +143,10 @@ export class ProcessIsolatedPolicyEngine implements PolicyEngine {
   private readonly maxOldSpaceSizeMb: number;
   private readonly onStateChange: ((event: PolicyExecutionEvent) => void) | undefined;
   private readonly active = new Map<string, ActiveExecution>();
+  // An unresolved execution remains active until the child emits close. Track
+  // it separately so operators can distinguish occupied capacity from
+  // confirmed termination without prematurely freeing a slot.
+  private readonly unresolvedExecutions = new Set<string>();
   private shuttingDown = false;
 
   constructor(options: ProcessIsolatedPolicyEngineOptions) {
@@ -158,6 +169,26 @@ export class ProcessIsolatedPolicyEngine implements PolicyEngine {
 
   get activeExecutionCount(): number {
     return this.active.size;
+  }
+
+  /** Number of child processes whose termination has not been confirmed. */
+  get unresolvedExecutionCount(): number {
+    return this.unresolvedExecutions.size;
+  }
+
+  /** Capacity snapshot; unresolved children remain included in activeCount. */
+  get capacitySnapshot(): Readonly<{
+    activeCount: number;
+    unresolvedCount: number;
+    availableCapacity: number;
+    maxConcurrent: number;
+  }> {
+    return Object.freeze({
+      activeCount: this.active.size,
+      unresolvedCount: this.unresolvedExecutions.size,
+      availableCapacity: Math.max(0, this.maxConcurrent - this.active.size),
+      maxConcurrent: this.maxConcurrent
+    });
   }
 
   async evaluate(
@@ -193,6 +224,11 @@ export class ProcessIsolatedPolicyEngine implements PolicyEngine {
         "NOT_STARTED", "NOT_REQUIRED", "PARENT_CANCELLED");
     }
 
+    if (options?.deadlineAt !== undefined && !Number.isFinite(options.deadlineAt)) {
+      return makeRecord("TERMINAL", "DENIED",
+        deny("Policy deadline is invalid; access denied."),
+        "NOT_STARTED", "NOT_REQUIRED");
+    }
     const deadlineRemaining = options?.deadlineAt === undefined
       ? this.timeoutMs
       : options.deadlineAt - Date.now();
@@ -207,6 +243,9 @@ export class ProcessIsolatedPolicyEngine implements PolicyEngine {
     }
 
     const executionId = randomUUID();
+    // The evaluator shares the child IPC channel, so accept responses only
+    // when they carry this per-execution capability token.
+    const ipcToken = randomUUID();
     const timeoutMs = Math.min(this.timeoutMs, deadlineRemaining);
     const deadlineAt = options?.deadlineAt === undefined
       ? Date.now() + timeoutMs
@@ -271,6 +310,10 @@ export class ProcessIsolatedPolicyEngine implements PolicyEngine {
       resolved = true;
       clearTimers();
       removeAbortListeners();
+      // Keep this execution in the capacity map until the child emits close.
+      // UNRESOLVED means termination was not confirmed, so freeing the slot
+      // here could permit unbounded replacement processes.
+      this.unresolvedExecutions.add(executionId);
       notify("UNRESOLVED");
       resolveCompletion(makeRecord(
         "UNRESOLVED",
@@ -282,13 +325,22 @@ export class ProcessIsolatedPolicyEngine implements PolicyEngine {
       ));
     };
 
+    const requestHardKill = (): void => {
+      if (closed || resolved) return;
+      try {
+        child.kill("SIGKILL");
+      } catch {
+        // A failed kill request is not evidence of process termination.
+      } finally {
+        if (!closed && !resolved && killWaitTimer === undefined) {
+          killWaitTimer = setTimeout(finishUnresolved, this.killWaitMs);
+        }
+      }
+    };
+
     const scheduleHardTermination = (): void => {
       if (graceTimer !== undefined || closed || resolved) return;
-      graceTimer = setTimeout(() => {
-        if (closed || resolved) return;
-        child.kill("SIGKILL");
-        killWaitTimer = setTimeout(finishUnresolved, this.killWaitMs);
-      }, this.terminationGraceMs);
+      graceTimer = setTimeout(requestHardKill, this.terminationGraceMs);
     };
 
     const requestStop = (reason: PolicyStopReason): void => {
@@ -339,12 +391,11 @@ export class ProcessIsolatedPolicyEngine implements PolicyEngine {
       if (candidateFrozen || this.shuttingDown) {
         if (!candidateFrozen) requestStop("RUNTIME_SHUTDOWN");
         if (graceTimer !== undefined) clearTimeout(graceTimer);
-        child.kill("SIGKILL");
-        killWaitTimer = setTimeout(finishUnresolved, this.killWaitMs);
+        requestHardKill();
         return;
       }
       try {
-        child.send({ type: "evaluate", request: input, deadlineAt });
+        child.send({ type: "evaluate", token: ipcToken, request: input, deadlineAt });
       } catch {
         freezeCandidate({
           outcome: "FAILED",
@@ -356,6 +407,7 @@ export class ProcessIsolatedPolicyEngine implements PolicyEngine {
     child.on("message", (raw: unknown) => {
       if (typeof raw !== "object" || raw === null || Array.isArray(raw)) return;
       const message = raw as Record<string, unknown>;
+      if (message.token !== ipcToken) return;
       if (message.type === "started") {
         if (!candidateFrozen && !resolved) notify("RUNNING");
         return;
@@ -395,7 +447,13 @@ export class ProcessIsolatedPolicyEngine implements PolicyEngine {
       clearTimers();
       removeAbortListeners();
       this.active.delete(executionId);
-      if (resolved) return;
+      this.unresolvedExecutions.delete(executionId);
+      if (resolved) {
+        // An UNRESOLVED result may already have been returned to the caller,
+        // but close is the authoritative signal that releases its capacity.
+        notify("TERMINAL");
+        return;
+      }
 
       if (!candidateFrozen || !candidate) {
         candidateFrozen = true;

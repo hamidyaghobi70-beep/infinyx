@@ -2,6 +2,7 @@ import type { PolicyStopReason } from "./contracts.js";
 
 interface EvaluateMessage {
   readonly type: "evaluate";
+  readonly token: string;
   readonly request: unknown;
   readonly deadlineAt?: number;
 }
@@ -23,25 +24,33 @@ interface PolicyEvaluator {
 let controller: AbortController | undefined;
 let evaluationStarted = false;
 let finalMessageSent = false;
+let responseToken: string | undefined;
+// Capture the IPC capability before loading evaluator-controlled code. The
+// evaluator can mutate process.send, but cannot intercept this closure-held sender.
+const sendIpc = process.send?.bind(process);
+const disconnectIpc = process.disconnect.bind(process);
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-function sendProgress(message: unknown): void {
-  if (process.connected && process.send) process.send(message);
+function sendProgress(message: Record<string, unknown>): void {
+  if (process.connected && sendIpc && responseToken) {
+    sendIpc({ ...message, token: responseToken });
+  }
 }
 
 function sendFinal(message: unknown): void {
   if (finalMessageSent) return;
   finalMessageSent = true;
-  if (!process.connected || !process.send) return;
-  process.send(message, () => {
-    if (process.connected) process.disconnect();
+  if (!process.connected || !sendIpc || !responseToken) return;
+  sendIpc({ ...(message as Record<string, unknown>), token: responseToken }, () => {
+    if (process.connected) disconnectIpc();
   });
 }
 
 async function execute(message: EvaluateMessage): Promise<void> {
+  responseToken = message.token;
   controller = new AbortController();
   try {
     const moduleSpecifier = process.argv[2];
@@ -90,7 +99,8 @@ process.on("message", (raw: unknown) => {
     return;
   }
 
-  if (message.type === "evaluate" && !evaluationStarted) {
+  if (message.type === "evaluate" && !evaluationStarted &&
+      typeof message.token === "string" && message.token.length >= 32) {
     evaluationStarted = true;
     void execute(message);
   }
