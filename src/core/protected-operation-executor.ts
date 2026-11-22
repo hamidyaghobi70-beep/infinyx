@@ -1,5 +1,7 @@
+import { randomUUID } from "node:crypto";
 import type {
   PolicyEngine,
+  PolicyEvaluationOptions,
   PolicyRequest,
   ProtectedOperationCaller,
   ProtectedOperationContext,
@@ -85,11 +87,32 @@ export class ProtectedOperationExecutor implements ProtectedOperationPort {
   // This is in-memory, per-process object-identity duplicate suppression only.
   // It is not durable replay protection and does not provide exactly-once semantics.
   private readonly usedRequests = new WeakMap<object, WeakSet<object>>();
+  private accepting = true;
+  private readonly activeHandlers = new Map<string, {
+    readonly controller: AbortController;
+    readonly settled: Promise<void>;
+  }>();
 
   constructor(
     private readonly policy: PolicyEngine,
     private readonly isCoreReady: () => boolean
   ) {}
+
+  /**
+   * Close handler admission synchronously, request cooperative cancellation,
+   * and wait until every admitted handler has settled before module cleanup.
+   */
+  closeAdmissionAndDrain(): Promise<void> {
+    this.accepting = false;
+    for (const active of this.activeHandlers.values()) active.controller.abort("core_shutdown");
+    return this.drainActiveHandlers();
+  }
+
+  private async drainActiveHandlers(): Promise<void> {
+    while (this.activeHandlers.size > 0) {
+      await Promise.all([...this.activeHandlers.values()].map((active) => active.settled));
+    }
+  }
 
   register<TInput, TOutput>(definition: ProtectedOperationDefinition<TInput, TOutput>): ProtectedOperationHandle<TInput, TOutput> {
     if (!definition || typeof definition.id !== "string" || !definition.id.trim() ||
@@ -113,9 +136,9 @@ export class ProtectedOperationExecutor implements ProtectedOperationPort {
     operation: ProtectedOperationHandle<TInput, TOutput>,
     caller: ProtectedOperationCaller,
     input: TInput,
-    options?: { readonly signal?: AbortSignal }
+    options?: PolicyEvaluationOptions
   ): Promise<ProtectedOperationResult<TOutput>> {
-    if (!this.isCoreReady()) return this.denied("Core Engine is not running; protected operation denied.");
+    if (!this.accepting || !this.isCoreReady()) return this.denied("Core Engine is not running; protected operation denied.");
     const registration = operation && typeof operation === "object"
       ? this.registrations.get(operation as object) as RegisteredOperation<TInput, TOutput> | undefined
       : undefined;
@@ -150,7 +173,10 @@ export class ProtectedOperationExecutor implements ProtectedOperationPort {
     }
 
     const callerSignal = options?.signal;
-    if (callerSignal?.aborted) return this.denied("Protected operation was cancelled before authorization.");
+    const parentSignal = options?.parentSignal;
+    if (callerSignal?.aborted || parentSignal?.aborted) {
+      return this.denied("Protected operation was cancelled before authorization.");
+    }
 
     let used = this.usedRequests.get(operation as object);
     if (!used) { used = new WeakSet<object>(); this.usedRequests.set(operation as object, used); }
@@ -160,10 +186,16 @@ export class ProtectedOperationExecutor implements ProtectedOperationPort {
 
     const operationController = new AbortController();
     let callerAbortListener: (() => void) | undefined;
+    let parentAbortListener: (() => void) | undefined;
     if (callerSignal) {
       callerAbortListener = () => operationController.abort();
       callerSignal.addEventListener("abort", callerAbortListener, { once: true });
       if (callerSignal.aborted) operationController.abort();
+    }
+    if (parentSignal) {
+      parentAbortListener = () => operationController.abort();
+      parentSignal.addEventListener("abort", parentAbortListener, { once: true });
+      if (parentSignal.aborted) operationController.abort();
     }
 
     try {
@@ -172,7 +204,10 @@ export class ProtectedOperationExecutor implements ProtectedOperationPort {
 
       let decision: unknown;
       try {
-        decision = await this.policy.evaluate(policyRequestCandidate, { signal: operationController.signal });
+        decision = await this.policy.evaluate(policyRequestCandidate, {
+          signal: operationController.signal,
+          ...(options?.deadlineAt === undefined ? {} : { deadlineAt: options.deadlineAt })
+        });
       } catch {
         return this.denied("Policy evaluation failed; protected operation denied.");
       }
@@ -183,16 +218,27 @@ export class ProtectedOperationExecutor implements ProtectedOperationPort {
       if (operationController.signal.aborted) return this.denied("Protected operation was cancelled during authorization.");
       if (!isValidPolicyDecision(decision)) return this.denied("Policy returned an invalid decision; protected operation denied.");
       if (decision.effect !== "allow") return this.denied(decision.reason);
-      if (!this.isCoreReady()) return this.denied("Core Engine is stopping; protected operation denied.");
+      if (!this.accepting || !this.isCoreReady()) return this.denied("Core Engine is stopping; protected operation denied.");
 
-      const value = await registration.handler(input, Object.freeze({
-        operationId: registration.id, signal: operationController.signal
-      }));
-      return { status: "executed", value };
+      // Admission and registration are synchronous with respect to stop().
+      const invocationId = randomUUID();
+      let settleInvocation!: () => void;
+      const settled = new Promise<void>((resolve) => { settleInvocation = resolve; });
+      this.activeHandlers.set(invocationId, { controller: operationController, settled });
+      try {
+        const value = await registration.handler(input, Object.freeze({
+          operationId: invocationId, signal: operationController.signal
+        }));
+        return { status: "executed", value };
+      } finally {
+        this.activeHandlers.delete(invocationId);
+        settleInvocation();
+      }
     } catch {
       return { status: "failed", reason: "Protected operation handler failed." };
     } finally {
       if (callerSignal && callerAbortListener) callerSignal.removeEventListener("abort", callerAbortListener);
+      if (parentSignal && parentAbortListener) parentSignal.removeEventListener("abort", parentAbortListener);
     }
   }
 

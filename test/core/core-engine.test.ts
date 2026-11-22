@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { CoreEngine } from "../../src/core/core-engine.js";
 
 describe("CoreEngine", () => {
@@ -221,6 +221,83 @@ describe("CoreEngine", () => {
     expect(engine.state).toBe("stopped");
   });
 
+  it("marks shutdown unresolved on handler drain timeout and retries after the handler settles", async () => {
+    const engine = new CoreEngine({ protectedOperationDrainTimeoutMs: 5, policy: { evaluate: async () => ({ effect: "allow" as const, reason: "test" }) } });
+    let release!: () => void;
+    let handlerStarted!: () => void;
+    const started = new Promise<void>((resolve) => { handlerStarted = resolve; });
+    const cleanup = vi.fn();
+    const operation = engine.registerProtectedOperation({
+      id: "drain-timeout", action: "record.write", resource: "record:timeout",
+      validateInput: (value: unknown): value is string => typeof value === "string",
+      handler: async () => { handlerStarted(); await new Promise<void>((resolve) => { release = resolve; }); return "done"; }
+    });
+    engine.register({ id: "cleanup-probe", version: "1.0.0", stop: cleanup });
+    await engine.initialize();
+    await engine.start();
+    const pending = engine.protectedOperations.execute(operation, { actorId: "timeout-test" }, "input");
+    await started;
+
+    await expect(engine.stop()).rejects.toMatchObject({ code: "PROTECTED_OPERATION_DRAIN_TIMEOUT" });
+    expect(engine.state).toBe("unresolved");
+    expect(cleanup).not.toHaveBeenCalled();
+
+    release();
+    expect(await pending).toEqual({ status: "executed", value: "done" });
+    await engine.stop();
+    expect(cleanup).toHaveBeenCalledTimes(1);
+    expect(engine.state).toBe("stopped");
+  });
+
+  it("drains concurrent handlers independently and keeps cleanup blocked until all settle", async () => {
+    const engine = new CoreEngine({
+      protectedOperationDrainTimeoutMs: 20,
+      policy: { evaluate: async () => ({ effect: "allow" as const, reason: "test" }) }
+    });
+    const started: Array<() => void> = [];
+    const gates: Array<() => void> = [];
+    const startPromises = [0, 1].map(() => new Promise<void>((resolve) => { started.push(resolve); }));
+    const cleanup = vi.fn();
+    const handles = [0, 1].map((index) => engine.registerProtectedOperation({
+      id: `concurrent-${index}`,
+      action: "record.write",
+      resource: `record:${index}`,
+      validateInput: (value: unknown): value is string => typeof value === "string",
+      handler: async () => {
+        started[index]();
+        await new Promise<void>((resolve) => { gates[index] = resolve; });
+        return index;
+      }
+    }));
+    engine.register({ id: "cleanup-probe", version: "1.0.0", stop: cleanup });
+
+    await engine.initialize();
+    await engine.start();
+    const executions = handles.map((handle, index) => engine.protectedOperations.execute(
+      handle,
+      { actorId: `concurrent-caller-${index}` },
+      "input"
+    ));
+    await Promise.all(startPromises);
+
+    gates[0]();
+    expect(await executions[0]).toEqual({ status: "executed", value: 0 });
+    expect(cleanup).not.toHaveBeenCalled();
+
+    await expect(engine.stop()).rejects.toMatchObject({
+      code: "PROTECTED_OPERATION_DRAIN_TIMEOUT"
+    });
+    expect(engine.state).toBe("unresolved");
+    expect(cleanup).not.toHaveBeenCalled();
+
+    gates[1]();
+    expect(await executions[1]).toEqual({ status: "executed", value: 1 });
+    await engine.stop();
+
+    expect(cleanup).toHaveBeenCalledTimes(1);
+    expect(engine.state).toBe("stopped");
+  });
+
   it("does not authorize actions without an explicit policy", async () => {
     const engine = new CoreEngine();
     const decision = await engine.policy.evaluate({
@@ -238,5 +315,116 @@ describe("CoreEngine", () => {
 
     expect(() => engine.register({ id: "late", version: "1.0.0" }))
       .toThrow(/only be registered before initialization/);
+  });
+});
+
+
+describe("multi-level dependency cleanup retry", () => {
+  it("preserves dependencies after a leaf cleanup failure and retries in dependent-first order", async () => {
+    const engine = new CoreEngine();
+    const calls: string[] = [];
+    let leafAttempts = 0;
+
+    engine.register({
+      id: "foundation",
+      version: "1.0.0",
+      stop: () => { calls.push("foundation"); }
+    });
+    engine.register({
+      id: "service",
+      version: "1.0.0",
+      dependencies: ["foundation"],
+      stop: () => { calls.push("service"); }
+    });
+    engine.register({
+      id: "worker",
+      version: "1.0.0",
+      dependencies: ["service"],
+      stop: () => {
+        leafAttempts += 1;
+        calls.push("worker:" + leafAttempts);
+        if (leafAttempts === 1) throw new Error("temporary leaf cleanup failure");
+      }
+    });
+
+    await engine.initialize();
+    await expect(engine.stop()).rejects.toThrow(/failed to stop/i);
+
+    // A failed dependent blocks cleanup of every dependency below it.
+    expect(calls).toEqual(["worker:1"]);
+    expect(engine.getModuleStates().get("foundation")).toBe("initialized");
+    expect(engine.getModuleStates().get("service")).toBe("initialized");
+    expect(engine.getModuleStates().get("worker")).toBe("failed");
+
+    // Retry starts at the failed leaf, then proceeds toward its dependencies.
+    await engine.stop();
+    expect(calls).toEqual(["worker:1", "worker:2", "service", "foundation"]);
+    expect(engine.getModuleStates().get("worker")).toBe("stopped");
+    expect(engine.getModuleStates().get("service")).toBe("stopped");
+    expect(engine.getModuleStates().get("foundation")).toBe("stopped");
+    expect(engine.state).toBe("stopped");
+
+    // A further stop is idempotent; successful cleanup hooks never rerun.
+    await engine.stop();
+    expect(calls).toEqual(["worker:1", "worker:2", "service", "foundation"]);
+  });
+});
+
+
+describe("CoreEngine guarded memory composition", () => {
+  it("rejects a raw MemoryPort supplied as a module memory capability", async () => {
+    const { InMemoryMemoryStore } = await import("../../src/core/in-memory-memory-store.js");
+    const raw = new InMemoryMemoryStore();
+    const engine = new CoreEngine({
+      memory: (() => raw) as unknown as (moduleId: string) => import("../../src/core/guarded-memory-port.js").GuardedMemoryPort
+    });
+    engine.register({
+      id: "worker",
+      version: "1.0.0",
+      initialize: () => undefined
+    });
+
+    await expect(engine.initialize()).rejects.toMatchObject({
+      code: "MODULE_INITIALIZATION_FAILED",
+      cause: expect.objectContaining({ code: "INVALID_MEMORY_CAPABILITY" })
+    });
+  });
+
+  it("creates and reuses a guarded memory capability bound to each module", async () => {
+    const { GuardedMemoryPort } = await import("../../src/core/guarded-memory-port.js");
+    const { InMemoryMemoryStore } = await import("../../src/core/in-memory-memory-store.js");
+    const { DefaultDenyPolicyEngine } = await import("../../src/core/default-policy-engine.js");
+    const store = new InMemoryMemoryStore();
+    const audit = { publishDecision: async () => true, publishFailure: async () => undefined };
+    const issued: string[] = [];
+    const engine = new CoreEngine({
+      memory: (moduleId) => {
+        issued.push(moduleId);
+        return new GuardedMemoryPort({
+          store,
+          policy: new DefaultDenyPolicyEngine(),
+          audit,
+          scope: { tenantId: "tenant", actorId: "actor", moduleId }
+        });
+      }
+    });
+    let first: unknown;
+    let second: unknown;
+    engine.register({
+      id: "alpha",
+      version: "1.0.0",
+      initialize: (context) => { first = context.memory; }
+    });
+    engine.register({
+      id: "beta",
+      version: "1.0.0",
+      initialize: (context) => { second = context.memory; }
+    });
+
+    await engine.initialize();
+    expect(issued).toEqual(["alpha", "beta"]);
+    expect(first).toBeInstanceOf(GuardedMemoryPort);
+    expect(second).toBeInstanceOf(GuardedMemoryPort);
+    expect(first).not.toBe(second);
   });
 });

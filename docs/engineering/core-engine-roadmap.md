@@ -141,6 +141,20 @@ Before implementing an adapter, document and approve:
 
 Implement storage behind the existing port only after these controls have testable acceptance criteria.
 
+### Stage 4 progress (proposal, pending independent review)
+
+- Controls and acceptance criteria are documented in
+  [`docs/security/memory-boundary-stage4.md`](../security/memory-boundary-stage4.md).
+- Implemented behind the unchanged `MemoryPort`: `GuardedMemoryPort` (tenant isolation,
+  default-deny policy, fail-closed audit, input validation, no aliasing) and a non-durable
+  `InMemoryMemoryStore` reference store, with regression tests in
+  `test/core/guarded-memory-port.test.ts`.
+- **No persistence adapter exists.** Encryption, key management, retention/backup, durable
+  audit, classification and migration remain open and need owner decisions listed in that
+  document.
+- Agent and Tool Execution remain out of scope and disabled. No merge, release or deployment
+  is authorized by this update.
+
 ## Stage 5 — identity, agent runtime, and tool execution
 
 These capabilities are not enabled by the reviewed Core Engine v1 scope.

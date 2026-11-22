@@ -20,7 +20,7 @@
 - SSRF-safe outbound networking, URL allowlists, and egress controls.
 - Agent/tool authorization, sandboxing, prompt-injection defenses, and human approval workflow.
 - Durable audit storage, security monitoring, backup/restore, and incident response.
-- Dependency lockfile, automated dependency review, and vulnerability scanning.
+- A committed npm lockfile and CI dependency audit are present. CI runs `npm audit --audit-level=high`; lower-severity advisories are not a failing threshold. Automated dependency-update review is not configured.
 
 ## Operational restrictions
 

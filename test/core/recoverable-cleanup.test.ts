@@ -185,8 +185,9 @@ describe("Recoverable Cleanup (Revision v5)", () => {
 
     await expect(engine.initialize()).rejects.toThrow(/rollback failed/i);
     expect(engine.getModuleStates().get("broken")).toBe("failed");
-    expect(engine.getModuleStates().get("platform")).toBe("stopped");
-    expect(dependencyStops).toBe(1);
+    // A dependency must remain live while the dependent's rollback cleanup failed.
+    expect(engine.getModuleStates().get("platform")).toBe("initialized");
+    expect(dependencyStops).toBe(0);
     expect(brokenStops).toBe(1);
 
     await engine.stop();
@@ -205,6 +206,53 @@ describe("Recoverable Cleanup (Revision v5)", () => {
     await engine.stop();
 
     expect(stop).toHaveBeenCalledOnce();
+    expect(engine.state).toBe("stopped");
+  });
+});
+
+
+describe("Dependency cleanup protection", () => {
+  it("retains dependencies after a dependent cleanup failure and retries in dependency order", async () => {
+    const engine = new CoreEngine();
+    const calls: string[] = [];
+    let attempts = 0;
+    engine.register({ id: "database", version: "1.0.0", stop: () => { calls.push("database"); } });
+    engine.register({
+      id: "api", version: "1.0.0", dependencies: ["database"],
+      stop: () => { calls.push("api"); attempts += 1; if (attempts === 1) throw new Error("api cleanup failed"); }
+    });
+    await engine.initialize();
+    await expect(engine.stop()).rejects.toThrow(/failed to stop/i);
+    expect(calls).toEqual(["api"]);
+    expect(engine.getModuleStates().get("database")).toBe("initialized");
+    expect(engine.getModuleStates().get("api")).toBe("failed");
+    await engine.stop();
+    expect(calls).toEqual(["api", "api", "database"]);
+    expect(engine.state).toBe("stopped");
+  });
+
+  it("keeps a dependency alive while dependent cleanup is pending after the caller deadline", async () => {
+    const engine = new CoreEngine();
+    const calls: string[] = [];
+    const gate = deferred();
+    engine.register({ id: "database", version: "1.0.0", stop: () => { calls.push("database"); } });
+    engine.register({
+      id: "api", version: "1.0.0", dependencies: ["database"],
+      stop: async () => { calls.push("api:start"); await gate.promise; calls.push("api:end"); }
+    });
+    await engine.initialize();
+    const stopping = engine.stop();
+    await vi.waitFor(() => expect(calls).toEqual(["api:start"]));
+    let callerDeadlineElapsed = false;
+    await Promise.race([
+      stopping,
+      new Promise<void>((resolve) => setTimeout(() => { callerDeadlineElapsed = true; resolve(); }, 5))
+    ]);
+    expect(callerDeadlineElapsed).toBe(true);
+    expect(calls).toEqual(["api:start"]);
+    gate.resolve();
+    await stopping;
+    expect(calls).toEqual(["api:start", "api:end", "database"]);
     expect(engine.state).toBe("stopped");
   });
 });

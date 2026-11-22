@@ -298,16 +298,31 @@ describe("ProtectedOperationExecutor", () => {
     expect(context).toHaveProperty("protectedOperations");
   });
 
-  it("denies an in-flight policy result if shutdown begins before handler admission", async () => {
+  it("denies a late Allow when shutdown starts during policy evaluation", async () => {
+    let signalPolicyStarted!: () => void;
+    const policyStarted = new Promise<void>((resolve) => { signalPolicyStarted = resolve; });
     let release!: (decision: PolicyDecision) => void;
-    const { engine, operation, handler } = makeEngine(() =>
-      new Promise<PolicyDecision>((resolve) => { release = resolve; })
-    );
+    let evaluatorSignal: AbortSignal | undefined;
+    const { engine, operation, handler } = makeEngine((_request, options) => {
+      evaluatorSignal = options?.signal;
+      signalPolicyStarted();
+      return new Promise<PolicyDecision>((resolve) => { release = resolve; });
+    });
+
     await ensureStarted(engine);
-    const pending = engine.protectedOperations.execute(operation, { actorId: "race" }, { value: "x" });
-    await Promise.resolve();
+    const pending = engine.protectedOperations.execute(
+      operation,
+      { actorId: "shutdown-during-policy" },
+      { value: "x" }
+    );
+    await policyStarted;
+
     const stopping = engine.stop();
+    expect(evaluatorSignal?.aborted).toBe(true);
+
+    // Resolve with Allow after shutdown has closed admission and cancelled evaluation.
     release(allow);
+
     expect(await pending).toMatchObject({ status: "denied" });
     expect(handler).not.toHaveBeenCalled();
     await stopping;
@@ -364,7 +379,29 @@ describe("ProtectedOperationExecutor", () => {
   });
 
 
-  it("keeps an already-admitted handler in flight during shutdown without claiming cancellation", async () => {
+  it("assigns a distinct operationId to every invocation of one registration", async () => {
+    const observedIds: string[] = [];
+    const engine = new CoreEngine({ policy: { evaluate: async () => allow } });
+    const operation = engine.registerProtectedOperation({
+      id: "records.unique-id",
+      action: "record.read",
+      resource: "record:unique",
+      validateInput: (value: unknown): value is string => typeof value === "string",
+      handler: async (_input, context) => {
+        observedIds.push(context.operationId);
+        return "ok";
+      }
+    });
+    await ensureStarted(engine);
+    await engine.protectedOperations.execute(operation, { actorId: "one" }, "a");
+    await engine.protectedOperations.execute(operation, { actorId: "two" }, "b");
+    expect(observedIds).toHaveLength(2);
+    expect(observedIds[0]).not.toBe(observedIds[1]);
+    expect(observedIds.every((id) => id !== operation.id)).toBe(true);
+    await engine.stop();
+  });
+
+  it("aborts and drains an already-admitted handler before module cleanup", async () => {
     let release!: (value: string) => void;
     let signalHandlerStarted!: () => void;
     const handlerStarted = new Promise<void>((resolve) => { signalHandlerStarted = resolve; });
@@ -382,15 +419,27 @@ describe("ProtectedOperationExecutor", () => {
       validateInput: (value: unknown): value is string => typeof value === "string",
       handler
     });
+    const moduleStop = vi.fn(async () => undefined);
+    engine.register({
+      id: "cleanup-probe",
+      version: "1.0.0",
+      stop: moduleStop
+    });
     await ensureStarted(engine);
     const pending = engine.protectedOperations.execute(operation, { actorId: "in-flight" }, "work");
     await handlerStarted;
     expect(handler).toHaveBeenCalledTimes(1);
-    const stopping = engine.stop();
-    await stopping;
-    expect(handlerSignal?.aborted).toBe(false);
+    let stopSettled = false;
+    const stopping = engine.stop().then(() => { stopSettled = true; });
+    await Promise.resolve();
+    expect(handlerSignal?.aborted).toBe(true);
+    expect(stopSettled).toBe(false);
+    expect(moduleStop).not.toHaveBeenCalled();
     release("completed");
+    await stopping;
+    expect(stopSettled).toBe(true);
     expect(await pending).toEqual({ status: "executed", value: "completed" });
+    expect(moduleStop).toHaveBeenCalledTimes(1);
   });
 
   it("fails closed for non-cloneable context values before PolicyEngine", async () => {
@@ -418,5 +467,25 @@ describe("ProtectedOperationExecutor", () => {
     expect(evaluator).not.toHaveBeenCalled();
     expect(handler).not.toHaveBeenCalled();
   });
+
+  it("propagates parent cancellation to policy evaluation and blocks the handler", async () => {
+    const controller = new AbortController();
+    let evaluatorSignal: AbortSignal | undefined;
+    const { engine, operation, handler } = makeEngine((_request, options) => {
+      evaluatorSignal = options?.signal;
+      return new Promise<PolicyDecision>(() => undefined);
+    });
+    await ensureStarted(engine);
+    const pending = engine.protectedOperations.execute(
+      operation, caller, { value: "no" }, { parentSignal: controller.signal }
+    );
+    await Promise.resolve();
+    controller.abort();
+    const result = await pending;
+    expect(result).toMatchObject({ status: "denied" });
+    expect(evaluatorSignal?.aborted).toBe(true);
+    expect(handler).not.toHaveBeenCalled();
+  });
+
 
 });
