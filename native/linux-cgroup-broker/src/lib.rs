@@ -1,3 +1,5 @@
+#![cfg(target_os = "linux")]
+
 //! Versioned, bounded transport primitives for the INFINYX Linux broker.
 //!
 //! This crate deliberately does not launch processes or mutate cgroups. It is
@@ -95,8 +97,8 @@ impl Request {
             }
             Operation::LaunchTrustedRunner => {}
         }
-        if let Operation::WaitBoundaryEmpty { timeout_ms, .. } = self.operation {
-            if timeout_ms == 0 || timeout_ms > 120_000 {
+        if let Operation::WaitBoundaryEmpty { timeout_ms, .. } = &self.operation {
+            if *timeout_ms == 0 || *timeout_ms > 120_000 {
                 return Err(ProtocolError::new(
                     "invalid_timeout",
                     "The wait timeout must be between 1 and 120000 milliseconds.",
@@ -174,13 +176,6 @@ pub fn peer_credentials<S: AsRawFd>(stream: &S) -> io::Result<PeerCredentials> {
     })
 }
 
-#[cfg(not(target_os = "linux"))]
-pub fn peer_credentials<S: AsRawFd>(_stream: &S) -> io::Result<PeerCredentials> {
-    Err(io::Error::new(
-        io::ErrorKind::Unsupported,
-        "kernel peer credentials are supported only on Linux",
-    ))
-}
 
 fn valid_identifier(value: &str) -> bool {
     !value.is_empty()
