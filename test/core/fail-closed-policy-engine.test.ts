@@ -59,7 +59,7 @@ describe("FailClosedPolicyEngine", () => {
     expect(() => new FailClosedPolicyEngine({ evaluate: async () => ({
       effect: "deny",
       reason: "unused"
-    }) }, 0)).toThrow(/positive finite number/);
+    }) }, 0)).toThrow(/positive safe integer/);
   });
 
   it.each([
