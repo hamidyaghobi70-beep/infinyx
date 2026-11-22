@@ -9,8 +9,10 @@ import type {
  *
  * The broker implementation must run outside the evaluator's authority and
  * enforce cgroup ownership, migration restrictions, tree-wide termination,
- * and independent empty-state verification. This interface is not itself an
- * OS containment mechanism.
+ * and independent empty-state verification. Event subscription methods must
+ * be atomic: if registration throws, no listener may remain installed; a
+ * successful registration returns an idempotent unsubscriber for that exact
+ * listener. This interface is not itself an OS containment mechanism.
  */
 export interface LinuxCgroupV2BrokerHandle {
   readonly protocolVersion: 1;
@@ -21,8 +23,16 @@ export interface LinuxCgroupV2BrokerHandle {
   readonly containmentId: string;
 
   send(message: Readonly<Record<string, unknown>>): boolean;
+  /**
+   * Subscription registration must be atomic: either install the listener and
+   * return its unsubscriber, or throw without retaining any listener. The
+   * returned unsubscriber must be safe to call at most once and must detach
+   * only this registration.
+   */
   onMessage(listener: (message: unknown) => void): () => void;
+  /** Same atomic registration and per-listener cleanup contract as onMessage. */
   onError(listener: (error: unknown) => void): () => void;
+  /** Same atomic registration and per-listener cleanup contract as onMessage. */
   onRunnerExit(
     listener: (exit: { readonly code: number | null; readonly signal: string | null }) => void
   ): () => void;
