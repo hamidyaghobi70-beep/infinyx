@@ -8,6 +8,10 @@ publish = false
 [lib]
 path = "src/lib.rs"
 
+[[bin]]
+name = "infinyx-cgroup-preflight"
+path = "src/main.rs"
+
 [dependencies]
 libc = "0.2"
 serde = { version = "1", features = ["derive"] }
