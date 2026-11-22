@@ -5,7 +5,10 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { describe, expect, it } from "vitest";
 import { CoreEngine } from "../../src/core/core-engine.js";
 import { CoreError } from "../../src/core/core-error.js";
-import { ProcessIsolatedPolicyEngine } from "../../src/core/process-isolated-policy-engine.js";
+import {
+  createProcessIsolatedPolicyEngineForTest,
+  ProcessIsolatedPolicyEngine
+} from "../../src/core/process-isolated-policy-engine.js";
 import type { PolicyRequest } from "../../src/core/contracts.js";
 
 const fixtureUrl = pathToFileURL(fileURLToPath(
@@ -178,13 +181,12 @@ describe("CoreEngine policy runtime shutdown", () => {
       return child as unknown as ReturnType<typeof fork>;
     }) as typeof fork;
     const observer = observeRunning();
-    const runtime = new ProcessIsolatedPolicyEngine({
+    const runtime = createProcessIsolatedPolicyEngineForTest({
       moduleUrl: fixtureUrl,
       terminationGraceMs: 5,
       killWaitMs: 25,
-      forkProcess: controlledFork,
       onStateChange: observer.onStateChange
-    });
+    }, controlledFork);
     let cleanupCalls = 0;
     const engine = new CoreEngine({
       policy: runtime,
@@ -220,6 +222,58 @@ describe("CoreEngine policy runtime shutdown", () => {
     child.emit("close", 0, null);
     expect(runtime.activeExecutionCount).toBe(0);
 
+    await engine.stop();
+    expect(engine.state).toBe("stopped");
+    expect(cleanupCalls).toBe(1);
+    await engine.stop();
+    expect(cleanupCalls).toBe(1);
+  });
+
+  it("waits for a real OS child close event before retrying cleanup", async () => {
+    const delayedCloseFork = ((...args: Parameters<typeof fork>) => {
+      const child = fork(...args);
+      const originalEmit = child.emit.bind(child) as (...eventArgs: unknown[]) => boolean;
+      (child as unknown as { emit: (...eventArgs: unknown[]) => boolean }).emit = (...eventArgs) => {
+        const [event, ...payload] = eventArgs;
+        if (event === "close") {
+          setTimeout(() => {
+            originalEmit("close", payload[0], payload[1]);
+          }, 50);
+          return true;
+        }
+        return originalEmit(event, ...payload);
+      };
+      return child;
+    }) as typeof fork;
+    const observer = observeRunning();
+    const runtime = createProcessIsolatedPolicyEngineForTest({
+      moduleUrl: fixtureUrl,
+      terminationGraceMs: 0,
+      killWaitMs: 5,
+      onStateChange: observer.onStateChange
+    }, delayedCloseFork);
+    let cleanupCalls = 0;
+    const engine = new CoreEngine({ policy: runtime });
+    engine.register({
+      id: "worker",
+      version: "1.0.0",
+      stop: () => { cleanupCalls += 1; }
+    });
+    await engine.initialize();
+
+    const evaluation = engine.policy.evaluate(request);
+    await observer.reached;
+    await expect(engine.stop()).rejects.toMatchObject({
+      code: "POLICY_RUNTIME_UNRESOLVED"
+    });
+    await expect(evaluation).resolves.toMatchObject({ effect: "deny" });
+    expect(engine.state).toBe("unresolved");
+    expect(runtime.activeExecutionCount).toBe(1);
+    expect(cleanupCalls).toBe(0);
+
+    // The OS process has been killed, but its close notification is deliberately delayed.
+    await new Promise((resolve) => setTimeout(resolve, 80));
+    expect(runtime.activeExecutionCount).toBe(0);
     await engine.stop();
     expect(engine.state).toBe("stopped");
     expect(cleanupCalls).toBe(1);
