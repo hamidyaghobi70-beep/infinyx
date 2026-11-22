@@ -437,7 +437,6 @@ describe("LinuxCgroupV2Supervisor", () => {
     expect(brokerHandle.releaseBoundary).not.toHaveBeenCalled();
   });
 
-});
   it("propagates an atomic broker subscription failure without tracking a phantom listener", async () => {
     const listener = vi.fn();
     const unsubscribe = vi.fn();
@@ -460,3 +459,4 @@ describe("LinuxCgroupV2Supervisor", () => {
     expect(unsubscribe).toHaveBeenCalledTimes(1);
   });
 
+});
