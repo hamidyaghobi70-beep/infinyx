@@ -6,6 +6,8 @@
 //! the protocol foundation only; a daemon must add peer authorization,
 //! durable ownership/recovery, and verified cgroup lifecycle before use.
 
+pub mod preflight;
+
 use serde::{Deserialize, Serialize};
 use std::io::{self, Read, Write};
 use std::os::fd::AsRawFd;
