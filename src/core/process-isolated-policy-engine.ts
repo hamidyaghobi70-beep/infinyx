@@ -129,7 +129,7 @@ function getChildRunnerPath(): { path: string; execArgv: string[] } {
   throw new Error("Policy evaluator child-process runner was not found.");
 }
 
-class ProcessIsolatedPolicyEngineBase implements PolicyEngine {
+export class ProcessIsolatedPolicyEngine implements PolicyEngine {
   private readonly moduleUrl: string;
   private readonly timeoutMs: number;
   private readonly terminationGraceMs: number;
@@ -137,11 +137,10 @@ class ProcessIsolatedPolicyEngineBase implements PolicyEngine {
   private readonly maxConcurrent: number;
   private readonly maxOldSpaceSizeMb: number;
   private readonly onStateChange: ((event: PolicyExecutionEvent) => void) | undefined;
-  private readonly forkProcess: typeof fork;
   private readonly active = new Map<string, ActiveExecution>();
   private shuttingDown = false;
 
-  constructor(options: ProcessIsolatedPolicyEngineOptions, forkProcess: typeof fork) {
+  constructor(options: ProcessIsolatedPolicyEngineOptions) {
     this.moduleUrl = normalizeModuleUrl(options.moduleUrl);
     this.timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
     this.terminationGraceMs = options.terminationGraceMs ?? DEFAULT_TERMINATION_GRACE_MS;
@@ -149,7 +148,6 @@ class ProcessIsolatedPolicyEngineBase implements PolicyEngine {
     this.maxConcurrent = options.maxConcurrent ?? DEFAULT_MAX_CONCURRENT;
     this.maxOldSpaceSizeMb = options.maxOldSpaceSizeMb ?? DEFAULT_MAX_OLD_SPACE_SIZE_MB;
     this.onStateChange = options.onStateChange;
-    this.forkProcess = forkProcess;
 
     if (!Number.isSafeInteger(this.timeoutMs) || this.timeoutMs <= 0 || this.timeoutMs > MAX_TIMER_DELAY_MS ||
         !Number.isSafeInteger(this.terminationGraceMs) || this.terminationGraceMs < 0 || this.terminationGraceMs > MAX_TIMER_DELAY_MS ||
@@ -216,7 +214,7 @@ class ProcessIsolatedPolicyEngineBase implements PolicyEngine {
       ? Date.now() + timeoutMs
       : Math.min(options.deadlineAt, Date.now() + this.timeoutMs);
     const runner = getChildRunnerPath();
-    const child = this.forkProcess(runner.path, [this.moduleUrl], {
+    const child = fork(runner.path, [this.moduleUrl], {
       cwd: process.cwd(),
       env: { NODE_ENV: "production" },
       execArgv: [...runner.execArgv, `--max-old-space-size=${this.maxOldSpaceSizeMb}`],
@@ -451,17 +449,3 @@ class ProcessIsolatedPolicyEngineBase implements PolicyEngine {
   }
 }
 
-
-/** @internal Test-only factory; intentionally omitted from the public core barrel. */
-export function createProcessIsolatedPolicyEngineForTest(
-  options: ProcessIsolatedPolicyEngineOptions,
-  forkProcess: typeof fork
-): ProcessIsolatedPolicyEngineBase {
-  return new ProcessIsolatedPolicyEngineBase(options, forkProcess);
-}
-
-export class ProcessIsolatedPolicyEngine extends ProcessIsolatedPolicyEngineBase {
-  constructor(options: ProcessIsolatedPolicyEngineOptions) {
-    super(options, fork);
-  }
-}
