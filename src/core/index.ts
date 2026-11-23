@@ -23,7 +23,7 @@ export { InMemoryMemoryStore } from "./in-memory-memory-store.js";
 export { MemoryValueCipher, MemoryEncryptionError } from "./memory-encryption.js";
 export type { MemoryKeyProvider, EncryptedMemoryEnvelope } from "./memory-encryption.js";
 export { PostgresEncryptedMemoryStore } from "./postgres-memory-store.js";
-export type { PostgresMemoryStoreOptions, SqlExecutor, SqlQueryResult } from "./postgres-memory-store.js";
+export type { PostgresMemoryStoreOptions, StoredMemoryEnvelope, SqlExecutor, SqlQueryResult } from "./postgres-memory-store.js";
 export { PostgresMemoryAuditPort } from "./postgres-memory-audit.js";
 export type { AuditSqlConnection, AuditSqlPool } from "./postgres-memory-audit.js";
 export { MemoryAccessError } from "./memory-error.js";
