@@ -1,14 +1,20 @@
 import { createCipheriv, createDecipheriv, randomBytes } from "node:crypto";
 
-/** Key material is supplied by a KMS-backed provider; production keys never belong in PostgreSQL. */
 export interface MemoryKeyProvider {
   getActiveKey(): Promise<{ readonly keyId: string; readonly key: Uint8Array }>;
   getKey(keyId: string): Promise<Uint8Array | null>;
 }
 
+/** Canonical storage identity authenticated by v2 envelopes. */
+export interface MemoryEncryptionContext {
+  readonly tenantId: string;
+  readonly namespace: string;
+  readonly key: string;
+}
+
 export interface EncryptedMemoryEnvelope {
-  readonly formatVersion: 1;
-  readonly encryptionVersion: 1;
+  readonly formatVersion: 1 | 2;
+  readonly encryptionVersion: 1 | 2;
   readonly algorithm: "A256GCM";
   readonly keyId: string;
   readonly nonce: string;
@@ -23,22 +29,27 @@ export class MemoryEncryptionError extends Error {
   }
 }
 
-/** AES-256-GCM envelope encryption. Key custody and rotation are delegated to MemoryKeyProvider. */
+/**
+ * AES-256-GCM envelope encryption. New writes with an identity context use v2
+ * and authenticate the tenant/namespace/record key as AAD. Context-free calls
+ * remain v1 for compatibility with existing standalone callers and old records.
+ */
 export class MemoryValueCipher {
   constructor(private readonly keys: MemoryKeyProvider) {}
 
-  async encrypt(plaintext: string): Promise<EncryptedMemoryEnvelope> {
+  async encrypt(plaintext: string, context?: MemoryEncryptionContext): Promise<EncryptedMemoryEnvelope> {
     try {
       const active = await this.keys.getActiveKey();
       assertKey(active.key);
       assertKeyId(active.keyId);
       const nonce = randomBytes(12);
-      // Copy provider-owned bytes so crypto never depends on mutable external storage.
+      const version = context === undefined ? 1 : 2;
       const cipher = createCipheriv("aes-256-gcm", Buffer.from(active.key), nonce);
+      if (context !== undefined) cipher.setAAD(encodeContext(context));
       const ciphertext = Buffer.concat([cipher.update(plaintext, "utf8"), cipher.final()]);
       return Object.freeze({
-        formatVersion: 1,
-        encryptionVersion: 1,
+        formatVersion: version,
+        encryptionVersion: version,
         algorithm: "A256GCM",
         keyId: active.keyId,
         nonce: nonce.toString("base64"),
@@ -57,16 +68,20 @@ export class MemoryValueCipher {
     return active.keyId;
   }
 
-  /** Re-encrypts plaintext with the provider's current active key; never exports plaintext. */
-  async reencrypt(envelope: EncryptedMemoryEnvelope): Promise<EncryptedMemoryEnvelope> {
-    const plaintext = await this.decrypt(envelope);
-    return this.encrypt(plaintext);
+  async reencrypt(envelope: EncryptedMemoryEnvelope, context?: MemoryEncryptionContext): Promise<EncryptedMemoryEnvelope> {
+    const plaintext = await this.decrypt(envelope, context);
+    return this.encrypt(plaintext, context);
   }
 
-  async decrypt(envelope: EncryptedMemoryEnvelope): Promise<string> {
+  async decrypt(envelope: EncryptedMemoryEnvelope, context?: MemoryEncryptionContext): Promise<string> {
     try {
-      if (envelope.formatVersion !== 1 || envelope.encryptionVersion !== 1 || envelope.algorithm !== "A256GCM") {
+      if (envelope.algorithm !== "A256GCM" ||
+          !((envelope.formatVersion === 1 && envelope.encryptionVersion === 1) ||
+            (envelope.formatVersion === 2 && envelope.encryptionVersion === 2))) {
         throw new Error("Unsupported encrypted memory envelope.");
+      }
+      if (envelope.formatVersion === 2 && context === undefined) {
+        throw new Error("Authenticated memory context is required.");
       }
       assertKeyId(envelope.keyId);
       const key = await this.keys.getKey(envelope.keyId);
@@ -77,12 +92,26 @@ export class MemoryValueCipher {
       const tag = decodeCanonicalBase64(envelope.authenticationTag);
       if (nonce.length !== 12 || tag.length !== 16) throw new Error("Malformed encrypted memory envelope.");
       const decipher = createDecipheriv("aes-256-gcm", Buffer.from(key), nonce);
+      if (envelope.formatVersion === 2) decipher.setAAD(encodeContext(context!));
       decipher.setAuthTag(tag);
       return Buffer.concat([decipher.update(ciphertext), decipher.final()]).toString("utf8");
     } catch (cause) {
       throw new MemoryEncryptionError(undefined, { cause });
     }
   }
+}
+
+function encodeContext(context: MemoryEncryptionContext): Buffer {
+  if (!context || typeof context !== "object") throw new Error("Invalid memory encryption context.");
+  const { tenantId, namespace, key } = context;
+  for (const value of [tenantId, namespace, key]) {
+    if (typeof value !== "string" || value.length === 0 || value.length > 512 ||
+        value.trim().length === 0 || /[\u0000-\u001f\u007f-\u009f]/.test(value)) {
+      throw new Error("Invalid memory encryption context.");
+    }
+  }
+  // JSON tuple encoding is deterministic and unambiguous (unlike delimiter joining).
+  return Buffer.from(JSON.stringify(["infinyx-memory-aad-v2", tenantId, namespace, key]), "utf8");
 }
 
 function assertKey(key: Uint8Array): void {
@@ -97,7 +126,6 @@ function assertKeyId(keyId: unknown): asserts keyId is string {
   }
 }
 
-/** Buffer.from is permissive; require canonical standard Base64 before accepting an envelope. */
 function decodeCanonicalBase64(value: unknown): Buffer {
   if (typeof value !== "string" || !/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(value)) {
     throw new Error("Malformed encrypted memory envelope.");
