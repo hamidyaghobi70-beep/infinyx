@@ -105,6 +105,18 @@ export class CoreEngine {
     return this.protectedOperationExecutor.register(definition);
   }
 
+  /** Roll back a protected-operation registration before Core initialization. */
+  unregisterProtectedOperation<TInput, TOutput>(
+    operation: ProtectedOperationHandle<TInput, TOutput>
+  ): boolean {
+    if (this.lifecycle !== "created") {
+      throw new CoreError(
+        "INVALID_LIFECYCLE_TRANSITION",
+        "Protected operations can only be unregistered before initialization."
+      );
+    }
+    return this.protectedOperationExecutor.unregister(operation);
+  }
 
   register(module: CoreModule): void {
     if (this.lifecycle !== "created") {

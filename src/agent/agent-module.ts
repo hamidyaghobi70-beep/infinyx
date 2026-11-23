@@ -68,14 +68,22 @@ export class AgentModule implements CoreModule {
    */
   registerWithCore(core: CoreEngine): void {
     if (this.operationHandle) throw new Error("Agent module is already registered with Core.");
-    this.operationHandle = core.registerProtectedOperation<AgentTaskRequest, AgentTaskResult>({
+    const operationHandle = core.registerProtectedOperation<AgentTaskRequest, AgentTaskResult>({
       id: "agent.execute",
       action: "agent.execute",
       resource: "agent:agent",
       validateInput: isPlainAgentRequest,
       handler: (request, context) => this.runtime.executeAndSettle(request, context.signal)
     });
-    core.register(this);
+    try {
+      core.register(this);
+      this.operationHandle = operationHandle;
+    } catch (error) {
+      // Do not leave an orphan Protected Operation if ModuleRegistry rejects
+      // this module (for example, because its module ID is already occupied).
+      core.unregisterProtectedOperation(operationHandle);
+      throw error;
+    }
   }
 
   async initialize(context: ModuleContext): Promise<void> {

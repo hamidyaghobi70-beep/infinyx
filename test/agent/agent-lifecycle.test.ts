@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { CoreEngine } from "../../src/core/core-engine.js";
 import { AgentModule } from "../../src/agent/agent-module.js";
+import * as AgentPublicApi from "../../src/agent/index.js";
 
 const allowAgent = {
   evaluate: async () => ({ effect: "allow" as const, reason: "Test policy allowed Agent execution." })
@@ -8,6 +9,29 @@ const allowAgent = {
 const trustedCaller = () => ({ actorId: "trusted:test-principal" });
 
 describe("Agent CoreModule lifecycle", () => {
+  it("does not export direct Runtime or Orchestrator execution from the Agent public API", () => {
+    expect("AgentRuntime" in AgentPublicApi).toBe(false);
+    expect("AgentOrchestrator" in AgentPublicApi).toBe(false);
+    expect("AgentModule" in AgentPublicApi).toBe(true);
+  });
+
+  it("rolls back the protected operation when Core rejects module registration", () => {
+    const core = new CoreEngine();
+    core.register({ id: "agent", version: "1.0.0" });
+    const agent = new AgentModule();
+
+    expect(() => agent.registerWithCore(core)).toThrow(/already registered/);
+
+    const replacement = core.registerProtectedOperation({
+      id: "agent.execute",
+      action: "agent.execute",
+      resource: "agent:agent",
+      validateInput: (value: unknown): value is string => typeof value === "string",
+      handler: async (value) => value
+    });
+    expect(replacement.id).toBe("agent.execute");
+  });
+
   it("executes only through a Core-registered protected operation", async () => {
     const core = new CoreEngine({ policy: allowAgent });
     const agent = new AgentModule({

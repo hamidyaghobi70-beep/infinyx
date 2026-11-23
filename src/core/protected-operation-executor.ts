@@ -132,6 +132,16 @@ export class ProtectedOperationExecutor implements ProtectedOperationPort {
     return handle;
   }
 
+  /** Remove a composition-time registration when its owning module cannot register. */
+  unregister<TInput, TOutput>(operation: ProtectedOperationHandle<TInput, TOutput>): boolean {
+    if (!operation || typeof operation !== "object") return false;
+    const registration = this.registrations.get(operation as object);
+    if (!registration) return false;
+    this.registrations.delete(operation as object);
+    this.operationIds.delete(registration.id);
+    return true;
+  }
+
   async execute<TInput, TOutput>(
     operation: ProtectedOperationHandle<TInput, TOutput>,
     caller: ProtectedOperationCaller,
