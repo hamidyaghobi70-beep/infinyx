@@ -157,6 +157,7 @@ Core Engine retains the stable MemoryPort contract and now includes partial Post
 - A configurable RS256 verifier, bearer middleware, verified-principal guard, and authenticated identity introspection route exist.
 - JWT verification is restricted to RSA keys of at least 2048 bits, canonical base64url segments, the RS256 algorithm, and the configured issuer/audience/expiry contract.
 - The actual identity provider, issuer, API audience, and public signing key/JWKS source have not been supplied by the owner. Production authentication therefore remains unconfigured; do not guess trust anchors.
+- Added a bounded OIDC/JWKS resolver library with HTTPS-only endpoint validation, no redirects, bounded response/time/cache, RS256/RSA-2048 key filtering, unknown-`kid` refresh, and focused tests. It is not yet wired into the live server verifier; the server still requires an explicit PEM trust key.
 - The verified principal helper is not yet wired into a real user-facing memory workload or trusted module composition root.
 
 ### Agent and Tool Execution — disabled
