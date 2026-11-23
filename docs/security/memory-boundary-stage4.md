@@ -67,7 +67,7 @@ For `read`, `write` and `delete`, in this order:
 | M9 | Key ownership and rotation | **Interface only** | `MemoryKeyProvider` requires active-key lookup and historical-key lookup; no cloud KMS adapter, key rotation workflow, or re-wrap migration is implemented. |
 | M10 | Retention, deletion, backup | **Partial implementation** | PostgreSQL rows receive a configurable expiry (90-day default); reads reject expired rows and `deleteExpired` performs bounded hard-delete sweeps. Backup retention, deletion ledger/replay, and scheduled job orchestration remain unimplemented. |
 | M11 | Durable audit | **Partial implementation** | A transactional PostgreSQL audit writer and hash chain are implemented. Database role provisioning, append-only grants, signed external checkpoints, and live integration are not implemented. |
-| M12 | Data classification | **Not implemented** | The adapter does not yet enforce Public/Internal/Confidential/Restricted labels. Do not store restricted data; namespaces and keys remain non-secret identifiers. |
+| M12 | Data classification | **Partial implementation** | The PostgreSQL adapter requires explicit `public`, `internal`, or `confidential` classification and rejects missing/unknown/`restricted` values; the SQL schema enforces the same allow-list. Classification is not yet enforced by the general GuardedMemoryPort or every possible backend. |
 | M13 | Migration strategy | **Partial implementation** | Encrypted records carry format, encryption, key, schema, and timestamp/expiry metadata. A resumable migration runner, progress ledger, and backup-compatible upgrade workflow remain unimplemented. |
 
 ## Known limitations
@@ -108,7 +108,7 @@ These are architecture decisions, **not evidence that the controls have been imp
 
 The initial adapter, cipher, audit writer, schema migration, and focused unit tests have been added. These are library components only. They have **not** been wired into `src/server.ts`, have not been tested against a live PostgreSQL service or cloud KMS, and have not passed CI on the exact current head. The SQL interfaces are structural so the repository does not yet take a dependency on a specific PostgreSQL driver.
 
-Remaining blocking work includes: a production KMS provider and key-rotation procedure; DB role/grant provisioning and external audit checkpoints; classification enforcement; backup/restore and deletion replay; authenticated identity composition; integration tests against PostgreSQL and a test KMS; and independent review. No real user data may be stored with this adapter until those gates pass.
+Remaining blocking work includes: a production KMS provider and key-rotation procedure; DB role/grant provisioning and external audit checkpoints; classification enforcement across all MemoryPort implementations; backup/restore and deletion replay; authenticated identity composition; integration tests against PostgreSQL and a test KMS; and independent review. No real user data may be stored with this adapter until those gates pass.
 
 ## Review gate
 
