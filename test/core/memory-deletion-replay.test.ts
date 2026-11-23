@@ -16,10 +16,12 @@ class FakeStore implements MemoryPort {
 class FakeLedger implements MemoryDeletionLedgerPort {
   readonly entries: MemoryDeletionTombstone[] = [];
   failAppend = false;
-  async append(entry: MemoryDeletionTombstone) {
+  private next = 0;
+  async append(entry: Omit<MemoryDeletionTombstone, "id">) {
     if (this.failAppend) throw new Error("external ledger unavailable");
-    if (!this.entries.some((existing) => existing.id === entry.id)) this.entries.push(entry);
-    this.entries.sort((a, b) => a.id.localeCompare(b.id));
+    const id = String(++this.next).padStart(4, "0");
+    this.entries.push({ ...entry, id });
+    return id;
   }
   async listAfter(cursor: string | null, limit: number) {
     return this.entries.filter((entry) => cursor === null || entry.id > cursor).slice(0, limit);
@@ -33,7 +35,6 @@ describe("MemoryDeletionCoordinator", () => {
     const ledger = new FakeLedger();
     await store.write({ namespace: "tenant-a", key: "k" }, "secret");
     const coordinator = new MemoryDeletionCoordinator(store, ledger, {
-      createId: () => "0001",
       now: () => new Date("2026-11-23T12:00:00.000Z")
     });
     await coordinator.delete({ namespace: "tenant-a", key: "k" }, "user_request");
@@ -47,7 +48,7 @@ describe("MemoryDeletionCoordinator", () => {
     const ledger = new FakeLedger();
     ledger.failAppend = true;
     await store.write({ namespace: "tenant-a", key: "k" }, "secret");
-    const coordinator = new MemoryDeletionCoordinator(store, ledger, { createId: () => "0001" });
+    const coordinator = new MemoryDeletionCoordinator(store, ledger);
     await expect(coordinator.delete({ namespace: "tenant-a", key: "k" })).rejects.toThrow("external ledger unavailable");
     expect(await store.read({ namespace: "tenant-a", key: "k" })).toBe("secret");
   });
@@ -59,8 +60,8 @@ describe("MemoryDeletionCoordinator", () => {
     const b = { namespace: "tenant-b", key: "b" };
     await store.write(a, "one");
     await store.write(b, "two");
-    await ledger.append({ id: "0001", ...a, deletedAt: "2026-11-23T12:00:00.000Z", reason: "user_request" });
-    await ledger.append({ id: "0002", ...b, deletedAt: "2026-11-23T12:00:01.000Z", reason: "retention_expiry" });
+    await ledger.append({ ...a, deletedAt: "2026-11-23T12:00:00.000Z", reason: "user_request" });
+    await ledger.append({ ...b, deletedAt: "2026-11-23T12:00:01.000Z", reason: "retention_expiry" });
     const coordinator = new MemoryDeletionCoordinator(store, ledger, { batchSize: 1 });
     await expect(coordinator.replayAfterRestore()).resolves.toEqual({ recorded: "0002", replayed: 2, batches: 2 });
     expect(await store.read(a)).toBeNull();
