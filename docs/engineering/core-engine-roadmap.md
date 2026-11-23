@@ -141,20 +141,26 @@ Before implementing an adapter, document and approve:
 
 Implement storage behind the existing port only after these controls have testable acceptance criteria.
 
-### Stage 4 progress (proposal, pending independent review)
+### Stage 4 progress — owner decisions recorded; implementation still gated
 
-- Controls and acceptance criteria are documented in
+- Existing controls and acceptance criteria remain documented in
   [`docs/security/memory-boundary-stage4.md`](../security/memory-boundary-stage4.md).
-- Implemented behind the unchanged `MemoryPort`: `GuardedMemoryPort` (tenant isolation,
-  default-deny policy, fail-closed audit, input validation, no aliasing) and a non-durable
-  `InMemoryMemoryStore` reference store, with regression tests in
-  `test/core/guarded-memory-port.test.ts`.
-- **No persistence adapter exists.** Encryption, key management, retention/backup, durable
-  audit, classification and migration remain open and need owner decisions listed in that
-  document.
-- Agent and Tool Execution remain out of scope and disabled. No merge, release or deployment
-  is authorized by this update.
-
+- `GuardedMemoryPort` and `InMemoryMemoryStore` remain the implemented guarded boundary
+  and non-durable reference store; the public `MemoryPort` contract is unchanged.
+- Founder delegated the six design choices. The selected baseline is recorded in
+  [ADR-0001](../architecture/decisions/adr-0001-stage4-persistent-memory.md):
+  PostgreSQL; TLS plus AES-256-GCM envelope encryption with external KMS custody;
+  90-day default memory retention and 30-day encrypted backup retention; separate
+  append-only audit schema/roles with signed external checkpoints; versioned canonical
+  JSON envelopes with resumable migrations; and four-level data classification with
+  Restricted data denied by default.
+- These are approved design decisions, **not implemented controls**. No PostgreSQL
+  adapter, KMS integration, durable audit store, expiry worker, backup/restore workflow,
+  or classification enforcement is claimed complete.
+- Persistence must remain disconnected until a trusted authenticated principal is
+  available to the composition root and the ADR implementation gates pass.
+- Agent and Tool Execution remain disabled. No merge, release, deployment, or runtime
+  activation is authorized by this update.
 ## Stage 5 — identity, agent runtime, and tool execution
 
 These capabilities are not enabled by the reviewed Core Engine v1 scope.
