@@ -15,7 +15,11 @@ The guarded boundary and initial durable adapter implementation add, without mod
   isolation, policy authorization and audit around any `MemoryPort`.
 - `InMemoryMemoryStore` (`src/core/in-memory-memory-store.ts`): a non-durable reference
   backing store for tests and local composition.
-- `MemoryAccessError` (`src/core/memory-error.ts`): generic, non-leaking error type.\n- `MemoryValueCipher` (`src/core/memory-encryption.ts`): AES-256-GCM envelope cipher backed by an injected key-provider contract; key identifiers and canonical Base64 envelope fields are validated strictly, and provider-owned key bytes are copied before use.\n- `PostgresEncryptedMemoryStore` (`src/core/postgres-memory-store.ts`): encrypted PostgreSQL adapter with explicit expiry and bounded expiry sweep.\n- `PostgresMemoryAuditPort` (`src/core/postgres-memory-audit.ts`): transactional append-only audit writer with a serialized hash chain.\n- `migrations/0001_stage4_memory_audit.sql`: idempotent initial schema migration.
+- `MemoryAccessError` (`src/core/memory-error.ts`): generic, non-leaking error type.
+- `MemoryValueCipher` (`src/core/memory-encryption.ts`): AES-256-GCM envelope cipher backed by an injected key-provider contract; key identifiers and canonical Base64 envelope fields are validated strictly, and provider-owned key bytes are copied before use.
+- `PostgresEncryptedMemoryStore` (`src/core/postgres-memory-store.ts`): encrypted PostgreSQL adapter with explicit expiry and bounded expiry sweep.
+- `PostgresMemoryAuditPort` (`src/core/postgres-memory-audit.ts`): transactional append-only audit writer with a serialized hash chain.
+- `migrations/0001_stage4_memory_audit.sql`: idempotent initial schema migration.
 
 ## Trust model
 
