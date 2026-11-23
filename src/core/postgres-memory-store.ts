@@ -108,6 +108,7 @@ export class PostgresEncryptedMemoryStore implements MemoryPort {
     if (!Number.isSafeInteger(batchSize) || batchSize < 1 || batchSize > 1000) {
       throw new TypeError("batchSize must be between 1 and 1000.");
     }
+    const activeKeyId = await this.cipher.activeKeyId();
     const selected = await this.db.query<{
       namespace: string;
       memory_key: string;
@@ -115,13 +116,10 @@ export class PostgresEncryptedMemoryStore implements MemoryPort {
     }>(
       `SELECT namespace, memory_key, envelope
        FROM ${this.#table}
-       WHERE envelope->>'keyId' IS DISTINCT FROM (
-         SELECT envelope->>'keyId' FROM ${this.#table}
-         ORDER BY updated_at DESC LIMIT 1
-       )
+       WHERE envelope->>'keyId' IS DISTINCT FROM $1
        ORDER BY updated_at
-       LIMIT $1`,
-      [batchSize]
+       LIMIT $2`,
+      [activeKeyId, batchSize]
     );
     let rotated = 0;
     for (const row of selected.rows) {
