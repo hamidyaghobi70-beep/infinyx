@@ -122,6 +122,7 @@ export class PostgresEncryptedMemoryStore implements MemoryPort {
       `SELECT tenant_id, namespace, memory_key, envelope
        FROM ${this.#table}
        WHERE envelope->>'keyId' IS DISTINCT FROM $1
+          OR envelope->>'formatVersion' IS DISTINCT FROM '2'
        ORDER BY updated_at
        LIMIT $2`,
       [activeKeyId, batchSize]
