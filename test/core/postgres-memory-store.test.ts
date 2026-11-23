@@ -20,6 +20,22 @@ describe("MemoryValueCipher", () => {
     expect(envelope.algorithm).toBe("A256GCM");
   });
 
+  it("binds v2 ciphertext to tenant, namespace, and record key while preserving v1 reads", async () => {
+    const cipher = new MemoryValueCipher(keys());
+    const context = { tenantId: "tenant-a", namespace: "tenant-a/notes", key: "record-1" };
+    const envelope = await cipher.encrypt("context-bound", context);
+    expect(envelope.formatVersion).toBe(2);
+    await expect(cipher.decrypt(envelope)).rejects.toThrow("Memory encryption operation failed.");
+    await expect(cipher.decrypt(envelope, { ...context, key: "record-2" }))
+      .rejects.toThrow("Memory encryption operation failed.");
+    await expect(cipher.decrypt(envelope, { ...context, tenantId: "tenant-b" }))
+      .rejects.toThrow("Memory encryption operation failed.");
+    await expect(cipher.decrypt(envelope, context)).resolves.toBe("context-bound");
+    const legacy = await cipher.encrypt("legacy-v1");
+    expect(legacy.formatVersion).toBe(1);
+    await expect(cipher.decrypt(legacy)).resolves.toBe("legacy-v1");
+  });
+
   it("uses a fresh nonce for every encryption", async () => {
     const cipher = new MemoryValueCipher(keys());
     const a = await cipher.encrypt("same");
@@ -161,7 +177,8 @@ describe("PostgresEncryptedMemoryStore", () => {
       getKey: async (id) => id === "test-key-v1" ? oldKey : id === "test-key-v2" ? newKey : null
     };
     const cipher = new MemoryValueCipher(provider);
-    const original = await cipher.encrypt('{"classification":"confidential","value":"rotate-me"}');
+    const rotationContext = { tenantId: "tenant-a", namespace: "tenant-a/notes", key: "k" };
+    const original = await cipher.encrypt('{"classification":"confidential","value":"rotate-me"}', rotationContext);
     const createdAt = "2026-01-01T00:00:00.000Z";
     const expiresAt = "2026-04-01T00:00:00.000Z";
     const stored = { ...original, schemaVersion: 1 as const, createdAt, updatedAt: createdAt,
@@ -188,7 +205,7 @@ describe("PostgresEncryptedMemoryStore", () => {
     expect(replacement.createdAt).toBe(createdAt);
     expect(replacement.expiresAt).toBe(expiresAt);
     expect(replacement.classification).toBe("confidential");
-    expect(await cipher.decrypt(replacement)).toBe('{"classification":"confidential","value":"rotate-me"}');
+    expect(await cipher.decrypt(replacement, rotationContext)).toBe('{"classification":"confidential","value":"rotate-me"}');
     expect(JSON.stringify(replacement)).not.toContain("rotate-me");
     expect(updateValues.slice(2, 5)).toEqual(["tenant-a", "tenant-a/notes", "k"]);
   });
@@ -202,7 +219,7 @@ describe("PostgresEncryptedMemoryStore", () => {
       getKey: async (id) => id === "test-key-v1" ? oldKey : id === "test-key-v2" ? newKey : null
     };
     const cipher = new MemoryValueCipher(provider);
-    const original = await cipher.encrypt('{"classification":"internal","value":"concurrent"}');
+    const original = await cipher.encrypt('{"classification":"internal","value":"concurrent"}', { tenantId: "tenant-a", namespace: "tenant-a/notes", key: "k" });
     const stored = { ...original, schemaVersion: 1 as const, createdAt: "2026-01-01T00:00:00.000Z",
       updatedAt: "2026-01-01T00:00:00.000Z", expiresAt: "2026-04-01T00:00:00.000Z",
       classification: "internal" as const };
