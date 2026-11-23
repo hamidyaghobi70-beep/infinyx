@@ -128,19 +128,33 @@ export class PostgresEncryptedMemoryStore implements MemoryPort {
       [activeKeyId, batchSize]
     );
     let rotated = 0;
+    const failures: unknown[] = [];
     for (const row of selected.rows) {
-      const context = encryptionContext({ namespace: row.namespace, key: row.memory_key }, row.tenant_id);
-      const replacement = await this.cipher.reencrypt(row.envelope, context);
-      const result = await this.db.query(
-        `UPDATE ${this.#table}
-         SET envelope = $1::jsonb, updated_at = $2
-         WHERE tenant_id = $3 AND namespace = $4 AND memory_key = $5 AND envelope = $6::jsonb`,
-        [JSON.stringify({ ...replacement, schemaVersion: row.envelope.schemaVersion,
-          createdAt: row.envelope.createdAt, updatedAt: this.#now().toISOString(),
-          expiresAt: row.envelope.expiresAt, classification: row.envelope.classification }),
-          this.#now(), row.tenant_id, row.namespace, row.memory_key, JSON.stringify(row.envelope)]
+      try {
+        const context = encryptionContext({ namespace: row.namespace, key: row.memory_key }, row.tenant_id);
+        const encrypted = await this.cipher.reencrypt(row.envelope, context);
+        const updatedAt = this.#now();
+        const result = await this.db.query(
+          `UPDATE ${this.#table}
+           SET envelope = $1::jsonb, updated_at = $2
+           WHERE tenant_id = $3 AND namespace = $4 AND memory_key = $5 AND envelope = $6::jsonb`,
+          [JSON.stringify({ ...encrypted, schemaVersion: row.envelope.schemaVersion,
+            createdAt: row.envelope.createdAt, updatedAt: updatedAt.toISOString(),
+            expiresAt: row.envelope.expiresAt, classification: row.envelope.classification }),
+            updatedAt, row.tenant_id, row.namespace, row.memory_key, JSON.stringify(row.envelope)]
+        );
+        if ((result.rowCount ?? 0) === 1) rotated += 1;
+      } catch (error) {
+        // Continue through this bounded batch, but never hide a failed record.
+        // Operators must alert and quarantine/reconcile the reported failures.
+        failures.push(error);
+      }
+    }
+    if (failures.length > 0) {
+      throw new AggregateError(
+        failures,
+        `Memory key rotation examined ${selected.rows.length} record(s), rotated ${rotated}, and encountered ${failures.length} failure(s).`
       );
-      if ((result.rowCount ?? 0) === 1) rotated += 1;
     }
     return { examined: selected.rows.length, rotated };
   }
