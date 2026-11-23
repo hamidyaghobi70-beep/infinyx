@@ -42,6 +42,30 @@ describe("JWKS key resolver", () => {
     expect(() => new JwksKeyResolver({ jwksUrl: "https://user:pass@id.example.test/jwks" })).toThrow(TypeError);
   });
 
+
+  it("rejects duplicate key identifiers instead of selecting an ambiguous key", async () => {
+    const duplicate = { ...jwk, kid: "duplicate", use: "sig", alg: "RS256" };
+    const resolver = new JwksKeyResolver({
+      jwksUrl: "https://id.example.test/jwks",
+      fetcher: async () => response([duplicate, duplicate])
+    });
+    await expect(resolver.resolve("duplicate")).rejects.toThrow(/duplicate key id/i);
+  });
+
+  it("enforces the response byte limit while streaming", async () => {
+    const oversized = new Response(new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(new Uint8Array(256 * 1024 + 1));
+        controller.close();
+      }
+    }), { status: 200 });
+    const resolver = new JwksKeyResolver({
+      jwksUrl: "https://id.example.test/jwks",
+      fetcher: async () => oversized
+    });
+    await expect(resolver.resolve("key")).rejects.toThrow(/size limit/i);
+  });
+
   it("rejects oversized cache TTL and failed endpoint responses", async () => {
     expect(() => new JwksKeyResolver({ jwksUrl: "https://id.example.test/jwks", cacheTtlMs: 99_000_000 })).toThrow(TypeError);
     const resolver = new JwksKeyResolver({ jwksUrl: "https://id.example.test/jwks", fetcher: async () => response([], 503) });
