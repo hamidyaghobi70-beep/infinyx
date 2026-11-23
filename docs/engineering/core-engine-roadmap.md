@@ -214,3 +214,12 @@ For every stage:
   remain unverified or unimplemented.
 - Stage 6 remains **OPEN / draft pending independent review and owner approval**. This
   documentation change does not authorize deployment or release.
+
+
+### Stage 6 progress — Core lifecycle readiness probe
+
+- Added `GET /ready`, wired to the actual `CoreEngine.state` in the server composition.
+- Returns HTTP 200 only while Core is `running`; returns HTTP 503 before readiness and
+  after shutdown begins. `GET /health` remains a liveness-only endpoint.
+- Added API regression coverage for starting, running and stopping states.
+- This is not dependency-aware readiness and does not establish production readiness.
