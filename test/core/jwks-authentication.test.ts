@@ -35,7 +35,9 @@ describe("JWKS-backed JWT authentication", () => {
     await expect(verify(makeToken({ ...claims, aud: "other" }))).rejects.toThrow();
     await expect(verify(makeToken({ ...claims, exp: 1_700_000_000 }))).rejects.toThrow();
     await expect(verify(makeToken(claims, "unknown"))).rejects.toThrow();
-    await expect(verify(makeToken(claims).replace(/.$/, "A"))).rejects.toThrow();
+    const [header, payload, signature] = makeToken(claims).split(".");
+    const tamperedSignature = (signature[0] === "A" ? "B" : "A") + signature.slice(1);
+    await expect(verify(`${header}.${payload}.${tamperedSignature}`)).rejects.toThrow();
   });
 
   it("exposes identity only after async bearer verification succeeds", async () => {
