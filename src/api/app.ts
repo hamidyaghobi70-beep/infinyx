@@ -24,7 +24,16 @@ export function createApp(isReady: ReadinessCheck = () => false, authenticate?: 
     res.status(200).json({ status: "ok" });
   });
 
-  // Authenticated identity introspection is mounted only when a trusted verifier is configured.\n  if (authenticate) {\n    application.get("/v1/identity", authenticate, (request, response) => {\n      const principal = getAuthenticatedPrincipal(request);\n      if (!principal) { response.status(401).json({ error: "unauthorized" }); return; }\n      response.status(200).json({ subject: principal.subject, tenantId: principal.tenantId, issuer: principal.issuer, audience: principal.audience, expiresAt: principal.expiresAt });\n    });\n  }\n\n  // Readiness reflects Core lifecycle, not downstream dependency health.
+  // Authenticated identity introspection is mounted only when a trusted verifier is configured.
+  if (authenticate) {
+    application.get("/v1/identity", authenticate, (request, response) => {
+      const principal = getAuthenticatedPrincipal(request);
+      if (!principal) { response.status(401).json({ error: "unauthorized" }); return; }
+      response.status(200).json({ subject: principal.subject, tenantId: principal.tenantId, issuer: principal.issuer, audience: principal.audience, expiresAt: principal.expiresAt });
+    });
+  }
+
+  // Readiness reflects Core lifecycle, not downstream dependency health.
   application.get("/ready", (_req, res) => {
     if (!isReady()) {
       res.status(503).json({ status: "not_ready" });
