@@ -252,6 +252,44 @@ describe("PostgresEncryptedMemoryStore", () => {
     })).toBe('{"classification":"internal","value":"legacy"}');
   });
 
+  it("continues a bounded rotation batch after an unreadable record and reports failures", async () => {
+    const key = randomBytes(32);
+    const cipher = new MemoryValueCipher({
+      getActiveKey: async () => ({ keyId: "active-key", key }),
+      getKey: async (id) => id === "active-key" ? key : null
+    });
+    const valid = await cipher.encrypt(
+      '{"classification":"internal","value":"rotate"}',
+      { tenantId: "tenant-a", namespace: "tenant-a/notes", key: "valid" }
+    );
+    const metadata = {
+      schemaVersion: 1 as const,
+      createdAt: "2026-01-01T00:00:00.000Z",
+      updatedAt: "2026-01-01T00:00:00.000Z",
+      expiresAt: "2026-04-01T00:00:00.000Z",
+      classification: "internal" as const
+    };
+    let updates = 0;
+    const db: SqlExecutor = {
+      query: vi.fn(async (sql: string) => {
+        if (sql.startsWith("SELECT")) return {
+          rows: [
+            { tenant_id: "tenant-a", namespace: "tenant-a/notes", memory_key: "broken",
+              envelope: { ...metadata, formatVersion: 2, encryptionVersion: 2, algorithm: "A256GCM",
+                keyId: "missing-key", nonce: "AAAAAAAAAAAAAAAA", ciphertext: "", authenticationTag: "AAAAAAAAAAAAAAAAAAAAAA==" } },
+            { tenant_id: "tenant-a", namespace: "tenant-a/notes", memory_key: "valid",
+              envelope: { ...valid, ...metadata } }
+          ]
+        };
+        if (sql.startsWith("UPDATE")) { updates += 1; return { rows: [], rowCount: 1 }; }
+        return { rows: [], rowCount: 0 };
+      })
+    };
+    const store = new PostgresEncryptedMemoryStore(db, cipher);
+    await expect(store.reencryptBatch(10)).rejects.toBeInstanceOf(AggregateError);
+    expect(updates).toBe(1);
+  });
+
   it("does not count a concurrently changed record as rotated", async () => {
     const oldKey = randomBytes(32);
     const newKey = randomBytes(32);
