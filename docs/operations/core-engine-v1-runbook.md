@@ -13,8 +13,8 @@ deployment, Agent activation, or use with sensitive data.
   `NODE_ENV`, and `LOG_LEVEL`. `PORT` must be an integer from 1 to 65535.
 - The current server composition creates a default `CoreEngine`; no authenticated
   principal provider, durable MemoryPort adapter, or AgentModule is wired into it.
-- The HTTP app currently exposes `GET /health` and a JSON 404 for unknown routes.
-  `/health` is a liveness probe only. There is no independent HTTP readiness endpoint.
+- The HTTP app exposes `GET /health` (liveness) and `GET /ready` (Core lifecycle readiness),
+  plus a JSON 404 for unknown routes.
 
 ## Safe local verification
 
@@ -50,8 +50,11 @@ listener to a public network.
   for that process. A process that fails startup should not be considered ready.
 - `GET /health` confirms only that the HTTP process can answer a request. It does not
   independently inspect Core state, dependency health, storage, or downstream services.
-- No separate `/ready` route currently exists. A deployment platform must not interpret
-  `/health` as a dependency-aware readiness signal.
+- `GET /ready` returns `200 {"status":"ready"}` only while `CoreEngine.state === "running"`;
+  otherwise it returns `503 {"status":"not_ready"}`. It reflects Core lifecycle only,
+  not dependency, storage, or downstream-service health.
+- A deployment platform must use `/ready` for Core lifecycle readiness and `/health` for
+  process liveness; neither endpoint proves external dependency health.
 - No durable storage or external dependency is currently composed into `src/server.ts`.
 
 ## Graceful shutdown
@@ -103,7 +106,7 @@ No deployment should proceed while any required gate is unknown or unverified.
 
 ## Current known gaps
 
-- No separate readiness endpoint or dependency-aware readiness check.
+- `/ready` reflects Core lifecycle only; dependency-aware readiness is not implemented.
 - No production deployment manifest, resource limit, restart policy, or rollback automation
   is established by this runbook.
 - No load, soak, or capacity measurements are recorded.
