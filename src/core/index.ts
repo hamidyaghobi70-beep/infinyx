@@ -1,5 +1,10 @@
 export { CoreEngine } from "./core-engine.js";
-export { AuthenticationError, createJwtPrincipalVerifier, createBearerAuthMiddleware, createPrincipalMemoryScope, getAuthenticatedPrincipal, isAuthenticatedPrincipal } from "./authenticated-principal.js";
+export { AuthenticationError, createJwtPrincipalVerifier, createBearerAuthMiddleware, createAsyncBearerAuthMiddleware, createJwksJwtPrincipalVerifier, createPrincipalMemoryScope, getAuthenticatedPrincipal, isAuthenticatedPrincipal } from "./authenticated-principal.js";
+export type { JwtPublicKeyResolver, JwksJwtVerifierOptions } from "./authenticated-principal.js";
+export { JwksKeyResolver } from "./jwks-key-resolver.js";
+export type { JwksKeyResolverOptions } from "./jwks-key-resolver.js";
+export { createAuthenticatedMemorySession } from "./authenticated-memory-session.js";
+export type { AuthenticatedMemorySessionOptions } from "./authenticated-memory-session.js";
 export type { AuthenticatedPrincipal, JwtVerifierOptions } from "./authenticated-principal.js";
 export type { CoreEngineOptions } from "./core-engine.js";
 export { CoreError } from "./core-error.js";
