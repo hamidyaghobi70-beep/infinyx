@@ -210,6 +210,48 @@ describe("PostgresEncryptedMemoryStore", () => {
     expect(updateValues.slice(2, 5)).toEqual(["tenant-a", "tenant-a/notes", "k"]);
   });
 
+  it("upgrades a v1 envelope to v2 even when its key id is already active", async () => {
+    const key = randomBytes(32);
+    const provider: MemoryKeyProvider = {
+      getActiveKey: async () => ({ keyId: "test-key-v1", key }),
+      getKey: async (id) => id === "test-key-v1" ? key : null
+    };
+    const cipher = new MemoryValueCipher(provider);
+    const legacy = await cipher.encrypt('{"classification":"internal","value":"legacy"}');
+    expect(legacy.formatVersion).toBe(1);
+    const stored = {
+      ...legacy, schemaVersion: 1 as const,
+      createdAt: "2026-01-01T00:00:00.000Z",
+      updatedAt: "2026-01-01T00:00:00.000Z",
+      expiresAt: "2026-04-01T00:00:00.000Z",
+      classification: "internal" as const
+    };
+    let replacement: Record<string, unknown> | undefined;
+    let selectSql = "";
+    const db: SqlExecutor = {
+      query: vi.fn(async (sql: string, values: readonly unknown[] = []) => {
+        if (sql.startsWith("SELECT")) {
+          selectSql = sql;
+          expect(values).toEqual(["test-key-v1", 10]);
+          return { rows: [{ tenant_id: "tenant-a", namespace: "tenant-a/notes",
+            memory_key: "k", envelope: stored }] };
+        }
+        if (sql.startsWith("UPDATE")) {
+          replacement = JSON.parse(String(values[0])) as Record<string, unknown>;
+          return { rows: [], rowCount: 1 };
+        }
+        return { rows: [], rowCount: 0 };
+      })
+    };
+    const store = new PostgresEncryptedMemoryStore(db, cipher);
+    await expect(store.reencryptBatch(10)).resolves.toEqual({ examined: 1, rotated: 1 });
+    expect(selectSql).toContain("envelope->>'formatVersion' IS DISTINCT FROM '2'");
+    expect(replacement?.formatVersion).toBe(2);
+    expect(await cipher.decrypt(replacement as never, {
+      tenantId: "tenant-a", namespace: "tenant-a/notes", key: "k"
+    })).toBe('{"classification":"internal","value":"legacy"}');
+  });
+
   it("does not count a concurrently changed record as rotated", async () => {
     const oldKey = randomBytes(32);
     const newKey = randomBytes(32);
