@@ -56,9 +56,9 @@ describe("PostgresEncryptedMemoryStore", () => {
       })
     };
     const store = new PostgresEncryptedMemoryStore(db, cipher);
-    await store.write({ namespace: "tenant-a/notes", key: "k" }, '{"v":1}');
+    await store.write({ namespace: "tenant-a/notes", key: "k" }, '{"classification":"internal","v":1}');
     expect(JSON.stringify(saved)).not.toContain('"v":1');
-    expect(await store.read({ namespace: "tenant-a/notes", key: "k" })).toBe('{"v":1}');
+    expect(await store.read({ namespace: "tenant-a/notes", key: "k" })).toBe('{"classification":"internal","v":1}');
   });
 
   it("deletes expired records before returning a miss", async () => {
@@ -80,6 +80,13 @@ describe("PostgresEncryptedMemoryStore", () => {
     const store = new PostgresEncryptedMemoryStore(db, new MemoryValueCipher(keys()));
     await expect(store.deleteExpired(0)).rejects.toThrow(TypeError);
     await expect(store.deleteExpired(500)).resolves.toBe(7);
+  });
+
+  it("rejects unclassified and restricted values by default", async () => {
+    const db: SqlExecutor = { query: async () => ({ rows: [], rowCount: 1 }) };
+    const store = new PostgresEncryptedMemoryStore(db, new MemoryValueCipher(keys()));
+    await expect(store.write({ namespace: "n", key: "k" }, '{"v":1}')).rejects.toThrow("classification");
+    await expect(store.write({ namespace: "n", key: "k" }, '{"classification":"restricted","secret":"x"}')).rejects.toThrow("classification");
   });
 
   it("rejects non-serialized values from callers bypassing GuardedMemoryPort", async () => {
