@@ -3,7 +3,7 @@ import { createHash } from "node:crypto";
 export interface CoreMigration {
   /** Stable, sortable identifier, e.g. 0002_add_memory_metadata. */
   readonly id: string;
-  /** Complete SQL body. Each migration is executed atomically in its own transaction. */
+  /** Complete SQL body. The complete ordered migration batch is atomic. */
   readonly sql: string;
 }
 
@@ -29,9 +29,10 @@ export interface MigrationRunResult {
 /**
  * Idempotent, resumable PostgreSQL migration runner.
  *
- * Every migration and its ledger record commit in the same transaction. A
- * transaction-scoped advisory lock serializes competing application instances.
- * A changed SQL body for an already-applied identifier is rejected.
+ * The ordered batch and all ledger records commit in one transaction. A
+ * transaction-scoped advisory lock spans the entire batch, preventing different
+ * application versions from interleaving migration sequences. A changed SQL body
+ * for an already-applied identifier is rejected.
  */
 export class PostgresMigrationRunner {
   constructor(private readonly pool: MigrationPool) {}
@@ -49,21 +50,23 @@ export class PostgresMigrationRunner {
       }
       seen.add(migration.id);
     }
+    if (ordered.length === 0) return Object.freeze({ applied: [], skipped: [] });
 
     const applied: string[] = [];
     const skipped: string[] = [];
-    for (const migration of ordered) {
-      const checksum = createHash("sha256").update(migration.sql, "utf8").digest("hex");
-      const connection = await this.pool.connect();
-      try {
-        await connection.query("BEGIN");
-        await connection.query("SELECT pg_advisory_xact_lock($1)", [7_314_209_041]);
-        await connection.query("CREATE SCHEMA IF NOT EXISTS infinyx_meta");
-        await connection.query(`CREATE TABLE IF NOT EXISTS infinyx_meta.schema_migrations (
-          migration_id text PRIMARY KEY,
-          checksum text NOT NULL,
-          applied_at timestamptz NOT NULL DEFAULT now()
-        )`);
+    const connection = await this.pool.connect();
+    try {
+      await connection.query("BEGIN");
+      await connection.query("SELECT pg_advisory_xact_lock($1)", [7_314_209_041]);
+      await connection.query("CREATE SCHEMA IF NOT EXISTS infinyx_meta");
+      await connection.query(`CREATE TABLE IF NOT EXISTS infinyx_meta.schema_migrations (
+        migration_id text PRIMARY KEY,
+        checksum text NOT NULL,
+        applied_at timestamptz NOT NULL DEFAULT now()
+      )`);
+
+      for (const migration of ordered) {
+        const checksum = createHash("sha256").update(migration.sql, "utf8").digest("hex");
         const existing = await connection.query<{ checksum: string }>(
           "SELECT checksum FROM infinyx_meta.schema_migrations WHERE migration_id = $1 FOR UPDATE",
           [migration.id]
@@ -73,26 +76,25 @@ export class PostgresMigrationRunner {
           if (recorded !== checksum) {
             throw new Error(`Applied migration ${migration.id} checksum mismatch; refusing to continue.`);
           }
-          await connection.query("COMMIT");
           skipped.push(migration.id);
           continue;
         }
 
-        // SQL and ledger insertion share one transaction: a failed SQL body cannot
-        // leave a migration marked as applied.
+        // SQL and ledger insertion share the batch transaction. A failed migration
+        // rolls back every schema change and ledger row from this invocation.
         await connection.query(migration.sql);
         await connection.query(
           "INSERT INTO infinyx_meta.schema_migrations (migration_id, checksum) VALUES ($1, $2)",
           [migration.id, checksum]
         );
-        await connection.query("COMMIT");
         applied.push(migration.id);
-      } catch (error) {
-        try { await connection.query("ROLLBACK"); } catch { /* preserve original failure */ }
-        throw error;
-      } finally {
-        connection.release();
       }
+      await connection.query("COMMIT");
+    } catch (error) {
+      try { await connection.query("ROLLBACK"); } catch { /* preserve original failure */ }
+      throw error;
+    } finally {
+      connection.release();
     }
     return Object.freeze({ applied: Object.freeze(applied), skipped: Object.freeze(skipped) });
   }
