@@ -1,4 +1,6 @@
 export { CoreEngine } from "./core-engine.js";
+export { AuthenticationError, createJwtPrincipalVerifier, createBearerAuthMiddleware, createPrincipalMemoryScope, getAuthenticatedPrincipal, isAuthenticatedPrincipal } from "./authenticated-principal.js";
+export type { AuthenticatedPrincipal, JwtVerifierOptions } from "./authenticated-principal.js";
 export type { CoreEngineOptions } from "./core-engine.js";
 export { CoreError } from "./core-error.js";
 export type { CoreErrorCode } from "./core-error.js";
