@@ -179,8 +179,11 @@ function tenantFromScopedNamespace(namespace: string): string {
     throw new TypeError("Persistent memory namespace must include a tenant scope prefix.");
   }
   try {
-    const tenantId = decodeURIComponent(namespace.slice(0, separator));
-    if (!tenantId || tenantId.length > 128 || tenantId.trim().length === 0) throw new Error("invalid");
+    const encodedTenant = namespace.slice(0, separator);
+    const tenantId = decodeURIComponent(encodedTenant);
+    if (!tenantId || tenantId.length > 128 || tenantId.trim().length === 0 ||
+        /[\\u0000-\\u001f\\u007f-\\u009f]/.test(tenantId) ||
+        encodeURIComponent(tenantId) !== encodedTenant) throw new Error("invalid");
     return tenantId;
   } catch {
     throw new TypeError("Persistent memory namespace has an invalid tenant scope prefix.");
