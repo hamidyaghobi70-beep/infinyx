@@ -29,7 +29,7 @@ It rejects malformed tokens, unsupported algorithms, invalid signatures, expired
 
 ## Trusted memory binding
 
-`createPrincipalMemoryScope` accepts only a principal object issued by this process's verifier (tracked by a private WeakSet), then derives `tenantId` from the signed `tenant_id` claim and `actorId` from signed `sub`. A module cannot supply or override either identity field. The resulting scope must be used by the trusted composition root when it creates a module's `GuardedMemoryPort`.
+`createPrincipalMemoryScope` accepts only a principal object issued by this process's verifier (tracked by a private WeakSet), then derives `tenantId` from the signed `tenant_id` claim and `actorId` from signed `sub`. A module cannot supply or override either identity field. The request-scoped `createAuthenticatedMemorySession` helper uses this verified-principal check to create a fresh `GuardedMemoryPort` with tenant and actor values derived from signed claims. Do not cache the resulting capability across requests or accept caller-supplied tenant/actor identifiers. Core module contexts have module lifetime, so they must not hold a user-specific singleton memory session. The helper is an exported boundary, not yet a live HTTP memory workload or PostgreSQL deployment.
 
 ## Explicit remaining integration gate
 
