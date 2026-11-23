@@ -4,7 +4,7 @@ Status: implemented as a configurable RS256 bearer-token verifier; not productio
 
 ## OIDC/JWKS key resolver baseline
 
-A bounded JWKS resolver is now available in `src/core/jwks-key-resolver.ts`. It requires an operator-supplied HTTPS endpoint, refuses redirects and credential-bearing URLs, caps response size and request time, accepts only RSA signing keys marked for RS256 with at least 2048-bit modulus, caches keys for a bounded interval, and refreshes once when an unknown `kid` is requested. Unit tests cover caching, key rotation, unsuitable keys, insecure URLs, and endpoint failures.
+A bounded JWKS resolver is now available in `src/core/jwks-key-resolver.ts`. It requires an operator-supplied HTTPS endpoint, refuses redirects and credential-bearing URLs, enforces a streaming response-size limit and request timeout, rejects duplicate `kid` values, accepts only RSA signing keys marked for RS256 with at least 2048-bit modulus, caches keys for a bounded interval, and refreshes once when an unknown `kid` is requested. Unit tests cover caching, key rotation, unsuitable keys, insecure URLs, and endpoint failures.
 
 The server can now use this resolver through an asynchronous RS256 verifier and bearer middleware. Configure `AUTH_ISSUER`, `AUTH_AUDIENCE`, and exactly one of `AUTH_JWKS_URL` or `AUTH_PUBLIC_KEY_PEM`. The JWKS URL must be the trusted HTTPS signing-keys endpoint for the configured issuer; it is never discovered from an untrusted token. Unknown `kid` values trigger a bounded refresh. Keycloak is the preferred deployment target, but no realm, issuer, audience, endpoint, or signing key has been invented or configured.
 
