@@ -60,12 +60,24 @@ export class PostgresEncryptedMemoryStore implements MemoryPort {
       // The row may have been refreshed after SELECT. Delete only the exact
       // expired version observed above; an unconditional delete can erase a
       // concurrent write that extended the record's retention window.
-      await this.db.query(
+      const deletion = await this.db.query(
         `DELETE FROM ${this.#table}
          WHERE tenant_id = $1 AND namespace = $2 AND memory_key = $3 AND expires_at = $4`,
         [tenantId, address.namespace, address.key, row.expires_at]
       );
-      return null;
+      if ((deletion.rowCount ?? 0) > 0) return null;
+
+      // A zero-row conditional delete means the observed version changed (or
+      // another reader removed it). Re-read once so a concurrent refresh is
+      // visible to this caller instead of being reported as a false cache miss.
+      const refreshed = await this.db.query<{ envelope: StoredMemoryEnvelope; expires_at: Date | string }>(
+        `SELECT envelope, expires_at FROM ${this.#table}
+         WHERE tenant_id = $1 AND namespace = $2 AND memory_key = $3 LIMIT 1`,
+        [tenantId, address.namespace, address.key]
+      );
+      const current = refreshed.rows[0];
+      if (!current || new Date(current.expires_at).getTime() <= this.#now().getTime()) return null;
+      return this.cipher.decrypt(current.envelope, encryptionContext(address, tenantId));
     }
     return this.cipher.decrypt(row.envelope, encryptionContext(address, tenantId));
   }
