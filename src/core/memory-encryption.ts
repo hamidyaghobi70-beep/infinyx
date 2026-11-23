@@ -49,6 +49,13 @@ export class MemoryValueCipher {
     }
   }
 
+  async activeKeyId(): Promise<string> {
+    const active = await this.keys.getActiveKey();
+    assertKey(active.key);
+    if (!active.keyId || active.keyId.length > 128) throw new MemoryEncryptionError();
+    return active.keyId;
+  }
+
   /** Re-encrypts plaintext with the provider's current active key; never exports plaintext. */
   async reencrypt(envelope: EncryptedMemoryEnvelope): Promise<EncryptedMemoryEnvelope> {
     const plaintext = await this.decrypt(envelope);
