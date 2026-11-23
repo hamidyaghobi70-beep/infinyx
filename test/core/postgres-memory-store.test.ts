@@ -66,7 +66,7 @@ describe("PostgresEncryptedMemoryStore", () => {
     const db: SqlExecutor = {
       query: vi.fn(async (sql: string, values: readonly unknown[] = []) => {
         if (sql.startsWith("INSERT")) {
-          saved = JSON.parse(String(values[2])) as Record<string, unknown>;
+          saved = JSON.parse(String(values[3])) as Record<string, unknown>;
           return { rows: [], rowCount: 1 };
         }
         if (sql.startsWith("SELECT")) return { rows: saved ? [{ envelope: saved, expires_at: new Date(Date.now() + 60_000) }] : [] };
@@ -76,6 +76,7 @@ describe("PostgresEncryptedMemoryStore", () => {
     const store = new PostgresEncryptedMemoryStore(db, cipher);
     await store.write({ namespace: "tenant-a/notes", key: "k" }, '{"classification":"internal","v":1}');
     expect(JSON.stringify(saved)).not.toContain('"v":1');
+    expect(db.query).toHaveBeenCalledWith(expect.stringContaining("tenant_id = $1"), ["tenant-a", "tenant-a/notes", "k"]);
     expect(await store.read({ namespace: "tenant-a/notes", key: "k" })).toBe('{"classification":"internal","v":1}');
   });
 
@@ -98,6 +99,13 @@ describe("PostgresEncryptedMemoryStore", () => {
     const store = new PostgresEncryptedMemoryStore(db, new MemoryValueCipher(keys()));
     await expect(store.deleteExpired(0)).rejects.toThrow(TypeError);
     await expect(store.deleteExpired(500)).resolves.toBe(7);
+  });
+
+  it("requires an explicit tenant prefix for classified persistent values", async () => {
+    const db: SqlExecutor = { query: async () => ({ rows: [], rowCount: 1 }) };
+    const store = new PostgresEncryptedMemoryStore(db, new MemoryValueCipher(keys()));
+    await expect(store.write({ namespace: "notes", key: "k" }, '{"classification":"internal"}'))
+      .rejects.toThrow("tenant scope prefix");
   });
 
   it("rejects unclassified and restricted values by default", async () => {
