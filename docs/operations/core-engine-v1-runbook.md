@@ -84,8 +84,8 @@ Operational checks:
 - The guarded memory implementation and in-memory reference store are not wired into the
   production server composition.
 - `InMemoryMemoryStore` is volatile, plaintext, and not suitable for sensitive data.
-- There is no durable encryption, key custody/rotation, retention/backup policy, durable
-  audit sink, or authenticated identity composition in this branch.
+- Partial Stage 4 library components now exist: AES-256-GCM encryption with an injected key-provider contract; a PostgreSQL memory adapter; a transactional hash-chain audit writer; least-privilege role SQL; a checksum/advisory-lock migration runner; and an external deletion-ledger replay contract.
+- These components are not wired into `src/server.ts` or the live Core runtime. No concrete cloud KMS provider, external deletion ledger, backup/restore provider or restore drill, signed external audit checkpoint, authenticated identity composition, or live PostgreSQL/KMS integration has been verified. Do not configure or use the adapters with real data.
 - Never place credentials, secrets, personal data, or regulated data in namespaces, keys,
   logs, or the in-memory reference store.
 - Agent and external tool execution are not enabled by this runbook.
@@ -96,8 +96,9 @@ This document is not deployment authorization. Before any production deployment,
 project owner and independent reviewer must approve:
 - the exact immutable commit and completed CI matrix;
 - authenticated identity and tenant composition;
-- persistent storage security decisions documented in
-  `docs/security/memory-boundary-stage4.md`;
+- completed persistent-storage security gates documented in
+  `docs/security/memory-boundary-stage4.md`, including concrete KMS, independent deletion ledger,
+  restore drill, trusted identity, and live integration evidence;
 - a separate readiness/health contract and dependency failure policy;
 - deployment resource limits, restart policy, connection limits, and rollback target;
 - an incident-response owner and tested recovery procedure.
