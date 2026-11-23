@@ -49,9 +49,10 @@ export interface MemoryAddress {
 }
 
 /**
- * Storage boundary only. No persistence adapter is provided by Core Engine v1.
- * Implementations must define encryption, retention, tenant isolation and access
- * control before they are connected to production workloads.
+ * Storage boundary only. In-memory and optional encrypted PostgreSQL adapters exist.
+ * Implementations do not provide identity authentication: tenant scoping, policy
+ * enforcement, classification, encryption, retention and audit must be composed
+ * explicitly before any persistent adapter is connected to production workloads.
  */
 export interface MemoryPort {
   read(address: MemoryAddress): Promise<unknown | null>;
