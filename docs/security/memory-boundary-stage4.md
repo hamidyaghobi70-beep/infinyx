@@ -106,7 +106,7 @@ Selected baseline:
 These are architecture decisions, **not evidence that the controls have been implemented**. The existing reference store remains in-memory and non-durable. No persistence adapter may be connected until trusted authenticated identity is available to the composition root and the implementation gates in ADR-0001 pass.
 ## Implementation progress on this draft branch
 
-The initial adapter, cipher, audit writer, baseline schema and least-privilege role migrations, bounded key-rotation primitive, resumable PostgreSQL migration runner, and focused unit tests have been added. These are library components only. They have **not** been wired into `src/server.ts`, have not been tested against a live PostgreSQL service or cloud KMS, and have not passed CI on the exact current head. The SQL interfaces are structural so the repository does not yet take a dependency on a specific PostgreSQL driver.
+The initial adapter, cipher, audit writer, baseline schema and least-privilege role migrations, bounded key-rotation primitive, resumable PostgreSQL migration runner, deletion tombstone/replay coordinator, and focused unit tests have been added. These are library components only. They have **not** been wired into `src/server.ts`, have not been tested against a live PostgreSQL service or cloud KMS, and have not passed CI on the exact current head. The SQL interfaces are structural so the repository does not yet take a dependency on a specific PostgreSQL driver.
 
 Remaining blocking work includes: a production KMS provider, rotation scheduling/monitoring and key-revocation procedure; DB role/grant provisioning and external audit checkpoints; classification enforcement across all MemoryPort implementations; backup/restore and deletion replay; authenticated identity composition; integration tests against PostgreSQL and a test KMS; and independent review. No real user data may be stored with this adapter until those gates pass.
 
@@ -115,3 +115,6 @@ Remaining blocking work includes: a production KMS provider, rotation scheduling
 Per the change protocol: independent review of the exact head commit is required, and no
 merge to `main`, release or deployment is implied. Stage 5 (identity, agent runtime, tool
 execution) remains disabled and out of scope.
+
+
+Deletion replay boundary: the coordinator accepts a `MemoryDeletionLedgerPort` that MUST be implemented by a system outside the PostgreSQL backup/restore failure domain. The in-repository implementation is an orchestration contract with unit tests only; no external ledger provider is configured. Do not connect it to production or claim restore safety until an independently administered durable ledger, access controls, retention policy, and restore drill are verified.
