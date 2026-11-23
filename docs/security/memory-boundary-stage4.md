@@ -90,15 +90,20 @@ For `read`, `write` and `delete`, in this order:
 - Concurrent writes to the same address are last-write-wins. No compare-and-set exists.
 - Audit events carry namespace and key (not values). Treat those as non-secret identifiers.
 
-## Decisions required from the project owner before a persistent adapter
+## Owner decisions — resolved as an engineering baseline
 
-1. Storage technology and hosting (free/open-source preference and budget limits apply).
-2. Encryption design and key custody, including rotation and loss-recovery policy (M8, M9).
-3. Retention, deletion and backup rules, including any legal or regulatory requirements (M10).
-4. Whether durable audit lives in the same store or a separate append-only system (M11).
-5. The versioned value envelope and migration approach (M13).
-6. Data classification scheme and which classes may be stored at all (M12).
+The Founder delegated the six technical choices to the engineering coordinator, prioritizing the simplest, fastest, maintainable secure option. The decisions are recorded in [ADR-0001: Stage 4 persistent memory baseline](../architecture/decisions/adr-0001-stage4-persistent-memory.md).
 
+Selected baseline:
+
+1. PostgreSQL as the first durable backend; managed hosting for hosted deployments.
+2. TLS plus application-layer AES-256-GCM envelope encryption; keys owned by an external KMS abstraction.
+3. Default 90-day memory retention and 30-day encrypted backup retention, with deletion replay after restore.
+4. Durable audit in a separate PostgreSQL schema with separate least-privilege roles, append-only writes, and externally stored signed checkpoints where available.
+5. Canonical JSON inside a versioned envelope with resumable, idempotent forward migrations.
+6. Explicit Public/Internal/Confidential/Restricted classification; Restricted data is denied, and unknown classification defaults to deny.
+
+These are architecture decisions, **not evidence that the controls have been implemented**. The existing reference store remains in-memory and non-durable. No persistence adapter may be connected until trusted authenticated identity is available to the composition root and the implementation gates in ADR-0001 pass.
 ## Review gate
 
 Per the change protocol: independent review of the exact head commit is required, and no
