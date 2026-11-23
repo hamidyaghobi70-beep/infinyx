@@ -10,6 +10,7 @@ export function createJwtPrincipalVerifier(options: JwtVerifierOptions): (token:
  if (!Number.isInteger(tolerance) || tolerance < 0 || tolerance > 300) throw new TypeError("Invalid JWT clock tolerance.");
  let key: KeyObject;
  try { key = createPublicKey(options.publicKeyPem); } catch { throw new TypeError("Invalid JWT verification public key."); }
+ if (key.asymmetricKeyType !== "rsa" || (key.asymmetricKeyDetails?.modulusLength ?? 0) < 2048) throw new TypeError("JWT RS256 requires an RSA public key of at least 2048 bits.");
  const now = options.now ?? (() => Date.now() / 1000);
  return (token: string): AuthenticatedPrincipal => {
   try {
@@ -18,8 +19,8 @@ export function createJwtPrincipalVerifier(options: JwtVerifierOptions): (token:
    if (parts.length !== 3 || parts.some((part) => !part)) throw new Error();
    const header = parseSegment(parts[0]!) as Record<string, unknown>;
    const claims = parseSegment(parts[1]!) as Record<string, unknown>;
-   if (header.alg !== "RS256" || (header.typ !== undefined && header.typ !== "JWT")) throw new Error();
-   if (!verifySignature("RSA-SHA256", Buffer.from(parts[0] + "." + parts[1], "ascii"), key, Buffer.from(parts[2]!, "base64url"))) throw new Error();
+   if (header.alg !== "RS256" || (header.typ !== undefined && header.typ !== "JWT") || header.crit !== undefined || (header.b64 !== undefined && header.b64 !== true)) throw new Error();
+   if (!verifySignature("RSA-SHA256", Buffer.from(parts[0] + "." + parts[1], "ascii"), key, decodeBase64Url(parts[2]!))) throw new Error();
    const current = now();
    if (!Number.isFinite(current) || claims.iss !== options.issuer || !audienceMatches(claims.aud, options.audience) ||
        !validClaim(claims.sub) || !validClaim(claims.tenant_id) || typeof claims.exp !== "number" || !Number.isFinite(claims.exp) ||
@@ -49,6 +50,7 @@ export function getAuthenticatedPrincipal(request: Request): AuthenticatedPrinci
  const principal = (request.res?.locals as { authenticatedPrincipal?: unknown } | undefined)?.authenticatedPrincipal;
  return isAuthenticatedPrincipal(principal) ? principal : null;
 }
-function parseSegment(segment: string): unknown { const parsed: unknown = JSON.parse(Buffer.from(segment, "base64url").toString("utf8")); if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) throw new Error(); return parsed; }
+function decodeBase64Url(segment: string): Buffer { if (!/^[A-Za-z0-9_-]+$/.test(segment) || segment.length % 4 === 1) throw new Error(); const decoded = Buffer.from(segment, "base64url"); if (decoded.toString("base64url") !== segment) throw new Error(); return decoded; }
+function parseSegment(segment: string): unknown { const parsed: unknown = JSON.parse(decodeBase64Url(segment).toString("utf8")); if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) throw new Error(); return parsed; }
 function audienceMatches(value: unknown, expected: string): boolean { return value === expected || (Array.isArray(value) && value.includes(expected) && value.every((item) => typeof item === "string")); }
 function validClaim(value: unknown): value is string { return typeof value === "string" && value.trim().length > 0 && value.length <= 256 && !Array.from(value).some((character) => { const code = character.charCodeAt(0); return code <= 0x1f || (code >= 0x7f && code <= 0x9f); }); }
