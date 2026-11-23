@@ -10,9 +10,13 @@ const config = loadConfig();
 const core = new CoreEngine();
 const authIssuer = process.env.AUTH_ISSUER;
 const authAudience = process.env.AUTH_AUDIENCE;
-const authPublicKey = process.env.AUTH_PUBLIC_KEY_PEM?.replace(/\\\\n/g, "\\n");
+const authPublicKey = process.env.AUTH_PUBLIC_KEY_PEM?.replace(/\\n/g, "\n");
 const authJwksUrl = process.env.AUTH_JWKS_URL;
 const authConfigured = [authIssuer, authAudience, authPublicKey, authJwksUrl].filter(Boolean).length;
+
+if (config.NODE_ENV === "production" && authConfigured === 0) {
+  throw new Error("Production startup requires a trusted authentication configuration.");
+}
 if (authConfigured !== 0 && (!authIssuer || !authAudience || Boolean(authPublicKey) === Boolean(authJwksUrl))) {
   throw new Error("Configure AUTH_ISSUER and AUTH_AUDIENCE with exactly one of AUTH_PUBLIC_KEY_PEM or AUTH_JWKS_URL.");
 }
