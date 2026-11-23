@@ -5,7 +5,7 @@ const verifiedPrincipals = new WeakSet<object>();
 export interface JwtVerifierOptions { readonly issuer: string; readonly audience: string; readonly publicKeyPem: string; readonly clockToleranceSeconds?: number; readonly now?: () => number; }
 export class AuthenticationError extends Error { constructor() { super("Authentication failed."); this.name = "AuthenticationError"; } }
 export function createJwtPrincipalVerifier(options: JwtVerifierOptions): (token: string) => AuthenticatedPrincipal {
- if (!options.issuer.trim() || !options.audience.trim() || !options.publicKeyPem.includes("BEGIN PUBLIC KEY")) throw new TypeError("A trusted issuer, audience and PEM public key are required.");
+ if (!options.issuer.trim() || !options.audience.trim() || !(/-----BEGIN PUBLIC KEY-----/.test(options.publicKeyPem) || /-----BEGIN RSA PUBLIC KEY-----/.test(options.publicKeyPem))) throw new TypeError("A trusted issuer, audience and PEM public key are required.");
  const tolerance = options.clockToleranceSeconds ?? 5;
  if (!Number.isInteger(tolerance) || tolerance < 0 || tolerance > 300) throw new TypeError("Invalid JWT clock tolerance.");
  let key: KeyObject;
