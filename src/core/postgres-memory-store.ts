@@ -57,7 +57,14 @@ export class PostgresEncryptedMemoryStore implements MemoryPort {
     const row = result.rows[0];
     if (!row) return null;
     if (new Date(row.expires_at).getTime() <= this.#now().getTime()) {
-      await this.delete(address);
+      // The row may have been refreshed after SELECT. Delete only the exact
+      // expired version observed above; an unconditional delete can erase a
+      // concurrent write that extended the record's retention window.
+      await this.db.query(
+        `DELETE FROM ${this.#table}
+         WHERE tenant_id = $1 AND namespace = $2 AND memory_key = $3 AND expires_at = $4`,
+        [tenantId, address.namespace, address.key, row.expires_at]
+      );
       return null;
     }
     return this.cipher.decrypt(row.envelope, encryptionContext(address, tenantId));
