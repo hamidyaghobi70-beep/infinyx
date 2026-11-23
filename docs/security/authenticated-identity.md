@@ -6,7 +6,7 @@ Status: implemented as a configurable RS256 bearer-token verifier; not productio
 
 A bounded JWKS resolver is now available in `src/core/jwks-key-resolver.ts`. It requires an operator-supplied HTTPS endpoint, refuses redirects and credential-bearing URLs, caps response size and request time, accepts only RSA signing keys marked for RS256 with at least 2048-bit modulus, caches keys for a bounded interval, and refreshes once when an unknown `kid` is requested. Unit tests cover caching, key rotation, unsuitable keys, insecure URLs, and endpoint failures.
 
-This resolver is a library component only: the current server still uses the explicitly configured PEM public key and does not yet consume JWKS dynamically. Keycloak is the preferred deployment target, but no realm, issuer, audience, endpoint, or signing key has been invented or configured. Dynamic key rotation must be wired into an asynchronous verification boundary and tested before JWKS authentication can be considered active.
+The server can now use this resolver through an asynchronous RS256 verifier and bearer middleware. Configure `AUTH_ISSUER`, `AUTH_AUDIENCE`, and exactly one of `AUTH_JWKS_URL` or `AUTH_PUBLIC_KEY_PEM`. The JWKS URL must be the trusted HTTPS signing-keys endpoint for the configured issuer; it is never discovered from an untrusted token. Unknown `kid` values trigger a bounded refresh. Keycloak is the preferred deployment target, but no realm, issuer, audience, endpoint, or signing key has been invented or configured.
 
 ## Runtime configuration
 
@@ -19,7 +19,7 @@ The server refuses partial configuration at startup. With all three values confi
 
 ## Token contract
 
-The verifier accepts RS256 only, requires an RSA public key of at least 2048 bits, validates canonical unpadded base64url segments, and rejects unsupported JOSE critical/unencoded-payload header extensions. It also requires:
+The verifiers accept RS256 only, require RSA keys of at least 2048 bits, validate canonical unpadded base64url segments, and reject unsupported JOSE critical/unencoded-payload header extensions. JWKS mode additionally requires a valid `kid` and resolves it only from the configured trusted JWKS endpoint. It also requires:
 - exact issuer and expected audience (string or array)
 - non-empty `sub` and `tenant_id`
 - numeric `exp`, with a bounded five-second default clock tolerance
