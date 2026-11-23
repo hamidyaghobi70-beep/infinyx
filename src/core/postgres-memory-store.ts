@@ -128,7 +128,8 @@ export class PostgresEncryptedMemoryStore implements MemoryPort {
     );
     let rotated = 0;
     for (const row of selected.rows) {
-      const context = encryptionContext({ namespace: row.namespace, key: row.memory_key }, row.tenant_id);\n      const replacement = await this.cipher.reencrypt(row.envelope, context);
+      const context = encryptionContext({ namespace: row.namespace, key: row.memory_key }, row.tenant_id);
+      const replacement = await this.cipher.reencrypt(row.envelope, context);
       const result = await this.db.query(
         `UPDATE ${this.#table}
          SET envelope = $1::jsonb, updated_at = $2
