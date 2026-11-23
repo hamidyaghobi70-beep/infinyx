@@ -129,17 +129,7 @@ Keep policy evaluation separate from execution. Do not enable agent or tool exec
 
 ## Stage 4 — memory and persistence boundary
 
-The current Core Engine defines a MemoryPort contract but does not provide a persistence adapter.
-
-Before implementing an adapter, document and approve:
-- Data classification and tenant isolation.
-- Encryption at rest and in transit.
-- Key ownership and rotation.
-- Retention, deletion, and backup policy.
-- Access-control enforcement and audit events.
-- Failure behavior and migration strategy.
-
-Implement storage behind the existing port only after these controls have testable acceptance criteria.
+Core Engine retains the stable MemoryPort contract and now includes partial PostgreSQL, encryption, audit, migration, and deletion-replay library adapters. These components are not yet safe to connect to a live runtime; the remaining production gates are listed below.
 
 ### Stage 4 progress — owner decisions recorded; implementation still gated
 
@@ -155,44 +145,36 @@ Implement storage behind the existing port only after these controls have testab
   JSON envelopes with resumable migrations; and four-level data classification with
   Restricted data denied by default.
 - Initial implementation on this draft branch: AES-256-GCM envelope cipher with injected key-provider contract and bounded re-encryption support; PostgreSQL `MemoryPort` adapter with explicit tenant column/tenant-qualified queries, 90-day default expiry, bounded tenant-qualified expiry sweep, and explicit classification allow-list; transactional PostgreSQL audit writer with hash-chain sequencing; baseline schema and least-privilege NOLOGIN role migrations; checksum-protected, advisory-lock-serialized PostgreSQL migration runner; and a deletion tombstone/replay coordinator designed to sit beneath `GuardedMemoryPort`.
-- Focused tests cover the cipher, adapter, audit writer, migration runner, and deletion replay contract. CI is running against the current head; the preceding head exposed a TypeScript cursor-inference error, which was fixed in the latest commit. Do not treat that preceding run as passing.
+- Focused tests cover the cipher, adapter, audit writer, migration runner, and deletion replay contract. CI run `45218422158` passed all four jobs (Ubuntu, macOS, Windows, and Dependency Security Audit) on head `bd113dd7d4aee4db822b772509e1f2bcb12d0dc3`. Later authentication hardening commits are not covered by that run and require a fresh exact-head CI result.
 - This is **partial library implementation**, not production-ready persistence. No concrete cloud KMS adapter, external tombstone ledger, backup/restore provider or restore drill, external signed audit checkpoints, trusted authenticated identity composition, or live PostgreSQL/KMS integration test is complete. No persistence adapter is wired into the server or live Core runtime.
 - Persistence must remain disconnected until a trusted authenticated principal is
   available to the composition root and the ADR implementation gates pass.
 - Agent and Tool Execution remain disabled. No merge, release, deployment, or runtime
   activation is authorized by this update.
-## Stage 5 — identity, agent runtime, and tool execution
+## Stage 5 — authenticated identity and execution boundaries
 
-These capabilities are not enabled by the reviewed Core Engine v1 scope.
+### Authenticated identity — implementation present, deployment trust not configured
+- A configurable RS256 verifier, bearer middleware, verified-principal guard, and authenticated identity introspection route exist.
+- JWT verification is restricted to RSA keys of at least 2048 bits, canonical base64url segments, the RS256 algorithm, and the configured issuer/audience/expiry contract.
+- The actual identity provider, issuer, API audience, and public signing key/JWKS source have not been supplied by the owner. Production authentication therefore remains unconfigured; do not guess trust anchors.
+- The verified principal helper is not yet wired into a real user-facing memory workload or trusted module composition root.
 
-Design provider-neutral interfaces first. Require:
-- Authenticated principal and tenant context.
-- Explicit capability grants and per-action policy checks.
-- Least-privilege execution boundaries.
-- Timeouts, cancellation, quotas, and idempotency.
-- Immutable audit records and secret redaction.
-- Sandboxed execution and denial-by-default behavior.
+### Agent and Tool Execution — disabled
+Require explicit capability grants, per-action policy checks, least-privilege boundaries, timeouts, cancellation, quotas, idempotency, immutable audit, secret redaction, and sandboxing before any execution path is enabled. Agent remains OFF and Phase 0 remains NOT GRANTED. Do not connect real providers, credentials, financial operations, or external tools without dedicated review and separate owner authorization.
 
-Do not connect real providers, credentials, financial operations, or external tools until their dedicated security review and owner authorization are complete.
-
-## Stage 6 — operational readiness
-
-After earlier stages pass:
-- Define health/readiness semantics and structured operational events.
-- Verify graceful shutdown under active HTTP requests and long-lived connections.
-- Define resource limits, restart policy, and deployment rollback criteria.
-- Produce an operations runbook and incident test plan.
-
-Production deployment remains a separately authorized action.
+## Stage 6 — operational readiness (partial; not production-ready)
+- `/health` liveness and `/ready` Core-lifecycle readiness endpoints are implemented and tested.
+- Graceful shutdown and process-level signal/fatal-event tests are covered by CI.
+- An operational runbook exists, but dependency-aware readiness, deployment resource limits, restart policy, rollback automation, load/soak/capacity evidence, and a tested incident/recovery procedure remain open.
+- No production deployment is authorized or claimed.
 
 ## Merge governance and PR target
 
-- PR #3 targets `fix/core-engine-shutdown-v6`; that is the intended integration base. It does not target `main`.
-- Hanieh, as Project Leader, owns the readiness decision and issues the explicit instruction to merge a specific PR/head SHA after technical acceptance.
-- Parvaneh performs GitHub operations only in response to Hanieh's explicit merge instruction for that specific PR/head SHA.
-- Hamid, as Founder & Owner, separately authorizes each Release and each Deployment. Neither merge readiness nor a merge instruction authorizes either action.
-- `main`, Release, and Deployment are outside the scope of the current PR #3 operation. No merge or deployment is to occur before Hanieh's final review and instruction.
-- Agent and Tool Execution remain out of scope.
+- Current implementation work is isolated in PR #61 (`fix/f01-f02-atomic-registration`) against `integration/infinyx-core-runtime-v1`.
+- PR #61 must remain Draft and unmerged pending independent review and closure of all required gates.
+- PR #60 remains untouched, Draft, and unmerged.
+- No merge, auto-merge, release, deployment, or Agent activation is authorized by implementation progress or CI success. Each remains subject to separate explicit Founder authorization.
+- Agent remains OFF; Phase 0 remains NOT GRANTED.
 
 ## Change and review protocol
 
@@ -212,12 +194,8 @@ For every stage:
 - The runbook records the actual Node/npm commands, environment configuration, startup
   ordering, current `/health` semantics, graceful HTTP/Core shutdown behavior, security
   limitations, and deployment/rollback gates.
-- It explicitly records that `/health` is liveness only and that no separate readiness
-  endpoint currently exists; a listening server is created only after Core initialization
-  and start complete.
-- It does not claim production readiness. Resource limits, restart policy, rollback
-  automation, load/soak measurements, authenticated identity, and persistent storage
-  remain unverified or unimplemented.
+- It records `/health` as liveness-only and `/ready` as Core-lifecycle readiness; neither checks downstream dependency health.
+- It does not claim production readiness. Resource limits, restart policy, rollback automation, load/soak measurements, dependency-aware readiness, and external infrastructure remain unverified.
 - Stage 6 remains **OPEN / draft pending independent review and owner approval**. This
   documentation change does not authorize deployment or release.
 
