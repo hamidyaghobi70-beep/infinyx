@@ -133,4 +133,71 @@ describe("PostgresEncryptedMemoryStore", () => {
     const store = new PostgresEncryptedMemoryStore(db, new MemoryValueCipher(keys()));
     await expect(store.write({ namespace: "n", key: "k" }, { raw: true })).rejects.toThrow(TypeError);
   });
+
+  it("rotates a bounded batch to the active key and preserves record metadata", async () => {
+    const oldKey = randomBytes(32);
+    const newKey = randomBytes(32);
+    let active = { keyId: "test-key-v1", key: oldKey };
+    const provider: MemoryKeyProvider = {
+      getActiveKey: async () => active,
+      getKey: async (id) => id === "test-key-v1" ? oldKey : id === "test-key-v2" ? newKey : null
+    };
+    const cipher = new MemoryValueCipher(provider);
+    const original = await cipher.encrypt('{"classification":"confidential","value":"rotate-me"}');
+    const createdAt = "2026-01-01T00:00:00.000Z";
+    const expiresAt = "2026-04-01T00:00:00.000Z";
+    const stored = { ...original, schemaVersion: 1 as const, createdAt, updatedAt: createdAt,
+      expiresAt, classification: "confidential" as const };
+    active = { keyId: "test-key-v2", key: newKey };
+    let updateValues: readonly unknown[] = [];
+    const db: SqlExecutor = {
+      query: vi.fn(async (sql: string, values: readonly unknown[] = []) => {
+        if (sql.startsWith("SELECT")) {
+          return { rows: [{ tenant_id: "tenant-a", namespace: "tenant-a/notes",
+            memory_key: "k", envelope: stored }] };
+        }
+        if (sql.startsWith("UPDATE")) {
+          updateValues = values;
+          return { rows: [], rowCount: 1 };
+        }
+        return { rows: [], rowCount: 0 };
+      })
+    };
+    const store = new PostgresEncryptedMemoryStore(db, cipher);
+    await expect(store.reencryptBatch(10)).resolves.toEqual({ examined: 1, rotated: 1 });
+    const replacement = JSON.parse(String(updateValues[0])) as typeof stored;
+    expect(replacement.keyId).toBe("test-key-v2");
+    expect(replacement.createdAt).toBe(createdAt);
+    expect(replacement.expiresAt).toBe(expiresAt);
+    expect(replacement.classification).toBe("confidential");
+    expect(await cipher.decrypt(replacement)).toBe('{"classification":"confidential","value":"rotate-me"}');
+    expect(JSON.stringify(replacement)).not.toContain("rotate-me");
+    expect(updateValues.slice(2, 5)).toEqual(["tenant-a", "tenant-a/notes", "k"]);
+  });
+
+  it("does not count a concurrently changed record as rotated", async () => {
+    const oldKey = randomBytes(32);
+    const newKey = randomBytes(32);
+    let active = { keyId: "test-key-v1", key: oldKey };
+    const provider: MemoryKeyProvider = {
+      getActiveKey: async () => active,
+      getKey: async (id) => id === "test-key-v1" ? oldKey : id === "test-key-v2" ? newKey : null
+    };
+    const cipher = new MemoryValueCipher(provider);
+    const original = await cipher.encrypt('{"classification":"internal","value":"concurrent"}');
+    const stored = { ...original, schemaVersion: 1 as const, createdAt: "2026-01-01T00:00:00.000Z",
+      updatedAt: "2026-01-01T00:00:00.000Z", expiresAt: "2026-04-01T00:00:00.000Z",
+      classification: "internal" as const };
+    active = { keyId: "test-key-v2", key: newKey };
+    const db: SqlExecutor = {
+      query: vi.fn(async (sql: string) => {
+        if (sql.startsWith("SELECT")) return { rows: [{ tenant_id: "tenant-a",
+          namespace: "tenant-a/notes", memory_key: "k", envelope: stored }] };
+        return { rows: [], rowCount: 0 };
+      })
+    };
+    const store = new PostgresEncryptedMemoryStore(db, cipher);
+    await expect(store.reencryptBatch(1)).resolves.toEqual({ examined: 1, rotated: 0 });
+  });
+
 });
