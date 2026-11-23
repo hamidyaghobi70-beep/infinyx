@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import type { MemoryAddress, MemoryPort } from "./contracts.js";
 
 /**
@@ -50,7 +51,7 @@ export class MemoryDeletionCoordinator {
   ) {
     this.#batchSize = options.batchSize ?? 250;
     this.#now = options.now ?? (() => new Date());
-    this.#createId = options.createId ?? (() => globalThis.crypto.randomUUID());
+    this.#createId = options.createId ?? (() => randomUUID());
     if (!Number.isSafeInteger(this.#batchSize) || this.#batchSize < 1 || this.#batchSize > 5000) {
       throw new TypeError("batchSize must be an integer between 1 and 5000.");
     }
