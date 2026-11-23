@@ -150,7 +150,7 @@ export class PostgresEncryptedMemoryStore implements MemoryPort {
     }
     const result = await this.db.query(
       `WITH expired AS (
-         SELECT namespace, memory_key FROM ${this.#table}
+         SELECT tenant_id, namespace, memory_key FROM ${this.#table}
          WHERE expires_at <= now()
          ORDER BY expires_at
          LIMIT $1
@@ -158,7 +158,8 @@ export class PostgresEncryptedMemoryStore implements MemoryPort {
        )
        DELETE FROM ${this.#table} AS target
        USING expired
-       WHERE target.namespace = expired.namespace AND target.memory_key = expired.memory_key`,
+       WHERE target.tenant_id = expired.tenant_id
+         AND target.namespace = expired.namespace AND target.memory_key = expired.memory_key`,
       [batchSize]
     );
     return result.rowCount ?? 0;
