@@ -19,7 +19,7 @@ export interface MemoryDeletionLedgerPort {
    * opaque ledger sequence cursor (not a client-generated random identifier).
    */
   append(tombstone: Omit<MemoryDeletionTombstone, "id">): Promise<string>;
-  /** Returns entries in append order, strictly after the supplied sequence cursor. */
+  /** Returns entries in append order, strictly after the supplied opaque sequence cursor. */
   listAfter(cursor: string | null, limit: number): Promise<readonly MemoryDeletionTombstone[]>;
 }
 
@@ -94,17 +94,20 @@ export class MemoryDeletionCoordinator implements MemoryPort {
       if (entries.length > this.#batchSize) {
         throw new Error("Deletion ledger exceeded the requested page size.");
       }
-      let previous: string | null = cursor;
+      const pageIds = new Set<string>();
       for (const entry of entries) {
         validateTombstone(entry);
-        if (previous !== null && entry.id <= previous) {
-          throw new Error("Deletion ledger pagination is not strictly ordered.");
+        // Cursors are opaque: never compare them lexicographically or numerically.
+        // The ledger contract owns append ordering; the coordinator enforces progress
+        // and rejects duplicate/repeated cursors to prevent an infinite replay loop.
+        if (entry.id === cursor || pageIds.has(entry.id)) {
+          throw new Error("Deletion ledger pagination repeated a cursor.");
         }
+        pageIds.add(entry.id);
         await this.store.delete({ namespace: entry.namespace, key: entry.key });
-        previous = entry.id;
         replayed += 1;
       }
-      cursor = previous;
+      cursor = entries[entries.length - 1]!.id;
       batches += 1;
       if (entries.length < this.#batchSize) break;
     }
