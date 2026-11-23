@@ -99,6 +99,47 @@ export class PostgresEncryptedMemoryStore implements MemoryPort {
     ]);
   }
 
+  /**
+   * Re-encrypt a bounded batch with the provider's active key.
+   * The JSONB equality predicate is an optimistic concurrency guard: a concurrent
+   * application write wins and is never overwritten by a stale rotation pass.
+   */
+  async reencryptBatch(batchSize = 100): Promise<{ readonly examined: number; readonly rotated: number }> {
+    if (!Number.isSafeInteger(batchSize) || batchSize < 1 || batchSize > 1000) {
+      throw new TypeError("batchSize must be between 1 and 1000.");
+    }
+    const selected = await this.db.query<{
+      namespace: string;
+      memory_key: string;
+      envelope: StoredMemoryEnvelope;
+    }>(
+      `SELECT namespace, memory_key, envelope
+       FROM ${this.#table}
+       WHERE envelope->>'keyId' IS DISTINCT FROM (
+         SELECT envelope->>'keyId' FROM ${this.#table}
+         ORDER BY updated_at DESC LIMIT 1
+       )
+       ORDER BY updated_at
+       LIMIT $1`,
+      [batchSize]
+    );
+    let rotated = 0;
+    for (const row of selected.rows) {
+      const replacement = await this.cipher.reencrypt(row.envelope);
+      const result = await this.db.query(
+        `UPDATE ${this.#table}
+         SET envelope = $1::jsonb, updated_at = $2
+         WHERE namespace = $3 AND memory_key = $4 AND envelope = $5::jsonb`,
+        [JSON.stringify({ ...replacement, schemaVersion: row.envelope.schemaVersion,
+          createdAt: row.envelope.createdAt, updatedAt: this.#now().toISOString(),
+          expiresAt: row.envelope.expiresAt, classification: row.envelope.classification }),
+          this.#now(), row.namespace, row.memory_key, JSON.stringify(row.envelope)]
+      );
+      if ((result.rowCount ?? 0) === 1) rotated += 1;
+    }
+    return { examined: selected.rows.length, rotated };
+  }
+
   /** Bounded expiry sweep; call from a controlled maintenance job, never module code. */
   async deleteExpired(batchSize = 500): Promise<number> {
     if (!Number.isSafeInteger(batchSize) || batchSize < 1 || batchSize > 10_000) {
