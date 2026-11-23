@@ -17,15 +17,18 @@ class FakePool implements MigrationPool {
         this.statements.push(sql);
         if (sql === "BEGIN" || sql.startsWith("SELECT pg_advisory") ||
             sql.startsWith("CREATE SCHEMA") || sql.startsWith("CREATE TABLE") ||
-            sql === "COMMIT" || sql === "ROLLBACK") return { rows: [] as Row[] };
+            sql === "ROLLBACK") return { rows: [] as Row[] };
+        if (sql === "COMMIT") {
+          this.applied.clear();
+          for (const [key, value] of staged) this.applied.set(key, value);
+          return { rows: [] as Row[] };
+        }
         if (sql.startsWith("SELECT checksum")) {
           const checksum = staged.get(String(values[0]));
           return { rows: (checksum ? [{ checksum }] : []) as Row[] };
         }
         if (sql.startsWith("INSERT INTO infinyx_meta.schema_migrations")) {
           staged.set(String(values[0]), String(values[1]));
-          this.applied.clear();
-          for (const [key, value] of staged) this.applied.set(key, value);
           return { rows: [] as Row[], rowCount: 1 };
         }
         if (sql === this.failOnSql) throw new Error("migration SQL failed");
@@ -68,6 +71,18 @@ describe("PostgresMigrationRunner", () => {
     const runner = new PostgresMigrationRunner(pool);
     await expect(runner.run([{ id: "0001_broken", sql: "BROKEN SQL" }])).rejects.toThrow("migration SQL failed");
     expect(pool.applied.has("0001_broken")).toBe(false);
+    expect(pool.statements).toContain("ROLLBACK");
+  });
+
+  it("rolls back the complete batch when a later migration fails", async () => {
+    const pool = new FakePool();
+    pool.failOnSql = "BROKEN SQL";
+    const runner = new PostgresMigrationRunner(pool);
+    await expect(runner.run([
+      { id: "0001_valid", sql: "CREATE TABLE t (id int);" },
+      { id: "0002_broken", sql: "BROKEN SQL" }
+    ])).rejects.toThrow("migration SQL failed");
+    expect(pool.applied.size).toBe(0);
     expect(pool.statements).toContain("ROLLBACK");
   });
 
