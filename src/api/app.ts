@@ -1,11 +1,11 @@
-import express from "express";
+import express, { type Express } from "express";
 import { rateLimit } from "express-rate-limit";
 import { errorHandler } from "../shared/http/error-handler.js";
 
 export type ReadinessCheck = () => boolean;
 
 /** Build an HTTP app whose readiness signal is tied to the owning runtime state. */
-export function createApp(isReady: ReadinessCheck = () => false): express.Express {
+export function createApp(isReady: ReadinessCheck = () => false): Express {
   const application = express();
 
   application.disable("x-powered-by");
