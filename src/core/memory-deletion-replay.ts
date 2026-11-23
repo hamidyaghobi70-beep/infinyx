@@ -40,7 +40,7 @@ export interface MemoryDeletionReplayResult {
  * Replaying is idempotent and deliberately starts from the beginning so it can
  * be run after every restore without maintaining a cursor in the restored DB.
  */
-export class MemoryDeletionCoordinator {
+export class MemoryDeletionCoordinator implements MemoryPort {
   readonly #batchSize: number;
   readonly #now: () => Date;
 
@@ -54,6 +54,15 @@ export class MemoryDeletionCoordinator {
     if (!Number.isSafeInteger(this.#batchSize) || this.#batchSize < 1 || this.#batchSize > 5000) {
       throw new TypeError("batchSize must be an integer between 1 and 5000.");
     }
+  }
+
+  /** Delegate reads/writes unchanged so this coordinator can sit beneath GuardedMemoryPort. */
+  read(address: MemoryAddress): Promise<unknown | null> {
+    return this.store.read(address);
+  }
+
+  write(address: MemoryAddress, value: unknown): Promise<void> {
+    return this.store.write(address, value);
   }
 
   async delete(
