@@ -11,6 +11,13 @@ export interface SqlExecutor {
   query<Row = Record<string, unknown>>(text: string, values?: readonly unknown[]): Promise<SqlQueryResult<Row>>;
 }
 
+export interface StoredMemoryEnvelope extends EncryptedMemoryEnvelope {
+  readonly schemaVersion: 1;
+  readonly createdAt: string;
+  readonly updatedAt: string;
+  readonly expiresAt: string;
+}
+
 export interface PostgresMemoryStoreOptions {
   readonly tableName?: "infinyx_memory.memory_entries";
   readonly retentionDays?: number;
@@ -40,7 +47,7 @@ export class PostgresEncryptedMemoryStore implements MemoryPort {
   }
 
   async read(address: MemoryAddress): Promise<unknown | null> {
-    const result = await this.db.query<{ envelope: EncryptedMemoryEnvelope; expires_at: Date | string }>(
+    const result = await this.db.query<{ envelope: StoredMemoryEnvelope; expires_at: Date | string }>(
       `SELECT envelope, expires_at FROM ${this.#table} WHERE namespace = $1 AND memory_key = $2 LIMIT 1`,
       [address.namespace, address.key]
     );
@@ -55,13 +62,22 @@ export class PostgresEncryptedMemoryStore implements MemoryPort {
 
   async write(address: MemoryAddress, value: unknown): Promise<void> {
     if (typeof value !== "string") throw new TypeError("GuardedMemoryPort must provide serialized JSON strings.");
-    const envelope = await this.cipher.encrypt(value);
+    const encrypted = await this.cipher.encrypt(value);
+    const now = this.#now();
+    const expiresAt = new Date(now.getTime() + this.#retentionDays * 24 * 60 * 60 * 1000);
+    const envelope: StoredMemoryEnvelope = Object.freeze({
+      ...encrypted,
+      schemaVersion: 1,
+      createdAt: now.toISOString(),
+      updatedAt: now.toISOString(),
+      expiresAt: expiresAt.toISOString()
+    });
     await this.db.query(
       `INSERT INTO ${this.#table} (namespace, memory_key, envelope, created_at, updated_at, expires_at)
-       VALUES ($1, $2, $3::jsonb, now(), now(), now() + ($4::text || ' days')::interval)
+       VALUES ($1, $2, $3::jsonb, $4, $4, $5)
        ON CONFLICT (namespace, memory_key) DO UPDATE SET
-         envelope = EXCLUDED.envelope, updated_at = now(), expires_at = EXCLUDED.expires_at`,
-      [address.namespace, address.key, JSON.stringify(envelope), this.#retentionDays]
+         envelope = EXCLUDED.envelope, updated_at = EXCLUDED.updated_at, expires_at = EXCLUDED.expires_at`,
+      [address.namespace, address.key, JSON.stringify(envelope), now, expiresAt]
     );
   }
 
