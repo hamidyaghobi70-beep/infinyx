@@ -48,9 +48,11 @@ export class PostgresEncryptedMemoryStore implements MemoryPort {
   }
 
   async read(address: MemoryAddress): Promise<unknown | null> {
+    const tenantId = tenantFromScopedNamespace(address.namespace);
     const result = await this.db.query<{ envelope: StoredMemoryEnvelope; expires_at: Date | string }>(
-      `SELECT envelope, expires_at FROM ${this.#table} WHERE namespace = $1 AND memory_key = $2 LIMIT 1`,
-      [address.namespace, address.key]
+      `SELECT envelope, expires_at FROM ${this.#table}
+       WHERE tenant_id = $1 AND namespace = $2 AND memory_key = $3 LIMIT 1`,
+      [tenantId, address.namespace, address.key]
     );
     const row = result.rows[0];
     if (!row) return null;
@@ -73,6 +75,7 @@ export class PostgresEncryptedMemoryStore implements MemoryPort {
       // Restricted and unclassified values are denied by default.
       throw new TypeError("Persistent memory classification is missing, unsupported, or restricted.");
     }
+    const tenantId = tenantFromScopedNamespace(address.namespace);
     const encrypted = await this.cipher.encrypt(value);
     const now = this.#now();
     const expiresAt = new Date(now.getTime() + this.#retentionDays * 24 * 60 * 60 * 1000);
@@ -85,17 +88,18 @@ export class PostgresEncryptedMemoryStore implements MemoryPort {
       classification
     });
     await this.db.query(
-      `INSERT INTO ${this.#table} (namespace, memory_key, envelope, classification, created_at, updated_at, expires_at)
-       VALUES ($1, $2, $3::jsonb, $4, $5, $5, $6)
-       ON CONFLICT (namespace, memory_key) DO UPDATE SET
+      `INSERT INTO ${this.#table} (tenant_id, namespace, memory_key, envelope, classification, created_at, updated_at, expires_at)
+       VALUES ($1, $2, $3, $4::jsonb, $5, $6, $6, $7)
+       ON CONFLICT (tenant_id, namespace, memory_key) DO UPDATE SET
          envelope = EXCLUDED.envelope, classification = EXCLUDED.classification, updated_at = EXCLUDED.updated_at, expires_at = EXCLUDED.expires_at`,
-      [address.namespace, address.key, JSON.stringify(envelope), classification, now, expiresAt]
+      [tenantId, address.namespace, address.key, JSON.stringify(envelope), classification, now, expiresAt]
     );
   }
 
   async delete(address: MemoryAddress): Promise<void> {
-    await this.db.query(`DELETE FROM ${this.#table} WHERE namespace = $1 AND memory_key = $2`, [
-      address.namespace, address.key
+    const tenantId = tenantFromScopedNamespace(address.namespace);
+    await this.db.query(`DELETE FROM ${this.#table} WHERE tenant_id = $1 AND namespace = $2 AND memory_key = $3`, [
+      tenantId, address.namespace, address.key
     ]);
   }
 
@@ -110,11 +114,12 @@ export class PostgresEncryptedMemoryStore implements MemoryPort {
     }
     const activeKeyId = await this.cipher.activeKeyId();
     const selected = await this.db.query<{
+      tenant_id: string;
       namespace: string;
       memory_key: string;
       envelope: StoredMemoryEnvelope;
     }>(
-      `SELECT namespace, memory_key, envelope
+      `SELECT tenant_id, namespace, memory_key, envelope
        FROM ${this.#table}
        WHERE envelope->>'keyId' IS DISTINCT FROM $1
        ORDER BY updated_at
@@ -127,11 +132,11 @@ export class PostgresEncryptedMemoryStore implements MemoryPort {
       const result = await this.db.query(
         `UPDATE ${this.#table}
          SET envelope = $1::jsonb, updated_at = $2
-         WHERE namespace = $3 AND memory_key = $4 AND envelope = $5::jsonb`,
+         WHERE tenant_id = $3 AND namespace = $4 AND memory_key = $5 AND envelope = $6::jsonb`,
         [JSON.stringify({ ...replacement, schemaVersion: row.envelope.schemaVersion,
           createdAt: row.envelope.createdAt, updatedAt: this.#now().toISOString(),
           expiresAt: row.envelope.expiresAt, classification: row.envelope.classification }),
-          this.#now(), row.namespace, row.memory_key, JSON.stringify(row.envelope)]
+          this.#now(), row.tenant_id, row.namespace, row.memory_key, JSON.stringify(row.envelope)]
       );
       if ((result.rowCount ?? 0) === 1) rotated += 1;
     }
@@ -157,5 +162,26 @@ export class PostgresEncryptedMemoryStore implements MemoryPort {
       [batchSize]
     );
     return result.rowCount ?? 0;
+  }
+}
+
+
+/**
+ * GuardedMemoryPort encodes the authenticated tenant as the first namespace
+ * segment. Persist it separately so every point query is tenant-qualified.
+ * This is defense in depth, not authentication: the composition root must still
+ * derive the namespace from a trusted principal.
+ */
+function tenantFromScopedNamespace(namespace: string): string {
+  const separator = namespace.indexOf("/");
+  if (separator <= 0 || separator === namespace.length - 1) {
+    throw new TypeError("Persistent memory namespace must include a tenant scope prefix.");
+  }
+  try {
+    const tenantId = decodeURIComponent(namespace.slice(0, separator));
+    if (!tenantId || tenantId.length > 128 || tenantId.trim().length === 0) throw new Error("invalid");
+    return tenantId;
+  } catch {
+    throw new TypeError("Persistent memory namespace has an invalid tenant scope prefix.");
   }
 }
