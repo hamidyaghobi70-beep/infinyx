@@ -61,3 +61,6 @@ export type {
 
 export { PostgresMigrationRunner } from "./postgres-migration-runner.js";
 export type { CoreMigration, MigrationPool, MigrationConnection, MigrationRunResult, MigrationQueryResult } from "./postgres-migration-runner.js";
+
+export { MemoryDeletionCoordinator } from "./memory-deletion-replay.js";
+export type { MemoryDeletionLedgerPort, MemoryDeletionTombstone, MemoryDeletionReplayOptions, MemoryDeletionReplayResult } from "./memory-deletion-replay.js";
