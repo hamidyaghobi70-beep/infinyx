@@ -95,10 +95,10 @@ export class JwksKeyResolver {
       if (!candidate || candidate.kty !== "RSA" || candidate.use !== "sig" || candidate.alg !== "RS256" ||
           typeof candidate.kid !== "string" || !candidate.kid || candidate.kid.length > 256 ||
           typeof candidate.n !== "string" || typeof candidate.e !== "string") continue;
+      if (next.has(candidate.kid)) throw new Error("JWKS contains a duplicate key id.");
       try {
         const key = createPublicKey({ key: { kty: "RSA", n: candidate.n, e: candidate.e }, format: "jwk" });
         if (key.asymmetricKeyType !== "rsa" || (key.asymmetricKeyDetails?.modulusLength ?? 0) < 2048) continue;
-        if (next.has(candidate.kid)) throw new Error("JWKS contains a duplicate key id.");
         next.set(candidate.kid, { key, expiresAt: this.now() + this.ttl });
       } catch { /* Ignore malformed or unsuitable keys; never weaken verification. */ }
     }
