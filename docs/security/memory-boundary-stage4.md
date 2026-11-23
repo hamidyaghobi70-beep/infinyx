@@ -1,6 +1,6 @@
 # Memory boundary — Stage 4 controls and acceptance criteria
 
-Status: **proposal for review; reference implementation only.** Nothing in this document
+Status: **partial implementation on a draft branch; not production approved.** Nothing in this document
 authorizes a persistent adapter, production use, merge, release, or deployment.
 
 ## Scope
@@ -9,13 +9,13 @@ Stage 4 of the [Core Engine roadmap](../engineering/core-engine-roadmap.md) requ
 storage controls below to have testable acceptance criteria before any persistence adapter
 is implemented behind `MemoryPort`.
 
-This change adds, without modifying the `MemoryPort` contract:
+The guarded boundary and initial durable adapter implementation add, without modifying the `MemoryPort` contract:
 
 - `GuardedMemoryPort` (`src/core/guarded-memory-port.ts`): a decorator that enforces tenant
   isolation, policy authorization and audit around any `MemoryPort`.
 - `InMemoryMemoryStore` (`src/core/in-memory-memory-store.ts`): a non-durable reference
   backing store for tests and local composition.
-- `MemoryAccessError` (`src/core/memory-error.ts`): generic, non-leaking error type.
+- `MemoryAccessError` (`src/core/memory-error.ts`): generic, non-leaking error type.\n- `MemoryValueCipher` (`src/core/memory-encryption.ts`): AES-256-GCM envelope cipher backed by an injected key-provider contract.\n- `PostgresEncryptedMemoryStore` (`src/core/postgres-memory-store.ts`): encrypted PostgreSQL adapter with explicit expiry and bounded expiry sweep.\n- `PostgresMemoryAuditPort` (`src/core/postgres-memory-audit.ts`): transactional append-only audit writer with a serialized hash chain.\n- `migrations/0001_stage4_memory_audit.sql`: idempotent initial schema migration.
 
 ## Trust model
 
@@ -63,12 +63,12 @@ For `read`, `write` and `delete`, in this order:
 | M5 | No aliasing | Implemented | Mutating a value after `write`, or a value returned by `read`, never changes stored data. Backing stores only ever receive serialized strings. |
 | M6 | Failure behavior | Implemented | Backend errors and corrupt backend data (non-string, invalid JSON) become `MEMORY_BACKEND_FAILED` with `cause` preserved and no internal detail in the message. Failure-record publication through the dedicated sink is best-effort and bounded by `auditTimeoutMs`, so a stalled sink cannot mask or indefinitely delay the original error. |
 | M7 | Scope integrity | Implemented | Invalid scopes and dependencies fail at construction. The scope is snapshotted; later mutation of the caller's object has no effect. |
-| M8 | Encryption at rest and in transit | **Not implemented** | Requires an approved design (see Decisions). `InMemoryMemoryStore` is plaintext and non-durable. |
-| M9 | Key ownership and rotation | **Not implemented** | Requires an approved design and an owner decision on key custody. |
-| M10 | Retention, deletion, backup | **Not implemented** | `delete` is an immediate hard delete in the reference store. No retention schedule, soft delete, legal hold or backup exists. |
-| M11 | Durable audit | **Not implemented** | The current audit capability is an in-process sink only. Durable, tamper-evident audit storage is a separate component. |
-| M12 | Data classification | **Not implemented** | No classification labels exist. Namespaces and keys appear in audit events and policy resources, so they must not contain sensitive data. |
-| M13 | Migration strategy | **Not implemented** | Stored values are canonical JSON strings with no schema version. A versioned envelope is needed before any durable adapter. |
+| M8 | Encryption at rest and in transit | **Partial implementation** | AES-256-GCM envelope encryption is implemented behind an injected key provider. TLS is a deployment-level requirement, not enforced by this adapter. The production KMS provider is not implemented. |
+| M9 | Key ownership and rotation | **Interface only** | `MemoryKeyProvider` requires active-key lookup and historical-key lookup; no cloud KMS adapter, key rotation workflow, or re-wrap migration is implemented. |
+| M10 | Retention, deletion, backup | **Partial implementation** | PostgreSQL rows receive a configurable expiry (90-day default); reads reject expired rows and `deleteExpired` performs bounded hard-delete sweeps. Backup retention, deletion ledger/replay, and scheduled job orchestration remain unimplemented. |
+| M11 | Durable audit | **Partial implementation** | A transactional PostgreSQL audit writer and hash chain are implemented. Database role provisioning, append-only grants, signed external checkpoints, and live integration are not implemented. |
+| M12 | Data classification | **Not implemented** | The adapter does not yet enforce Public/Internal/Confidential/Restricted labels. Do not store restricted data; namespaces and keys remain non-secret identifiers. |
+| M13 | Migration strategy | **Partial implementation** | Encrypted records carry format, encryption, key, schema, and timestamp/expiry metadata. A resumable migration runner, progress ledger, and backup-compatible upgrade workflow remain unimplemented. |
 
 ## Known limitations
 
@@ -104,6 +104,12 @@ Selected baseline:
 6. Explicit Public/Internal/Confidential/Restricted classification; Restricted data is denied, and unknown classification defaults to deny.
 
 These are architecture decisions, **not evidence that the controls have been implemented**. The existing reference store remains in-memory and non-durable. No persistence adapter may be connected until trusted authenticated identity is available to the composition root and the implementation gates in ADR-0001 pass.
+## Implementation progress on this draft branch
+
+The initial adapter, cipher, audit writer, schema migration, and focused unit tests have been added. These are library components only. They have **not** been wired into `src/server.ts`, have not been tested against a live PostgreSQL service or cloud KMS, and have not passed CI on the exact current head. The SQL interfaces are structural so the repository does not yet take a dependency on a specific PostgreSQL driver.
+
+Remaining blocking work includes: a production KMS provider and key-rotation procedure; DB role/grant provisioning and external audit checkpoints; classification enforcement; backup/restore and deletion replay; authenticated identity composition; integration tests against PostgreSQL and a test KMS; and independent review. No real user data may be stored with this adapter until those gates pass.
+
 ## Review gate
 
 Per the change protocol: independent review of the exact head commit is required, and no
