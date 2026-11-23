@@ -137,6 +137,30 @@ describe("PostgresEncryptedMemoryStore", () => {
     expect(statements.some((sql) => sql.startsWith("DELETE"))).toBe(true);
   });
 
+  it("does not delete a record refreshed after the expiry read", async () => {
+    const expiredAt = new Date(0);
+    let deleteValues: readonly unknown[] | undefined;
+    const db: SqlExecutor = {
+      query: vi.fn(async (sql: string, values: readonly unknown[] = []) => {
+        if (sql.startsWith("SELECT")) {
+          return { rows: [{ envelope: {}, expires_at: expiredAt }] };
+        }
+        if (sql.startsWith("DELETE")) {
+          deleteValues = values;
+          // Simulate a concurrent refresh: the conditional delete finds no
+          // row because expires_at has changed since the SELECT.
+          return { rows: [], rowCount: 0 };
+        }
+        return { rows: [], rowCount: 0 };
+      })
+    };
+    const store = new PostgresEncryptedMemoryStore(db, new MemoryValueCipher(keys()));
+    expect(await store.read({ namespace: "tenant-a/n", key: "k" })).toBeNull();
+    expect(deleteValues).toEqual(["tenant-a", "tenant-a/n", "k", expiredAt]);
+    expect(db.query).toHaveBeenNthCalledWith(2,
+      expect.stringContaining("AND expires_at = $4"), deleteValues);
+  });
+
   it("bounds expiry sweeps and includes tenant identity in the delete join", async () => {
     let statement = "";
     const db: SqlExecutor = { query: async (sql) => { statement = sql; return { rows: [], rowCount: 7 }; } };
