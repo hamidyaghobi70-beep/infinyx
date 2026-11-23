@@ -16,6 +16,7 @@ export interface StoredMemoryEnvelope extends EncryptedMemoryEnvelope {
   readonly createdAt: string;
   readonly updatedAt: string;
   readonly expiresAt: string;
+  readonly classification: "public" | "internal" | "confidential";
 }
 
 export interface PostgresMemoryStoreOptions {
@@ -62,6 +63,16 @@ export class PostgresEncryptedMemoryStore implements MemoryPort {
 
   async write(address: MemoryAddress, value: unknown): Promise<void> {
     if (typeof value !== "string") throw new TypeError("GuardedMemoryPort must provide serialized JSON strings.");
+    let parsed: unknown;
+    try { parsed = JSON.parse(value); } catch { throw new TypeError("Persistent memory values must be valid classified JSON."); }
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+      throw new TypeError("Persistent memory values must be JSON objects with an explicit classification.");
+    }
+    const classification = (parsed as { classification?: unknown }).classification;
+    if (classification !== "public" && classification !== "internal" && classification !== "confidential") {
+      // Restricted and unclassified values are denied by default.
+      throw new TypeError("Persistent memory classification is missing, unsupported, or restricted.");
+    }
     const encrypted = await this.cipher.encrypt(value);
     const now = this.#now();
     const expiresAt = new Date(now.getTime() + this.#retentionDays * 24 * 60 * 60 * 1000);
@@ -70,14 +81,15 @@ export class PostgresEncryptedMemoryStore implements MemoryPort {
       schemaVersion: 1,
       createdAt: now.toISOString(),
       updatedAt: now.toISOString(),
-      expiresAt: expiresAt.toISOString()
+      expiresAt: expiresAt.toISOString(),
+      classification
     });
     await this.db.query(
-      `INSERT INTO ${this.#table} (namespace, memory_key, envelope, created_at, updated_at, expires_at)
-       VALUES ($1, $2, $3::jsonb, $4, $4, $5)
+      `INSERT INTO ${this.#table} (namespace, memory_key, envelope, classification, created_at, updated_at, expires_at)
+       VALUES ($1, $2, $3::jsonb, $4, $5, $5, $6)
        ON CONFLICT (namespace, memory_key) DO UPDATE SET
-         envelope = EXCLUDED.envelope, updated_at = EXCLUDED.updated_at, expires_at = EXCLUDED.expires_at`,
-      [address.namespace, address.key, JSON.stringify(envelope), now, expiresAt]
+         envelope = EXCLUDED.envelope, classification = EXCLUDED.classification, updated_at = EXCLUDED.updated_at, expires_at = EXCLUDED.expires_at`,
+      [address.namespace, address.key, JSON.stringify(envelope), classification, now, expiresAt]
     );
   }
 
