@@ -13,7 +13,7 @@ The server refuses partial configuration at startup. With all three values confi
 
 ## Token contract
 
-The verifier accepts RS256 only and requires:
+The verifier accepts RS256 only, requires an RSA public key of at least 2048 bits, validates canonical unpadded base64url segments, and rejects unsupported JOSE critical/unencoded-payload header extensions. It also requires:
 - exact issuer and expected audience (string or array)
 - non-empty `sub` and `tenant_id`
 - numeric `exp`, with a bounded five-second default clock tolerance
