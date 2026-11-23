@@ -58,3 +58,6 @@ export type {
   ProtectedOperationPort,
   ProtectedOperationResult
 } from "./contracts.js";
+
+export { PostgresMigrationRunner } from "./postgres-migration-runner.js";
+export type { CoreMigration, MigrationPool, MigrationConnection, MigrationRunResult, MigrationQueryResult } from "./postgres-migration-runner.js";
