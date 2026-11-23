@@ -1,6 +1,7 @@
 -- INFINYX Stage 4 baseline schema. Apply with a privileged migration role.
 CREATE SCHEMA IF NOT EXISTS infinyx_memory;
 CREATE TABLE IF NOT EXISTS infinyx_memory.memory_entries (
+  tenant_id text NOT NULL,
   namespace text NOT NULL,
   memory_key text NOT NULL,
   envelope jsonb NOT NULL,
@@ -8,11 +9,13 @@ CREATE TABLE IF NOT EXISTS infinyx_memory.memory_entries (
   created_at timestamptz NOT NULL DEFAULT now(),
   updated_at timestamptz NOT NULL DEFAULT now(),
   expires_at timestamptz NOT NULL,
-  PRIMARY KEY (namespace, memory_key),
+  PRIMARY KEY (tenant_id, namespace, memory_key),
   CONSTRAINT memory_envelope_object CHECK (jsonb_typeof(envelope) = 'object')
 );
 CREATE INDEX IF NOT EXISTS memory_entries_expiry_idx
   ON infinyx_memory.memory_entries (expires_at);
+CREATE INDEX IF NOT EXISTS memory_entries_tenant_expiry_idx
+  ON infinyx_memory.memory_entries (tenant_id, expires_at);
 
 CREATE SCHEMA IF NOT EXISTS infinyx_audit;
 CREATE TABLE IF NOT EXISTS infinyx_audit.audit_chain_state (
