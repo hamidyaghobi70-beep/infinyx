@@ -69,7 +69,40 @@ describe("MemoryDeletionCoordinator", () => {
     await expect(coordinator.replayAfterRestore()).resolves.toEqual({ recorded: "0002", replayed: 2, batches: 2 });
   });
 
-  it("rejects malformed or non-monotonic ledger pages", async () => {
+  it("treats opaque ledger cursors as append-order tokens, not sortable strings", async () => {
+    const store = new FakeStore();
+    const ledger: MemoryDeletionLedgerPort = {
+      append: vi.fn(async () => "cursor-z"),
+      listAfter: vi.fn()
+        .mockResolvedValueOnce([
+          { id: "cursor-z", namespace: "tenant-a", key: "a", deletedAt: "2026-11-23T12:00:00.000Z", reason: "user_request" }
+        ])
+        .mockResolvedValueOnce([
+          { id: "cursor-a", namespace: "tenant-b", key: "b", deletedAt: "2026-11-23T12:00:01.000Z", reason: "policy" }
+        ])
+        .mockResolvedValueOnce([])
+    };
+    const coordinator = new MemoryDeletionCoordinator(store, ledger, { batchSize: 1 });
+    await expect(coordinator.replayAfterRestore()).resolves.toEqual({
+      recorded: "cursor-a", replayed: 2, batches: 2
+    });
+    expect(ledger.listAfter).toHaveBeenNthCalledWith(2, "cursor-z", 1);
+  });
+
+  it("rejects repeated or duplicate opaque cursors", async () => {
+    const store = new FakeStore();
+    const ledger: MemoryDeletionLedgerPort = {
+      append: vi.fn(async () => "cursor-1"),
+      listAfter: vi.fn(async () => [
+        { id: "cursor-1", namespace: "tenant-a", key: "a", deletedAt: "2026-11-23T12:00:00.000Z", reason: "user_request" },
+        { id: "cursor-1", namespace: "tenant-b", key: "b", deletedAt: "2026-11-23T12:00:01.000Z", reason: "policy" }
+      ])
+    };
+    const coordinator = new MemoryDeletionCoordinator(store, ledger);
+    await expect(coordinator.replayAfterRestore()).rejects.toThrow("repeated a cursor");
+  });
+
+  it("rejects malformed ledger pages", async () => {
     const store = new FakeStore();
     const ledger = new FakeLedger();
     vi.spyOn(ledger, "listAfter").mockResolvedValue([
