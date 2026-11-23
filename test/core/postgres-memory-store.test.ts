@@ -34,6 +34,24 @@ describe("MemoryValueCipher", () => {
       .rejects.toThrow("Memory encryption operation failed.");
   });
 
+  it("rejects non-canonical Base64 envelope fields", async () => {
+    const cipher = new MemoryValueCipher(keys());
+    const envelope = await cipher.encrypt("strict-envelope");
+    await expect(cipher.decrypt({ ...envelope, nonce: "!!!!" }))
+      .rejects.toThrow("Memory encryption operation failed.");
+    await expect(cipher.decrypt({ ...envelope, ciphertext: "a===" }))
+      .rejects.toThrow("Memory encryption operation failed.");
+  });
+
+  it("rejects malformed key identifiers from the active provider", async () => {
+    const provider: MemoryKeyProvider = {
+      getActiveKey: async () => ({ keyId: "bad key id", key: randomBytes(32) }),
+      getKey: async () => null
+    };
+    const cipher = new MemoryValueCipher(provider);
+    await expect(cipher.encrypt("must-not-encrypt")).rejects.toThrow("Memory encryption operation failed.");
+  });
+
   it("re-encrypts an envelope with the active key while retaining old-key reads", async () => {
     const oldKey = randomBytes(32);
     const newKey = randomBytes(32);
