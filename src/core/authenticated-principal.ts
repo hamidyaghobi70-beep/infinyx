@@ -40,7 +40,7 @@ export function createPrincipalMemoryScope(principal: AuthenticatedPrincipal, mo
 export function createBearerAuthMiddleware(verifyToken: (token: string) => AuthenticatedPrincipal): RequestHandler {
  return (request, response, next) => {
   const header = request.header("authorization");
-  if (!header || !/^Bearer [^\\s]+$/.test(header)) { response.status(401).json({ error: "unauthorized" }); return; }
+  if (!header || !header.startsWith("Bearer ") || header.length === 7 || Array.from(header.slice(7)).some((character) => character.charCodeAt(0) <= 0x20)) { response.status(401).json({ error: "unauthorized" }); return; }
   try { response.locals.authenticatedPrincipal = verifyToken(header.slice(7)); next(); }
   catch { response.status(401).json({ error: "unauthorized" }); }
  };
@@ -51,4 +51,4 @@ export function getAuthenticatedPrincipal(request: Request): AuthenticatedPrinci
 }
 function parseSegment(segment: string): unknown { const parsed: unknown = JSON.parse(Buffer.from(segment, "base64url").toString("utf8")); if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) throw new Error(); return parsed; }
 function audienceMatches(value: unknown, expected: string): boolean { return value === expected || (Array.isArray(value) && value.includes(expected) && value.every((item) => typeof item === "string")); }
-function validClaim(value: unknown): value is string { return typeof value === "string" && value.trim().length > 0 && value.length <= 256 && !/[\\u0000-\\u001f\\u007f-\\u009f]/.test(value); }
+function validClaim(value: unknown): value is string { return typeof value === "string" && value.trim().length > 0 && value.length <= 256 && !Array.from(value).some((character) => { const code = character.charCodeAt(0); return code <= 0x1f || (code >= 0x7f && code <= 0x9f); }); }
