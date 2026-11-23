@@ -30,11 +30,13 @@ npm start
 
 The runtime listens on `127.0.0.1:3000` by default. Copy `.env.example` to `.env` only for local configuration. Do not commit real credentials or secrets.
 
-## Initial API
+## Website shell and initial API
 
+- `GET /` — responsive, static INFINYX landing page.
+- `GET /styles.css`, `/site.js`, and `/favicon.svg` — local static assets.
 - `GET /health` — process liveness only; it does not claim readiness, database health, dependency health, or module health.
 
-Unknown routes return a JSON 404. The initial runtime does not register business modules or expose business operations.
+The landing page is informational only. The runtime does not register business modules or expose business operations. Unknown routes return a JSON 404.
 
 **Do not expose this server to the public internet.** Authentication, authorization, tenant isolation, durable audit, production secret management, and deployment controls are not implemented.
 
