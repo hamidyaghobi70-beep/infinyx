@@ -1,4 +1,3 @@
-import { randomUUID } from "node:crypto";
 import type { MemoryAddress, MemoryPort } from "./contracts.js";
 
 /**
@@ -15,16 +14,18 @@ export interface MemoryDeletionTombstone {
 }
 
 export interface MemoryDeletionLedgerPort {
-  /** Must be durable before resolving; idempotent for the same id. */
-  append(tombstone: MemoryDeletionTombstone): Promise<void>;
-  /** Returns tombstones ordered by id, strictly after the supplied cursor. */
+  /**
+   * Must durably append before resolving and return a strictly increasing,
+   * opaque ledger sequence cursor (not a client-generated random identifier).
+   */
+  append(tombstone: Omit<MemoryDeletionTombstone, "id">): Promise<string>;
+  /** Returns entries in append order, strictly after the supplied sequence cursor. */
   listAfter(cursor: string | null, limit: number): Promise<readonly MemoryDeletionTombstone[]>;
 }
 
 export interface MemoryDeletionReplayOptions {
   readonly batchSize?: number;
   readonly now?: () => Date;
-  readonly createId?: () => string;
 }
 
 export interface MemoryDeletionReplayResult {
@@ -42,7 +43,6 @@ export interface MemoryDeletionReplayResult {
 export class MemoryDeletionCoordinator {
   readonly #batchSize: number;
   readonly #now: () => Date;
-  readonly #createId: () => string;
 
   constructor(
     private readonly store: MemoryPort,
@@ -51,7 +51,6 @@ export class MemoryDeletionCoordinator {
   ) {
     this.#batchSize = options.batchSize ?? 250;
     this.#now = options.now ?? (() => new Date());
-    this.#createId = options.createId ?? (() => randomUUID());
     if (!Number.isSafeInteger(this.#batchSize) || this.#batchSize < 1 || this.#batchSize > 5000) {
       throw new TypeError("batchSize must be an integer between 1 and 5000.");
     }
@@ -62,19 +61,17 @@ export class MemoryDeletionCoordinator {
     reason: MemoryDeletionTombstone["reason"] = "user_request"
   ): Promise<void> {
     validateAddress(address);
-    const id = this.#createId();
-    if (typeof id !== "string" || id.length < 1 || id.length > 200) {
-      throw new TypeError("Deletion ledger ID generator returned an invalid ID.");
-    }
-    const tombstone: MemoryDeletionTombstone = Object.freeze({
-      id,
+    const tombstone = Object.freeze({
       namespace: address.namespace,
       key: address.key,
       deletedAt: this.#now().toISOString(),
       reason
     });
     // Fail closed: if the independent ledger is unavailable, do not delete.
-    await this.ledger.append(tombstone);
+    const cursor = await this.ledger.append(tombstone);
+    if (typeof cursor !== "string" || cursor.length < 1 || cursor.length > 512) {
+      throw new Error("Deletion ledger returned an invalid append cursor.");
+    }
     await this.store.delete({ namespace: address.namespace, key: address.key });
   }
 
