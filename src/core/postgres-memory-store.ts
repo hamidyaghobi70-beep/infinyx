@@ -181,9 +181,12 @@ function tenantFromScopedNamespace(namespace: string): string {
   try {
     const encodedTenant = namespace.slice(0, separator);
     const tenantId = decodeURIComponent(encodedTenant);
+    const hasControlCharacter = Array.from(tenantId).some((character) => {
+      const code = character.charCodeAt(0);
+      return code <= 0x1f || (code >= 0x7f && code <= 0x9f);
+    });
     if (!tenantId || tenantId.length > 128 || tenantId.trim().length === 0 ||
-        /[\\u0000-\\u001f\\u007f-\\u009f]/.test(tenantId) ||
-        encodeURIComponent(tenantId) !== encodedTenant) throw new Error("invalid");
+        hasControlCharacter || encodeURIComponent(tenantId) !== encodedTenant) throw new Error("invalid");
     return tenantId;
   } catch {
     throw new TypeError("Persistent memory namespace has an invalid tenant scope prefix.");
