@@ -94,7 +94,7 @@ export class MemoryDeletionCoordinator implements MemoryPort {
       if (entries.length > this.#batchSize) {
         throw new Error("Deletion ledger exceeded the requested page size.");
       }
-      let previous = cursor;
+      let previous: string | null = cursor;
       for (const entry of entries) {
         validateTombstone(entry);
         if (previous !== null && entry.id <= previous) {
