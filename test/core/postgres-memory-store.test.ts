@@ -139,13 +139,22 @@ describe("PostgresEncryptedMemoryStore", () => {
     )).toBe(true);
   });
 
-  it("does not delete a record refreshed after the expiry read", async () => {
+  it("returns a concurrently refreshed record after the conditional expiry delete loses its race", async () => {
     const expiredAt = new Date(0);
+    const context = { tenantId: "tenant-a", namespace: "tenant-a/n", key: "k" };
+    const cipher = new MemoryValueCipher(keys());
+    const refreshedEnvelope = await cipher.encrypt(
+      '{"classification":"internal","value":"refreshed"}',
+      context
+    );
+    let selectCount = 0;
     let deleteValues: readonly unknown[] | undefined;
     const db: SqlExecutor = {
       query: vi.fn(async (sql: string, values: readonly unknown[] = []) => {
         if (sql.startsWith("SELECT")) {
-          return { rows: [{ envelope: {}, expires_at: expiredAt }] };
+          selectCount += 1;
+          if (selectCount === 1) return { rows: [{ envelope: {}, expires_at: expiredAt }] };
+          return { rows: [{ envelope: refreshedEnvelope, expires_at: new Date(Date.now() + 60_000) }] };
         }
         if (sql.startsWith("DELETE")) {
           deleteValues = values;
@@ -156,11 +165,14 @@ describe("PostgresEncryptedMemoryStore", () => {
         return { rows: [], rowCount: 0 };
       })
     };
-    const store = new PostgresEncryptedMemoryStore(db, new MemoryValueCipher(keys()));
-    expect(await store.read({ namespace: "tenant-a/n", key: "k" })).toBeNull();
+    const store = new PostgresEncryptedMemoryStore(db, cipher);
+    await expect(store.read({ namespace: "tenant-a/n", key: "k" }))
+      .resolves.toBe('{"classification":"internal","value":"refreshed"}');
     expect(deleteValues).toEqual(["tenant-a", "tenant-a/n", "k", expiredAt]);
     expect(db.query).toHaveBeenNthCalledWith(2,
       expect.stringContaining("AND expires_at = $4"), deleteValues);
+    expect(db.query).toHaveBeenNthCalledWith(3,
+      expect.stringContaining("SELECT envelope, expires_at"), ["tenant-a", "tenant-a/n", "k"]);
   });
 
   it("bounds expiry sweeps and includes tenant identity in the delete join", async () => {
