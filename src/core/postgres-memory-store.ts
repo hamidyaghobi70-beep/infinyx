@@ -1,5 +1,5 @@
 import type { MemoryAddress, MemoryPort } from "./contracts.js";
-import { MemoryValueCipher, type EncryptedMemoryEnvelope } from "./memory-encryption.js";
+import { MemoryValueCipher, type EncryptedMemoryEnvelope, type MemoryEncryptionContext } from "./memory-encryption.js";
 
 export interface SqlQueryResult<Row> {
   readonly rows: readonly Row[];
@@ -60,7 +60,7 @@ export class PostgresEncryptedMemoryStore implements MemoryPort {
       await this.delete(address);
       return null;
     }
-    return this.cipher.decrypt(row.envelope);
+    return this.cipher.decrypt(row.envelope, encryptionContext(address, tenantId));
   }
 
   async write(address: MemoryAddress, value: unknown): Promise<void> {
@@ -76,7 +76,7 @@ export class PostgresEncryptedMemoryStore implements MemoryPort {
       throw new TypeError("Persistent memory classification is missing, unsupported, or restricted.");
     }
     const tenantId = tenantFromScopedNamespace(address.namespace);
-    const encrypted = await this.cipher.encrypt(value);
+    const encrypted = await this.cipher.encrypt(value, encryptionContext(address, tenantId));
     const now = this.#now();
     const expiresAt = new Date(now.getTime() + this.#retentionDays * 24 * 60 * 60 * 1000);
     const envelope: StoredMemoryEnvelope = Object.freeze({
@@ -128,7 +128,7 @@ export class PostgresEncryptedMemoryStore implements MemoryPort {
     );
     let rotated = 0;
     for (const row of selected.rows) {
-      const replacement = await this.cipher.reencrypt(row.envelope);
+      const context = encryptionContext({ namespace: row.namespace, key: row.memory_key }, row.tenant_id);\n      const replacement = await this.cipher.reencrypt(row.envelope, context);
       const result = await this.db.query(
         `UPDATE ${this.#table}
          SET envelope = $1::jsonb, updated_at = $2
@@ -191,4 +191,10 @@ function tenantFromScopedNamespace(namespace: string): string {
   } catch {
     throw new TypeError("Persistent memory namespace has an invalid tenant scope prefix.");
   }
+}
+
+
+/** The exact same canonical identity is supplied on writes, reads, and key rotation. */
+function encryptionContext(address: MemoryAddress, tenantId: string): MemoryEncryptionContext {
+  return Object.freeze({ tenantId, namespace: address.namespace, key: address.key });
 }
