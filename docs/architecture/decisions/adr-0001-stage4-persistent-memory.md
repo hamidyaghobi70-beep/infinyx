@@ -108,4 +108,6 @@ These decisions do **not** authorize connecting persistence to a live runtime or
 
 ## Consequences
 
-The choices settle the six owner-level design questions and provide a concrete implementation target. The durable adapter and security controls remain unimplemented until the gates above are satisfied. The existing in-memory reference store remains the only active storage implementation in Core Engine v1.
+The choices settle the six owner-level design questions and provide a concrete implementation target. Initial library components now exist for AES-256-GCM envelope encryption, an injected KMS key-provider contract, a PostgreSQL MemoryPort adapter with expiry, a transactional PostgreSQL audit writer with a hash chain, and an idempotent schema migration. Focused unit tests have been added.
+
+This is **partial implementation, not production-ready persistence**. No concrete cloud KMS provider, classification enforcement, backup/restore deletion replay, database role provisioning, signed external audit checkpoints, migration runner, authenticated identity composition, live PostgreSQL integration test, or deployment configuration has been completed. The adapters are not wired into the server or live Core runtime. The in-memory reference store remains the only active storage implementation in Core Engine v1.
