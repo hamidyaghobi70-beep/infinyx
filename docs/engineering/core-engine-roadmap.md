@@ -198,3 +198,19 @@ For every stage:
 5. Obtain independent review of the exact head commit.
 6. Record unresolved risks explicitly.
 7. Stop before merge or deployment pending separate owner approval.
+
+
+### Stage 6 progress — operational runbook (working draft)
+
+- Added `docs/operations/core-engine-v1-runbook.md` against the current branch.
+- The runbook records the actual Node/npm commands, environment configuration, startup
+  ordering, current `/health` semantics, graceful HTTP/Core shutdown behavior, security
+  limitations, and deployment/rollback gates.
+- It explicitly records that `/health` is liveness only and that no separate readiness
+  endpoint currently exists; a listening server is created only after Core initialization
+  and start complete.
+- It does not claim production readiness. Resource limits, restart policy, rollback
+  automation, load/soak measurements, authenticated identity, and persistent storage
+  remain unverified or unimplemented.
+- Stage 6 remains **OPEN / draft pending independent review and owner approval**. This
+  documentation change does not authorize deployment or release.
