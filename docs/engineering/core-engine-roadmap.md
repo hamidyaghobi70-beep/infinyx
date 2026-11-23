@@ -154,9 +154,9 @@ Implement storage behind the existing port only after these controls have testab
   append-only audit schema/roles with signed external checkpoints; versioned canonical
   JSON envelopes with resumable migrations; and four-level data classification with
   Restricted data denied by default.
-- These are approved design decisions, **not implemented controls**. No PostgreSQL
-  adapter, KMS integration, durable audit store, expiry worker, backup/restore workflow,
-  or classification enforcement is claimed complete.
+- Initial implementation added on this draft branch: AES-256-GCM envelope cipher with an injected key-provider contract; PostgreSQL `MemoryPort` adapter with 90-day default expiry and bounded expiry sweep; transactional PostgreSQL audit writer with hash-chain sequencing; initial idempotent SQL migration; focused unit tests.
+- This is **partial library implementation**, not production-ready persistence. No concrete cloud KMS provider or rotation workflow, classification enforcement, backup/restore deletion replay, DB role/grant provisioning, external signed audit checkpoints, migration runner, or authenticated identity composition is complete. No adapter is wired into the server or live Core runtime.
+- Focused tests have been authored but have not yet been executed in CI against the exact current head. No live PostgreSQL or KMS integration test has been run.
 - Persistence must remain disconnected until a trusted authenticated principal is
   available to the composition root and the ADR implementation gates pass.
 - Agent and Tool Execution remain disabled. No merge, release, deployment, or runtime
