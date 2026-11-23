@@ -117,6 +117,8 @@ describe("PostgresEncryptedMemoryStore", () => {
     const store = new PostgresEncryptedMemoryStore(db, new MemoryValueCipher(keys()));
     await expect(store.write({ namespace: "notes", key: "k" }, '{"classification":"internal"}'))
       .rejects.toThrow("tenant scope prefix");
+    await expect(store.write({ namespace: "tenant%2fadmin/notes", key: "k" }, '{"classification":"internal"}'))
+      .rejects.toThrow("tenant scope prefix");
   });
 
   it("rejects unclassified and restricted values by default", async () => {
