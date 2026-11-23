@@ -2,6 +2,12 @@
 
 Status: implemented as a configurable RS256 bearer-token verifier; not production-enabled until the deployment owner supplies the real identity-provider trust configuration.
 
+## OIDC/JWKS key resolver baseline
+
+A bounded JWKS resolver is now available in `src/core/jwks-key-resolver.ts`. It requires an operator-supplied HTTPS endpoint, refuses redirects and credential-bearing URLs, caps response size and request time, accepts only RSA signing keys marked for RS256 with at least 2048-bit modulus, caches keys for a bounded interval, and refreshes once when an unknown `kid` is requested. Unit tests cover caching, key rotation, unsuitable keys, insecure URLs, and endpoint failures.
+
+This resolver is a library component only: the current server still uses the explicitly configured PEM public key and does not yet consume JWKS dynamically. Keycloak is the preferred deployment target, but no realm, issuer, audience, endpoint, or signing key has been invented or configured. Dynamic key rotation must be wired into an asynchronous verification boundary and tested before JWKS authentication can be considered active.
+
 ## Runtime configuration
 
 Set all three environment variables together:
