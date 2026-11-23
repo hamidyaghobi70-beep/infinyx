@@ -118,3 +118,24 @@ execution) remains disabled and out of scope.
 
 
 Deletion replay boundary: the coordinator accepts a `MemoryDeletionLedgerPort` that MUST be implemented by a system outside the PostgreSQL backup/restore failure domain. The ledger adapter must assign append-order monotonic cursors and provide stable ordered pagination. The restore runbook must keep memory writes disabled until replay completes. The in-repository implementation is an orchestration contract with unit tests only; no external ledger provider is configured. Do not connect it to production or claim restore safety until an independently administered durable ledger, access controls, retention policy, and restore drill are verified.
+
+
+## Envelope v2: record-context authentication
+
+New writes through `PostgresEncryptedMemoryStore` use AES-256-GCM envelope version 2.
+The cipher authenticates a deterministic JSON tuple containing the domain separator,
+`tenantId`, full stored `namespace`, and `memory_key` as GCM Additional Authenticated
+Data (AAD). The tuple is supplied independently from the database row identity on read
+and key rotation; moving a valid envelope to another tenant, namespace, or record key
+therefore fails authentication.
+
+Version 1 envelopes remain readable without context for backward compatibility. A
+rotation batch that encounters a v1 record decrypts it using the v1 format and writes
+the replacement as v2 using the row's identity. Version 2 decryption fails closed if
+context is missing or differs. No bulk migration is automatic; use the existing bounded
+rotation operation under an approved maintenance process.
+
+The v2 format is a library-level compatibility change only: the stored envelope JSON
+fields remain stable, with the version fields identifying the AAD requirement. This
+does not make the adapter production-ready; live PostgreSQL/KMS tests, key lifecycle
+controls, and independent review remain required.
