@@ -134,7 +134,9 @@ describe("PostgresEncryptedMemoryStore", () => {
     };
     const store = new PostgresEncryptedMemoryStore(db, new MemoryValueCipher(keys()));
     expect(await store.read({ namespace: "tenant-a/n", key: "k" })).toBeNull();
-    expect(statements.some((sql) => sql.startsWith("DELETE"))).toBe(true);
+    expect(statements.some((sql) =>
+      sql.startsWith("DELETE") && sql.includes("AND expires_at = $4")
+    )).toBe(true);
   });
 
   it("does not delete a record refreshed after the expiry read", async () => {
