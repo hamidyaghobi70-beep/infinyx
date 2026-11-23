@@ -49,6 +49,12 @@ export class MemoryValueCipher {
     }
   }
 
+  /** Re-encrypts plaintext with the provider's current active key; never exports plaintext. */
+  async reencrypt(envelope: EncryptedMemoryEnvelope): Promise<EncryptedMemoryEnvelope> {
+    const plaintext = await this.decrypt(envelope);
+    return this.encrypt(plaintext);
+  }
+
   async decrypt(envelope: EncryptedMemoryEnvelope): Promise<string> {
     try {
       if (envelope.formatVersion !== 1 || envelope.encryptionVersion !== 1 || envelope.algorithm !== "A256GCM") {
