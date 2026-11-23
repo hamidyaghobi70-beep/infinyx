@@ -1,11 +1,13 @@
 import express, { type Express } from "express";
 import { rateLimit } from "express-rate-limit";
 import { errorHandler } from "../shared/http/error-handler.js";
+import type { RequestHandler } from "express";
+import { getAuthenticatedPrincipal } from "../core/authenticated-principal.js";
 
 export type ReadinessCheck = () => boolean;
 
 /** Build an HTTP app whose readiness signal is tied to the owning runtime state. */
-export function createApp(isReady: ReadinessCheck = () => false): Express {
+export function createApp(isReady: ReadinessCheck = () => false, authenticate?: RequestHandler): Express {
   const application = express();
 
   application.disable("x-powered-by");
@@ -22,7 +24,7 @@ export function createApp(isReady: ReadinessCheck = () => false): Express {
     res.status(200).json({ status: "ok" });
   });
 
-  // Readiness reflects Core lifecycle, not downstream dependency health.
+  // Authenticated identity introspection is mounted only when a trusted verifier is configured.\n  if (authenticate) {\n    application.get("/v1/identity", authenticate, (request, response) => {\n      const principal = getAuthenticatedPrincipal(request);\n      if (!principal) { response.status(401).json({ error: "unauthorized" }); return; }\n      response.status(200).json({ subject: principal.subject, tenantId: principal.tenantId, issuer: principal.issuer, audience: principal.audience, expiresAt: principal.expiresAt });\n    });\n  }\n\n  // Readiness reflects Core lifecycle, not downstream dependency health.
   application.get("/ready", (_req, res) => {
     if (!isReady()) {
       res.status(503).json({ status: "not_ready" });
