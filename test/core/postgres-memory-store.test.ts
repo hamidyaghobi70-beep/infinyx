@@ -76,8 +76,17 @@ describe("PostgresEncryptedMemoryStore", () => {
     const store = new PostgresEncryptedMemoryStore(db, cipher);
     await store.write({ namespace: "tenant-a/notes", key: "k" }, '{"classification":"internal","v":1}');
     expect(JSON.stringify(saved)).not.toContain('"v":1');
-    expect(db.query).toHaveBeenCalledWith(expect.stringContaining("tenant_id = $1"), ["tenant-a", "tenant-a/notes", "k"]);
+    expect(db.query).toHaveBeenNthCalledWith(
+      1,
+      expect.stringContaining("(tenant_id, namespace, memory_key"),
+      expect.arrayContaining(["tenant-a", "tenant-a/notes", "k"])
+    );
     expect(await store.read({ namespace: "tenant-a/notes", key: "k" })).toBe('{"classification":"internal","v":1}');
+    expect(db.query).toHaveBeenNthCalledWith(
+      2,
+      expect.stringContaining("WHERE tenant_id = $1"),
+      ["tenant-a", "tenant-a/notes", "k"]
+    );
   });
 
   it("deletes expired records before returning a miss", async () => {
