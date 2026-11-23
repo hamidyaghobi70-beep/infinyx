@@ -66,8 +66,26 @@ export class JwksKeyResolver {
     if (!response.ok) throw new Error("JWKS endpoint returned an unsuccessful response.");
     const declaredLength = Number(response.headers.get("content-length") ?? 0);
     if (declaredLength > MAX_JWKS_BYTES) throw new Error("JWKS response exceeds the size limit.");
-    const body = await response.text();
-    if (Buffer.byteLength(body, "utf8") > MAX_JWKS_BYTES) throw new Error("JWKS response exceeds the size limit.");
+    if (!response.body) throw new Error("JWKS response body is missing.");
+    const reader = response.body.getReader();
+    const chunks: Uint8Array[] = [];
+    let totalBytes = 0;
+    try {
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        totalBytes += value.byteLength;
+        if (totalBytes > MAX_JWKS_BYTES) {
+          await reader.cancel();
+          throw new Error("JWKS response exceeds the size limit.");
+        }
+        chunks.push(value);
+      }
+    } finally {
+      reader.releaseLock();
+    }
+    const bytes = Buffer.concat(chunks.map((chunk) => Buffer.from(chunk)), totalBytes);
+    const body = new TextDecoder("utf-8", { fatal: true }).decode(bytes);
     const parsed: unknown = JSON.parse(body);
     if (!parsed || typeof parsed !== "object" || !Array.isArray((parsed as { keys?: unknown }).keys)) {
       throw new Error("Malformed JWKS document.");
@@ -80,6 +98,7 @@ export class JwksKeyResolver {
       try {
         const key = createPublicKey({ key: { kty: "RSA", n: candidate.n, e: candidate.e }, format: "jwk" });
         if (key.asymmetricKeyType !== "rsa" || (key.asymmetricKeyDetails?.modulusLength ?? 0) < 2048) continue;
+        if (next.has(candidate.kid)) throw new Error("JWKS contains a duplicate key id.");
         next.set(candidate.kid, { key, expiresAt: this.now() + this.ttl });
       } catch { /* Ignore malformed or unsuitable keys; never weaken verification. */ }
     }
