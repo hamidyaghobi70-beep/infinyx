@@ -94,11 +94,13 @@ describe("PostgresEncryptedMemoryStore", () => {
     expect(statements.some((sql) => sql.startsWith("DELETE"))).toBe(true);
   });
 
-  it("bounds expiry sweeps", async () => {
-    const db: SqlExecutor = { query: async () => ({ rows: [], rowCount: 7 }) };
+  it("bounds expiry sweeps and includes tenant identity in the delete join", async () => {
+    let statement = "";
+    const db: SqlExecutor = { query: async (sql) => { statement = sql; return { rows: [], rowCount: 7 }; } };
     const store = new PostgresEncryptedMemoryStore(db, new MemoryValueCipher(keys()));
     await expect(store.deleteExpired(0)).rejects.toThrow(TypeError);
     await expect(store.deleteExpired(500)).resolves.toBe(7);
+    expect(statement).toContain("target.tenant_id = expired.tenant_id");
   });
 
   it("requires an explicit tenant prefix for classified persistent values", async () => {
