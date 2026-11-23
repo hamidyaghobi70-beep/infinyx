@@ -4,6 +4,7 @@ CREATE TABLE IF NOT EXISTS infinyx_memory.memory_entries (
   namespace text NOT NULL,
   memory_key text NOT NULL,
   envelope jsonb NOT NULL,
+  classification text NOT NULL CHECK (classification IN ('public', 'internal', 'confidential')),
   created_at timestamptz NOT NULL DEFAULT now(),
   updated_at timestamptz NOT NULL DEFAULT now(),
   expires_at timestamptz NOT NULL,
