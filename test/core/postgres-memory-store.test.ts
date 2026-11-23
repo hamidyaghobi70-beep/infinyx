@@ -34,6 +34,24 @@ describe("MemoryValueCipher", () => {
       .rejects.toThrow("Memory encryption operation failed.");
   });
 
+  it("re-encrypts an envelope with the active key while retaining old-key reads", async () => {
+    const oldKey = randomBytes(32);
+    const newKey = randomBytes(32);
+    let active = { keyId: "key-v1", key: oldKey };
+    const provider: MemoryKeyProvider = {
+      getActiveKey: async () => active,
+      getKey: async (id) => id === "key-v1" ? oldKey : id === "key-v2" ? newKey : null
+    };
+    const cipher = new MemoryValueCipher(provider);
+    const original = await cipher.encrypt("rotation-check");
+    active = { keyId: "key-v2", key: newKey };
+    const rotated = await cipher.reencrypt(original);
+    expect(rotated.keyId).toBe("key-v2");
+    expect(rotated.ciphertext).not.toBe(original.ciphertext);
+    expect(await cipher.decrypt(rotated)).toBe("rotation-check");
+    expect(await cipher.decrypt(original)).toBe("rotation-check");
+  });
+
   it("fails closed when the key provider cannot return a key", async () => {
     const cipher = new MemoryValueCipher({ getActiveKey: async () => ({ keyId: "missing", key: new Uint8Array(32) }), getKey: async () => null });
     const envelope = await cipher.encrypt("secret");
