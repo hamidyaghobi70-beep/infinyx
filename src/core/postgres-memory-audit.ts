@@ -77,10 +77,13 @@ export class PostgresMemoryAuditPort implements MemoryAuditPort {
           occurredAt, current.head_hash, entryHash
         ]
       );
-      await connection.query(
+      const headUpdate = await connection.query(
         "UPDATE infinyx_audit.audit_chain_state SET sequence = $1, head_hash = $2 WHERE singleton = true",
         [sequence, entryHash]
       );
+      if (headUpdate.rowCount !== 1) {
+        throw new Error("Audit chain head update did not affect exactly one row.");
+      }
       await connection.query("COMMIT");
     } catch (error) {
       try { await connection.query("ROLLBACK"); } catch { /* preserve original failure */ }
