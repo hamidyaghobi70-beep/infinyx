@@ -279,6 +279,24 @@ describe("FailClosedPolicyEngine caller and parent cancellation", () => {
     expect(evaluator).not.toHaveBeenCalled();
   });
 
+  it.each([
+    ["NaN", Number.NaN],
+    ["positive infinity", Number.POSITIVE_INFINITY],
+    ["negative infinity", Number.NEGATIVE_INFINITY]
+  ])("denies a non-finite parent deadline (%s) without invoking the evaluator", async (_label, deadlineAt) => {
+    const evaluator = vi.fn(async () => ({
+      effect: "allow" as const,
+      reason: "must not execute"
+    }));
+    const policy = new FailClosedPolicyEngine({ evaluate: evaluator });
+    await expect(policy.evaluate(request, { deadlineAt }))
+      .resolves.toEqual({
+        effect: "deny",
+        reason: "Policy deadline is invalid; access denied."
+      });
+    expect(evaluator).not.toHaveBeenCalled();
+  });
+
   it("distinguishes parent cancellation from caller cancellation", async () => {
     const parent = new AbortController();
     const policy = new FailClosedPolicyEngine({
