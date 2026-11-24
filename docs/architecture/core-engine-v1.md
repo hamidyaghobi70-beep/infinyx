@@ -45,6 +45,16 @@ The repository minimum runtime is Node.js `22.12.0`, matching the minimum Node 2
 
 The HTTP composition root uses a single shutdown controller. SIGINT, SIGTERM, uncaughtException and unhandledRejection all converge on the same shutdown Promise; no handler calls the exit function independently. Fatal events set the final exit code to 1 even when a signal-initiated shutdown is already in progress. The exit function is guarded by a shared exit Promise and is invoked at most once.
 
-Shutdown drains the HTTP server before stopping Core Engine. The drain timeout defaults to 10 seconds; if it expires, remaining HTTP connections are closed and the final exit code becomes 1. HTTP close errors and Core Engine stop errors also produce a non-zero exit code. Process handlers are installed after Core Engine startup but before the HTTP server's listen call.
+Process handlers are installed before Core Engine startup. Shutdown waits for an in-flight startup hook, prevents the HTTP listener from starting after an early signal, drains the HTTP server, then stops Core Engine. The HTTP drain timeout defaults to 10 seconds; if it expires, remaining HTTP connections are closed and the final exit code becomes 1. HTTP close errors and Core Engine stop errors also produce a non-zero exit code.
 
 The runtime accepts an injected exit function. Tests provide a spy rather than process.exit, so exercising signal and fatal-event handlers never terminates the Vitest process. The integration tests measure both the Core Engine stop call count and final exit call count.
+
+## Protected operation admission and drain (Revision v6)
+
+Core Engine wraps every service port exposed through its public surface and ModuleContext: EventBusPort, PolicyEngine and the optional injected MemoryPort. The optional memory port remains an external interface; Core Engine v1 supplies no persistence adapter. The raw injected ports are not exposed through ModuleContext.
+
+Every module initialize/start hook runs inside a tracked operation context. Service calls made by that hook, event handlers, and nested service calls inherit a parent operation through AsyncLocalStorage. Once admission closes, independent operations are rejected, while a child may register only while its parent handle remains in the active registry. Detached callbacks that run after parent settlement are rejected.
+
+The registry tracks per-handle pendingPromiseCount separately from the global activePromiseCount and activeHandleCount. Registry transitions are synchronous and contain no await point, providing a single linearization point in the Node.js event loop for parent settlement versus child registration. A handle is removed only when its own pending promise count reaches zero; releasing an IDLE handle removes it immediately, and tracking after manual release is rejected.
+
+Shutdown first closes independent admission and drains all accepted operations. Module stop hooks then run as privileged tracked cleanup roots; any service operations they start are tracked as children, followed by a second drain before the engine reports STOPPED. A drain timeout leaves the engine in FAILED with failureReason=drain_timeout and does not discard live handles or begin unsafe cleanup. After the outstanding work settles, a later stop call may safely retry. Cleanup failures are reported separately as failureReason=cleanup_error and only failed resources are retried.
