@@ -72,6 +72,7 @@ export class CoreEngine {
 
     try {
       for (const module of this.moduleRegistry.resolveStartOrder()) {
+        if (this.closingRequested) break;
         this.moduleStates.set(module.id, "initializing");
         // Track before invoking the hook so rollback also cleans up a module
         // whose initialization failed after partially allocating resources.
@@ -112,6 +113,7 @@ export class CoreEngine {
 
     try {
       for (const module of this.moduleRegistry.resolveStartOrder()) {
+        if (this.closingRequested) break;
         this.moduleStates.set(module.id, "starting");
         await module.start?.(this.createContext(module.id));
         this.moduleStates.set(module.id, "running");
