@@ -191,26 +191,13 @@ export class PostgresEncryptedMemoryStore implements MemoryPort {
     return { examined: selected.rows.length, rotated };
   }
 
-  /** Bounded expiry sweep; call from a controlled maintenance job, never module code. */
-  async deleteExpired(batchSize = 500): Promise<number> {
-    if (!Number.isSafeInteger(batchSize) || batchSize < 1 || batchSize > 10_000) {
-      throw new TypeError("batchSize must be between 1 and 10000.");
-    }
-    const result = await this.db.query(
-      `WITH expired AS (
-         SELECT tenant_id, namespace, memory_key FROM ${this.#table}
-         WHERE expires_at <= now()
-         ORDER BY expires_at
-         LIMIT $1
-         FOR UPDATE SKIP LOCKED
-       )
-       DELETE FROM ${this.#table} AS target
-       USING expired
-       WHERE target.tenant_id = expired.tenant_id
-         AND target.namespace = expired.namespace AND target.memory_key = expired.memory_key`,
-      [batchSize]
-    );
-    return result.rowCount ?? 0;
+  /**
+   * Expiry purges must be recorded by the independent deletion ledger so a
+   * restore cannot resurrect expired records. This adapter has no ledger
+   * dependency; fail closed rather than offering an unaudited destructive path.
+   */
+  async deleteExpired(_batchSize = 500): Promise<number> {
+    throw new Error("Expiry deletion requires a deletion-ledger coordinator.");
   }
 }
 
