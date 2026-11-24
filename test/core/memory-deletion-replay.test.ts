@@ -30,6 +30,36 @@ class FakeLedger implements MemoryDeletionLedgerPort {
 const key = (address: MemoryAddress) => address.namespace + "/" + address.key;
 
 describe("MemoryDeletionCoordinator", () => {
+  it("snapshots store and ledger capabilities against replacement and instance tampering", async () => {
+    const store = new FakeStore();
+    const ledger = new FakeLedger();
+    const address = { namespace: "tenant-a", key: "protected" };
+    await store.write(address, "secret");
+    const originalDelete = vi.spyOn(store, "delete");
+    const originalAppend = vi.spyOn(ledger, "append");
+    const originalListAfter = vi.spyOn(ledger, "listAfter");
+    const coordinator = new MemoryDeletionCoordinator(store, ledger);
+
+    store.delete = vi.fn(async () => undefined);
+    ledger.append = vi.fn(async () => "forged-cursor");
+    ledger.listAfter = vi.fn(async () => []);
+    (coordinator as unknown as Record<string, unknown>).store = new FakeStore();
+    (coordinator as unknown as Record<string, unknown>).ledger = new FakeLedger();
+
+    await coordinator.delete(address, "user_request");
+    expect(originalAppend).toHaveBeenCalledTimes(1);
+    expect(originalDelete).toHaveBeenCalledTimes(1);
+    expect(ledger.entries).toHaveLength(1);
+    expect(await store.read(address)).toBeNull();
+
+    await store.write(address, "restored-secret");
+    await coordinator.replayAfterRestore();
+    expect(originalListAfter).toHaveBeenCalled();
+    expect(await store.read(address)).toBeNull();
+    expect(Object.isFrozen(coordinator)).toBe(true);
+    expect(Reflect.ownKeys(coordinator)).toEqual([]);
+  });
+
   it("persists an external tombstone before deleting live memory", async () => {
     const store = new FakeStore();
     const ledger = new FakeLedger();
