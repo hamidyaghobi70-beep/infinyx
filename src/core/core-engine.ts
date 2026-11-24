@@ -84,16 +84,23 @@ export class CoreEngine {
       const failedModule = [...this.moduleStates.entries()]
         .find(([, state]) => state === "initializing")?.[0];
       this.lifecycle = "failed";
-      const cleanupErrors = await this.rollbackCoordinator.run(() =>
-        this.cleanupInitializedModules(failedModule ? new Set([failedModule]) : new Set())
-      );
+      let rollbackFailed = false;
+      let rollbackError: unknown;
+      try {
+        await this.rollbackCoordinator.run(() =>
+          this.performStartupRollback(failedModule ? new Set([failedModule]) : new Set())
+        );
+      } catch (cleanupError) {
+        rollbackFailed = true;
+        rollbackError = cleanupError;
+      }
       const failure = new CoreError(
         "MODULE_INITIALIZATION_FAILED",
         "Core Engine module initialization failed.",
         { cause: error }
       );
-      if (cleanupErrors.length) {
-        throw new AggregateError([failure, ...cleanupErrors], "Initialization and rollback failed.");
+      if (rollbackFailed) {
+        throw new AggregateError([failure, rollbackError], "Initialization and rollback failed.");
       }
       throw failure;
     }
@@ -114,16 +121,23 @@ export class CoreEngine {
       const failedModule = [...this.moduleStates.entries()]
         .find(([, state]) => state === "starting")?.[0];
       this.lifecycle = "failed";
-      const cleanupErrors = await this.rollbackCoordinator.run(() =>
-        this.cleanupInitializedModules(failedModule ? new Set([failedModule]) : new Set())
-      );
+      let rollbackFailed = false;
+      let rollbackError: unknown;
+      try {
+        await this.rollbackCoordinator.run(() =>
+          this.performStartupRollback(failedModule ? new Set([failedModule]) : new Set())
+        );
+      } catch (cleanupError) {
+        rollbackFailed = true;
+        rollbackError = cleanupError;
+      }
       const failure = new CoreError(
         "MODULE_START_FAILED",
         "Core Engine module startup failed.",
         { cause: error }
       );
-      if (cleanupErrors.length) {
-        throw new AggregateError([failure, ...cleanupErrors], "Startup and rollback failed.");
+      if (rollbackFailed) {
+        throw new AggregateError([failure, rollbackError], "Startup and rollback failed.");
       }
       throw failure;
     }
@@ -146,6 +160,15 @@ export class CoreEngine {
       this.lifecycle = "stopping";
       await this.performStop();
     });
+  }
+
+  private async performStartupRollback(
+    preserveFailureIds: ReadonlySet<string>
+  ): Promise<void> {
+    const errors = await this.cleanupInitializedModules(preserveFailureIds);
+    if (errors.length) {
+      throw new AggregateError(errors, "Startup rollback cleanup failed.");
+    }
   }
 
   private async performStop(): Promise<void> {
