@@ -35,11 +35,14 @@ try {
 
   const runner = new PostgresMigrationRunner(migrationPool);
 
-  // A pre-existing LOGIN role must make the complete migration batch fail closed.
+  // Existing LOGIN roles and inherited role memberships must fail closed.
   await pool.query("CREATE ROLE infinyx_memory_runtime LOGIN");
+  await pool.query("CREATE ROLE infinyx_test_privileged_group NOLOGIN");
+  await pool.query("CREATE ROLE infinyx_audit_writer NOLOGIN");
+  await pool.query("GRANT infinyx_test_privileged_group TO infinyx_audit_writer");
   await assert.rejects(
     runner.run(migrations),
-    /Stage 4 roles have unsafe attributes; refusing grants: infinyx_memory_runtime/
+    /Stage 4 roles have unsafe attributes or memberships; refusing grants: infinyx_audit_writer, infinyx_memory_runtime/
   );
   const failedPreflight = await pool.query(`
     SELECT
@@ -48,6 +51,9 @@ try {
   `);
   assert.equal(failedPreflight.rows[0].memory_table, null, "unsafe pre-existing role must roll back schema creation");
   assert.equal(failedPreflight.rows[0].migration_ledger, null, "unsafe pre-existing role must roll back migration ledger creation");
+  await pool.query("REVOKE infinyx_test_privileged_group FROM infinyx_audit_writer");
+  await pool.query("DROP ROLE infinyx_audit_writer");
+  await pool.query("DROP ROLE infinyx_test_privileged_group");
   await pool.query("DROP ROLE infinyx_memory_runtime");
 
   const first = await runner.run(migrations);
