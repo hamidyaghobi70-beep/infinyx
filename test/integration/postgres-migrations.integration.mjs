@@ -44,10 +44,10 @@ try {
   const failedPreflight = await pool.query(`
     SELECT
       to_regclass('infinyx_memory.memory_entries') AS memory_table,
-      EXISTS (SELECT 1 FROM infinyx_meta.schema_migrations) AS has_ledger_rows
+      to_regclass('infinyx_meta.schema_migrations') AS migration_ledger
   `);
   assert.equal(failedPreflight.rows[0].memory_table, null, "unsafe pre-existing role must roll back schema creation");
-  assert.equal(failedPreflight.rows[0].has_ledger_rows, false, "unsafe pre-existing role must not record migrations");
+  assert.equal(failedPreflight.rows[0].migration_ledger, null, "unsafe pre-existing role must roll back migration ledger creation");
   await pool.query("DROP ROLE infinyx_memory_runtime");
 
   const first = await runner.run(migrations);
