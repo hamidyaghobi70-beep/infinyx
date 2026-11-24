@@ -130,16 +130,8 @@ export class GuardedMemoryPort implements MemoryPort {
     } catch {
       throw new TypeError("GuardedMemoryPort dependencies must be readable values.");
     }
-    if (!hasMethods(store, ["read", "write", "delete"])) {
-      throw new TypeError("GuardedMemoryPort requires a MemoryPort store.");
-    }
-    if (!hasMethods(policy, ["evaluate"])) {
-      throw new TypeError("GuardedMemoryPort requires a PolicyEngine.");
-    }
-    if (!hasMethods(audit, ["publishDecision", "publishFailure"])) {
-      throw new TypeError("GuardedMemoryPort requires a dedicated MemoryAuditPort.");
-    }
-
+    // Method capture below is also the validation step; never probe a getter
+    // once and then read it again for use.
     const maxValueBytes = options.maxValueBytes ?? DEFAULT_MAX_MEMORY_VALUE_BYTES;
     if (!Number.isSafeInteger(maxValueBytes) || maxValueBytes <= 0) {
       throw new TypeError("maxValueBytes must be a positive safe integer.");
@@ -417,12 +409,6 @@ function captureMethods<T extends object>(value: object, names: readonly string[
     captured[name] = method.bind(value);
   }
   return Object.freeze(captured) as T;
-}
-
-function hasMethods(value: unknown, names: readonly string[]): boolean {
-  if (!value || typeof value !== "object") return false;
-  const record = value as Record<string, unknown>;
-  return names.every((name) => typeof record[name] === "function");
 }
 
 function isValidSegment(value: unknown, maxLength: number): value is string {
