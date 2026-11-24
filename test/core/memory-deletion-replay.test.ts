@@ -60,6 +60,46 @@ describe("MemoryDeletionCoordinator", () => {
     expect(Reflect.ownKeys(coordinator)).toEqual([]);
   });
 
+  it("snapshots accessor-backed deletion addresses before validation and use", async () => {
+    const store = new FakeStore();
+    const ledger = new FakeLedger();
+    const target = { namespace: "tenant-a", key: "stable" };
+    await store.write(target, "secret");
+    let namespaceReads = 0;
+    let keyReads = 0;
+    const address = {
+      get namespace() { namespaceReads += 1; return namespaceReads === 1 ? "tenant-a" : "attacker"; },
+      get key() { keyReads += 1; return keyReads === 1 ? "stable" : "other"; }
+    } as MemoryAddress;
+    const coordinator = new MemoryDeletionCoordinator(store, ledger);
+    await coordinator.delete(address);
+    expect(namespaceReads).toBe(1);
+    expect(keyReads).toBe(1);
+    expect(ledger.entries[0]).toMatchObject({ namespace: "tenant-a", key: "stable" });
+    expect(await store.read(target)).toBeNull();
+    expect(await store.read({ namespace: "attacker", key: "other" })).toBeNull();
+  });
+
+  it("snapshots every ledger tombstone field before applying the page", async () => {
+    const store = new FakeStore();
+    let namespaceReads = 0;
+    const tombstone = {
+      id: "cursor-1",
+      get namespace() { namespaceReads += 1; return namespaceReads === 1 ? "tenant-a" : "attacker"; },
+      key: "protected",
+      deletedAt: "2026-11-23T12:00:00.000Z",
+      reason: "user_request" as const
+    } as MemoryDeletionTombstone;
+    const ledger: MemoryDeletionLedgerPort = {
+      append: vi.fn(async () => "cursor-1"),
+      listAfter: vi.fn(async () => [tombstone])
+    };
+    const coordinator = new MemoryDeletionCoordinator(store, ledger);
+    await coordinator.replayAfterRestore();
+    expect(namespaceReads).toBe(1);
+    expect(store.deleted).toEqual([{ namespace: "tenant-a", key: "protected" }]);
+  });
+
   it("persists an external tombstone before deleting live memory", async () => {
     const store = new FakeStore();
     const ledger = new FakeLedger();
