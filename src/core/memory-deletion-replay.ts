@@ -99,12 +99,25 @@ export class MemoryDeletionCoordinator implements MemoryPort {
     const seenIds = new Set<string>();
     for (;;) {
       const entries = await this.#ledger.listAfter(cursor, this.#batchSize);
-      if (entries.length === 0) break;
-      if (entries.length > this.#batchSize) {
+      if (!Array.isArray(entries)) {
+        throw new Error("Deletion ledger returned a malformed page.");
+      }
+      const pageLength = entries.length;
+      if (pageLength === 0) break;
+      if (!Number.isSafeInteger(pageLength) || pageLength < 0 || pageLength > this.#batchSize) {
         throw new Error("Deletion ledger exceeded the requested page size.");
       }
       const pageIds = new Set<string>();
-      const page = entries.map(snapshotTombstone);
+      const page: MemoryDeletionTombstone[] = [];
+      for (let index = 0; index < pageLength; index += 1) {
+        let entry: MemoryDeletionTombstone;
+        try {
+          entry = snapshotTombstone(entries[index]!);
+        } catch {
+          throw new Error("Deletion ledger returned a malformed tombstone.");
+        }
+        page.push(entry);
+      }
       for (const entry of page) {
         // Cursors are opaque: never compare them lexicographically or numerically.
         // Enforce uniqueness across the entire replay, not just within one page.
@@ -122,7 +135,7 @@ export class MemoryDeletionCoordinator implements MemoryPort {
       for (const id of pageIds) seenIds.add(id);
       cursor = page[page.length - 1]!.id;
       batches += 1;
-      if (entries.length < this.#batchSize) break;
+      if (pageLength < this.#batchSize) break;
     }
     return Object.freeze({ recorded: cursor ?? "", replayed, batches });
   }
