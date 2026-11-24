@@ -145,8 +145,47 @@ describe("PostgresEncryptedMemoryStore", () => {
     const store = new PostgresEncryptedMemoryStore(db, new MemoryValueCipher(keys()));
     expect(await store.read({ namespace: "tenant-a/n", key: "k" })).toBeNull();
     expect(statements.some((sql) =>
-      sql.startsWith("DELETE") && sql.includes("AND expires_at = $4")
+      sql.startsWith("DELETE") && sql.includes("AND expires_at = $4 AND envelope = $5::jsonb")
     )).toBe(true);
+  });
+
+  it("preserves a concurrent rewrite when the expiry timestamp is unchanged", async () => {
+    const sameExpiry = new Date(Date.now() - 60_000);
+    const context = { tenantId: "tenant-a", namespace: "tenant-a/n", key: "k" };
+    const cipher = new MemoryValueCipher(keys());
+    const replacement = await cipher.encrypt(
+      '{"classification":"internal","value":"concurrent-rewrite"}',
+      context
+    );
+    let selectCount = 0;
+    let deleteValues: readonly unknown[] | undefined;
+    const db: SqlExecutor = {
+      query: vi.fn(async (sql: string, values: readonly unknown[] = []) => {
+        if (sql.startsWith("SELECT")) {
+          selectCount += 1;
+          if (selectCount === 1) {
+            return { rows: [{ envelope: { stale: true }, expires_at: sameExpiry }] };
+          }
+          return { rows: [{ envelope: { ...replacement, schemaVersion: 1,
+            createdAt: sameExpiry.toISOString(), updatedAt: sameExpiry.toISOString(),
+            expiresAt: sameExpiry.toISOString(), classification: "internal" },
+            expires_at: new Date(Date.now() + 60_000) }] };
+        }
+        if (sql.startsWith("DELETE")) {
+          deleteValues = values;
+          // A concurrent update changed the envelope but retained the same expiry.
+          return { rows: [], rowCount: 0 };
+        }
+        return { rows: [], rowCount: 0 };
+      })
+    };
+    const store = new PostgresEncryptedMemoryStore(db, cipher);
+    await expect(store.read({ namespace: "tenant-a/n", key: "k" }))
+      .resolves.toBe('{"classification":"internal","value":"concurrent-rewrite"}');
+    expect(deleteValues?.[3]).toEqual(sameExpiry);
+    expect(JSON.parse(String(deleteValues?.[4]))).toEqual({ stale: true });
+    expect(db.query).toHaveBeenNthCalledWith(2,
+      expect.stringContaining("AND expires_at = $4 AND envelope = $5::jsonb"), deleteValues);
   });
 
   it("returns a concurrently refreshed record after the conditional expiry delete loses its race", async () => {
