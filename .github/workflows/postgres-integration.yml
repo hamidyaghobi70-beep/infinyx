@@ -43,6 +43,10 @@ jobs:
       - name: Build migration runner
         run: npm run build
       - name: Install isolated integration-test driver
-        run: npm install --no-save --package-lock=false pg@8.16.3
+        run: |
+          driver_dir="$RUNNER_TEMP/stage4-pg-driver"
+          mkdir -p "$driver_dir"
+          npm install --prefix "$driver_dir" --ignore-scripts --no-audit --no-fund pg@8.16.3
+          ln -s "$driver_dir/node_modules/pg" node_modules/pg
       - name: Run real PostgreSQL integration checks
         run: node test/integration/postgres-migrations.integration.mjs
