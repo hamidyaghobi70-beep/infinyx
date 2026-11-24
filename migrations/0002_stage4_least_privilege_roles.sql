@@ -17,19 +17,27 @@ END
 $stage4_create_roles$;
 
 -- Existing same-name roles are not trusted merely because they already exist.
--- Fail closed rather than silently retaining LOGIN or elevated cluster privileges.
+-- Fail closed on login/elevated attributes and inherited role memberships.
 DO $stage4_validate_roles$
 DECLARE
   unsafe_roles text;
 BEGIN
-  SELECT string_agg(rolname, ', ' ORDER BY rolname)
+  SELECT string_agg(r.rolname, ', ' ORDER BY r.rolname)
     INTO unsafe_roles
-  FROM pg_roles
-  WHERE rolname IN ('infinyx_memory_runtime', 'infinyx_audit_writer', 'infinyx_audit_reader')
-    AND (rolcanlogin OR rolsuper OR rolcreatedb OR rolcreaterole OR rolreplication OR rolbypassrls);
+  FROM pg_roles AS r
+  WHERE r.rolname IN ('infinyx_memory_runtime', 'infinyx_audit_writer', 'infinyx_audit_reader')
+    AND (
+      r.rolcanlogin OR r.rolsuper OR r.rolcreatedb OR r.rolcreaterole
+      OR r.rolreplication OR r.rolbypassrls
+      OR EXISTS (
+        SELECT 1
+        FROM pg_auth_members AS membership
+        WHERE membership.member = r.oid
+      )
+    );
 
   IF unsafe_roles IS NOT NULL THEN
-    RAISE EXCEPTION 'Stage 4 roles have unsafe attributes; refusing grants: %', unsafe_roles;
+    RAISE EXCEPTION 'Stage 4 roles have unsafe attributes or memberships; refusing grants: %', unsafe_roles;
   END IF;
 END
 $stage4_validate_roles$;
