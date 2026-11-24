@@ -32,6 +32,10 @@ export function createAuthenticatedMemorySession(
   if (!options || typeof options !== "object" || !isAuthenticatedPrincipal(options.principal)) {
     throw new TypeError("A verifier-issued authenticated principal is required.");
   }
+  if (!Number.isFinite(options.principal.expiresAt) ||
+      Date.now() / 1000 >= options.principal.expiresAt) {
+    throw new TypeError("An unexpired authenticated principal is required.");
+  }
   const scope = createPrincipalMemoryScope(options.principal, options.moduleId);
   const guardedOptions: GuardedMemoryPortOptions = {
     store: options.store,
