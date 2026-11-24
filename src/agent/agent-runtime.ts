@@ -271,7 +271,7 @@ export class AgentRuntime {
         resolveTask();
         if (record.status === "running") {
           record.status = "error";
-          record.reason = error instanceof Error ? error.message : "Model provider failed.";
+          record.reason = "Model provider failed.";
           return { status: "error", taskId, code: "MODEL_PROVIDER_ERROR" };
         }
         return record.status === "cancelled"
