@@ -104,6 +104,40 @@ describe("PostgresEncryptedMemoryStore", () => {
     expect(db.query).not.toHaveBeenCalled();
   });
 
+  it("snapshots an accessor-backed address once for the full write", async () => {
+    const db: SqlExecutor = { query: vi.fn(async () => ({ rows: [], rowCount: 1 })) };
+    const store = new PostgresEncryptedMemoryStore(db, new MemoryValueCipher(keys()));
+    let namespaceReads = 0;
+    let keyReads = 0;
+    const address = {
+      get namespace() { namespaceReads += 1; return namespaceReads === 1 ? "tenant-a/notes" : "tenant-b/other"; },
+      get key() { keyReads += 1; return keyReads === 1 ? "stable-key" : "attacker-key"; }
+    } as MemoryAddress;
+    await store.write(address, '{"classification":"internal","value":"safe"}');
+    expect(namespaceReads).toBe(1);
+    expect(keyReads).toBe(1);
+    const values = vi.mocked(db.query).mock.calls[0]?.[1] as readonly unknown[];
+    expect(values.slice(0, 3)).toEqual(["tenant-a", "tenant-a/notes", "stable-key"]);
+  });
+
+  it("snapshots an accessor-backed address once for deletion", async () => {
+    const db: SqlExecutor = { query: vi.fn(async () => ({ rows: [], rowCount: 1 })) };
+    const store = new PostgresEncryptedMemoryStore(db, new MemoryValueCipher(keys()));
+    let namespaceReads = 0;
+    let keyReads = 0;
+    const address = {
+      get namespace() { namespaceReads += 1; return namespaceReads === 1 ? "tenant-a/notes" : "tenant-b/other"; },
+      get key() { keyReads += 1; return keyReads === 1 ? "stable-key" : "attacker-key"; }
+    } as MemoryAddress;
+    await store.delete(address);
+    expect(namespaceReads).toBe(1);
+    expect(keyReads).toBe(1);
+    expect(db.query).toHaveBeenCalledWith(
+      expect.stringContaining("WHERE tenant_id = $1"),
+      ["tenant-a", "tenant-a/notes", "stable-key"]
+    );
+  });
+
   it("writes only an authenticated ciphertext envelope and reads it back", async () => {
     const cipher = new MemoryValueCipher(keys());
     let saved: Record<string, unknown> | undefined;
