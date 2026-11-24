@@ -147,6 +147,10 @@ class ShutdownController {
 export async function startServerRuntime(
   options: ServerRuntimeOptions
 ): Promise<ServerRuntime> {
+  const drainTimeoutMs = options.drainTimeoutMs ?? 10_000;
+  if (!Number.isSafeInteger(drainTimeoutMs) || drainTimeoutMs < 1 || drainTimeoutMs > 2_147_483_647) {
+    throw new RangeError("drainTimeoutMs must be an integer from 1 to 2147483647.");
+  }
   const shutdown = new ShutdownController(options);
   // Install handlers and publish the startup promise before any startup hook runs.
   shutdown.install();
