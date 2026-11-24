@@ -96,6 +96,40 @@ describe("ModuleRegistry", () => {
       id: "bad-hook", version: "1.0.0", initialize: 42 as unknown as () => void
     })).toThrowError(CoreError);
   });
+  it("snapshots dependency data descriptors without invoking accessors", () => {
+    const registry = new ModuleRegistry();
+    let getterCalls = 0;
+    const dependencies: string[] = [];
+    Object.defineProperty(dependencies, "0", {
+      enumerable: true,
+      configurable: true,
+      get: () => { getterCalls += 1; return "platform"; }
+    });
+    dependencies.length = 1;
+
+    expect(() => registry.register({
+      id: "api", version: "1.0.0", dependencies
+    })).toThrowError(CoreError);
+    expect(getterCalls).toBe(0);
+    expect(registry.list()).toHaveLength(0);
+  });
+
+  it("rejects sparse dependency arrays and snapshots later mutations", () => {
+    const sparseRegistry = new ModuleRegistry();
+    const sparse = new Array<string>(1);
+    expect(() => sparseRegistry.register({
+      id: "sparse-api", version: "1.0.0", dependencies: sparse
+    })).toThrowError(CoreError);
+
+    const registry = new ModuleRegistry();
+    const dependencies = ["platform"];
+    registry.register({ id: "api", version: "1.0.0", dependencies });
+    dependencies[0] = "missing";
+    registry.register({ id: "platform", version: "1.0.0" });
+
+    expect(registry.resolveStartOrder().map((module) => module.id)).toEqual(["platform", "api"]);
+  });
+
 });
 
 

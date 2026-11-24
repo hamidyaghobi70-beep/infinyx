@@ -183,8 +183,8 @@ export class CoreEngine {
         "Modules can only be registered before initialization."
       );
     }
-    this.moduleRegistry.register(module);
-    this.moduleStates.set(module.id, "registered");
+    const moduleId = this.moduleRegistry.register(module);
+    this.moduleStates.set(moduleId, "registered");
   }
 
   getModuleStates(): ReadonlyMap<string, ModuleLifecycleState> {

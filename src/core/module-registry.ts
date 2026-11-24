@@ -2,6 +2,7 @@ import type { CoreModule } from "./contracts.js";
 import { CoreError } from "./core-error.js";
 
 const MAX_LIFECYCLE_PROTOTYPE_DEPTH = 64;
+const MAX_MODULE_DEPENDENCIES = 256;
 
 function readLifecycleHook(
   target: object,
@@ -30,27 +31,69 @@ function readLifecycleHook(
   }
 }
 
+/** Snapshot dependency array data descriptors once; never execute dependency getters. */
+function snapshotDependencies(value: unknown): string[] {
+  if (value === undefined) return [];
+  if (!Array.isArray(value)) {
+    throw new CoreError("INVALID_MODULE", "Module dependencies must be valid module identifiers.");
+  }
+
+  let descriptors: Record<string, PropertyDescriptor>;
+  try {
+    descriptors = Object.getOwnPropertyDescriptors(value) as Record<string, PropertyDescriptor>;
+  } catch {
+    throw new CoreError("INVALID_MODULE", "Module dependencies must be readable stable data values.");
+  }
+
+  const lengthDescriptor = descriptors.length;
+  const length = lengthDescriptor?.value;
+  if (!lengthDescriptor || !("value" in lengthDescriptor) ||
+      !Number.isSafeInteger(length) || length < 0 || length > MAX_MODULE_DEPENDENCIES) {
+    throw new CoreError("INVALID_MODULE", "Module dependency count is invalid.");
+  }
+
+  const keys = Reflect.ownKeys(descriptors);
+  if (keys.length !== length + 1 ||
+      keys.some((key) => key !== "length" &&
+        (typeof key !== "string" || !/^(0|[1-9][0-9]*)$/.test(key) || Number(key) >= length))) {
+    throw new CoreError("INVALID_MODULE", "Module dependency collections cannot contain extra properties.");
+  }
+
+  const dependencies: string[] = [];
+  for (let index = 0; index < length; index += 1) {
+    const descriptor = descriptors[String(index)];
+    if (!descriptor || !("value" in descriptor) || !descriptor.enumerable ||
+        typeof descriptor.value !== "string" || !/^[a-z][a-z0-9-]*$/.test(descriptor.value)) {
+      throw new CoreError("INVALID_MODULE", "Module dependencies must be dense data properties with valid identifiers.");
+    }
+    dependencies.push(descriptor.value);
+  }
+  return dependencies;
+}
+
 export class ModuleRegistry {
   private readonly modules = new Map<string, CoreModule>();
 
-  register(module: CoreModule): void {
+  register(module: CoreModule): string {
     let id: unknown;
     let version: unknown;
-    let rawDependencies: unknown;
+    let dependencies: string[];
     let initialize: unknown;
     let start: unknown;
     let stop: unknown;
     try {
       if (!module || typeof module !== "object") throw new TypeError("Invalid module.");
-      // Read caller-controlled properties once. Re-reading accessors after validation
-      // would permit metadata and lifecycle hooks to change between check and storage.
+      // Read caller-controlled metadata once. Dependencies are copied from own data
+      // descriptors so accessors, sparse arrays, and later mutation cannot change
+      // the registry's validated dependency graph.
       id = module.id;
       version = module.version;
-      rawDependencies = module.dependencies;
+      dependencies = snapshotDependencies(module.dependencies);
       initialize = readLifecycleHook(module, "initialize");
       start = readLifecycleHook(module, "start");
       stop = readLifecycleHook(module, "stop");
-    } catch {
+    } catch (error) {
+      if (error instanceof CoreError) throw error;
       throw new CoreError("INVALID_MODULE", "Module metadata and lifecycle hooks must be readable.");
     }
 
@@ -64,18 +107,11 @@ export class ModuleRegistry {
     if ([initialize, start, stop].some((hook) => hook !== undefined && typeof hook !== "function")) {
       throw new CoreError("INVALID_MODULE", "Module lifecycle hooks must be functions when provided.");
     }
-    if (rawDependencies !== undefined &&
-        (!Array.isArray(rawDependencies) ||
-         rawDependencies.some((dependency) => typeof dependency !== "string" ||
-           !/^[a-z][a-z0-9-]*$/.test(dependency)))) {
-      throw new CoreError("INVALID_MODULE", "Module dependencies must be valid module identifiers.");
-    }
 
     if (this.modules.has(id)) {
       throw new CoreError("DUPLICATE_MODULE", 'Module "' + id + '" is already registered.');
     }
 
-    const dependencies = [...(rawDependencies ?? [])] as string[];
     if (dependencies.includes(id)) {
       throw new CoreError("MODULE_DEPENDENCY_CYCLE", 'Module "' + id + '" cannot depend on itself.');
     }
@@ -92,6 +128,7 @@ export class ModuleRegistry {
     };
 
     this.modules.set(id, Object.freeze(registered));
+    return id;
   }
 
   get(id: string): CoreModule | undefined {
