@@ -5,35 +5,64 @@ export class ModuleRegistry {
   private readonly modules = new Map<string, CoreModule>();
 
   register(module: CoreModule): void {
-    if (!/^[a-z][a-z0-9-]*$/.test(module.id) || !module.version.trim()) {
+    let id: unknown;
+    let version: unknown;
+    let rawDependencies: unknown;
+    let initialize: unknown;
+    let start: unknown;
+    let stop: unknown;
+    try {
+      if (!module || typeof module !== "object") throw new TypeError("Invalid module.");
+      // Read caller-controlled properties once. Re-reading accessors after validation
+      // would permit metadata and lifecycle hooks to change between check and storage.
+      id = module.id;
+      version = module.version;
+      rawDependencies = module.dependencies;
+      initialize = module.initialize;
+      start = module.start;
+      stop = module.stop;
+    } catch {
+      throw new CoreError("INVALID_MODULE", "Module metadata and lifecycle hooks must be readable.");
+    }
+
+    if (typeof id !== "string" || !/^[a-z][a-z0-9-]*$/.test(id) ||
+        typeof version !== "string" || !version.trim()) {
       throw new CoreError(
         "INVALID_MODULE",
         "A module requires a lowercase kebab-case id and a non-empty version."
       );
     }
-
-    if (this.modules.has(module.id)) {
-      throw new CoreError("DUPLICATE_MODULE", 'Module "' + module.id + '" is already registered.');
+    if ([initialize, start, stop].some((hook) => hook !== undefined && typeof hook !== "function")) {
+      throw new CoreError("INVALID_MODULE", "Module lifecycle hooks must be functions when provided.");
+    }
+    if (rawDependencies !== undefined &&
+        (!Array.isArray(rawDependencies) ||
+         rawDependencies.some((dependency) => typeof dependency !== "string" ||
+           !/^[a-z][a-z0-9-]*$/.test(dependency)))) {
+      throw new CoreError("INVALID_MODULE", "Module dependencies must be valid module identifiers.");
     }
 
-    const dependencies = [...(module.dependencies ?? [])];
-    if (dependencies.includes(module.id)) {
-      throw new CoreError("MODULE_DEPENDENCY_CYCLE", 'Module "' + module.id + '" cannot depend on itself.');
+    if (this.modules.has(id)) {
+      throw new CoreError("DUPLICATE_MODULE", 'Module "' + id + '" is already registered.');
+    }
+
+    const dependencies = [...(rawDependencies ?? [])] as string[];
+    if (dependencies.includes(id)) {
+      throw new CoreError("MODULE_DEPENDENCY_CYCLE", 'Module "' + id + '" cannot depend on itself.');
     }
 
     // Snapshot registry metadata while retaining the source instance as the
     // receiver for prototype methods on class-based CoreModule implementations.
-    // Object spread alone drops prototype lifecycle hooks and their receiver.
     const registered: CoreModule = {
-      id: module.id,
-      version: module.version,
+      id,
+      version,
       dependencies: Object.freeze(dependencies),
-      ...(module.initialize ? { initialize: module.initialize.bind(module) } : {}),
-      ...(module.start ? { start: module.start.bind(module) } : {}),
-      ...(module.stop ? { stop: module.stop.bind(module) } : {})
+      ...(typeof initialize === "function" ? { initialize: initialize.bind(module) } : {}),
+      ...(typeof start === "function" ? { start: start.bind(module) } : {}),
+      ...(typeof stop === "function" ? { stop: stop.bind(module) } : {})
     };
 
-    this.modules.set(module.id, Object.freeze(registered));
+    this.modules.set(id, Object.freeze(registered));
   }
 
   get(id: string): CoreModule | undefined {
