@@ -70,6 +70,9 @@ export class MemoryDeletionCoordinator implements MemoryPort {
     reason: MemoryDeletionTombstone["reason"] = "user_request"
   ): Promise<void> {
     validateAddress(address);
+    if (!["user_request", "retention_expiry", "policy"].includes(reason)) {
+      throw new TypeError("A supported memory deletion reason is required.");
+    }
     const tombstone = Object.freeze({
       namespace: address.namespace,
       key: address.key,
