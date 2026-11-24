@@ -160,7 +160,7 @@ class ShutdownController {
           { timeoutMs },
           "HTTP server drain timed out; closing remaining connections"
         );
-        server.closeAllConnections();
+        server.closeAllConnections?.();
         finish();
       }, timeoutMs);
 
