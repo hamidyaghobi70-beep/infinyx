@@ -83,6 +83,18 @@ try {
   await pool.query("DROP SCHEMA infinyx_memory CASCADE");
   await pool.query("DROP ROLE infinyx_memory_runtime");
 
+  // Existing same-name roles may carry stale direct ACLs even when they are NOLOGIN,
+  // unowned, and have no inherited role memberships. The migration must normalize them.
+  await pool.query(migrations[0].sql);
+  await pool.query("CREATE ROLE infinyx_memory_runtime NOLOGIN");
+  await pool.query("CREATE ROLE infinyx_audit_writer NOLOGIN");
+  await pool.query("CREATE ROLE infinyx_audit_reader NOLOGIN");
+  await pool.query("GRANT ALL ON SCHEMA infinyx_memory TO infinyx_memory_runtime");
+  await pool.query("GRANT ALL ON SCHEMA infinyx_audit TO infinyx_audit_writer, infinyx_audit_reader");
+  await pool.query("GRANT ALL ON infinyx_memory.memory_entries TO infinyx_memory_runtime");
+  await pool.query("GRANT ALL ON infinyx_audit.audit_chain_state TO infinyx_audit_writer");
+  await pool.query("GRANT ALL ON infinyx_audit.memory_access_events TO infinyx_audit_writer, infinyx_audit_reader");
+
   const first = await runner.run(migrations);
   assert.deepEqual(first.applied, ["0001_stage4_memory_audit", "0002_stage4_least_privilege_roles"]);
   assert.deepEqual(first.skipped, []);
