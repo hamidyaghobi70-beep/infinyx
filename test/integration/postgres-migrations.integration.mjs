@@ -28,7 +28,7 @@ try {
   const migrations = await Promise.all([
     "0001_stage4_memory_audit.sql",
     "0002_stage4_least_privilege_roles.sql"
-  ].map(async (name, index) => ({
+  ].map(async (name) => ({
     id: name.slice(0, 4) + "_" + name.slice(5, -4),
     sql: await readFile(resolve("migrations", name), "utf8")
   })));
@@ -100,10 +100,22 @@ try {
       EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'infinyx_audit_reader') AS audit_reader_role,
       (SELECT bool_and(NOT rolcanlogin AND NOT rolsuper AND NOT rolcreatedb AND NOT rolcreaterole AND NOT rolreplication AND NOT rolbypassrls)
        FROM pg_roles WHERE rolname IN ('infinyx_memory_runtime', 'infinyx_audit_writer', 'infinyx_audit_reader')) AS stage4_roles_are_restricted,
+      has_schema_privilege('infinyx_memory_runtime', 'infinyx_memory', 'USAGE') AS memory_schema_usage,
+      has_schema_privilege('infinyx_memory_runtime', 'infinyx_memory', 'CREATE') AS memory_schema_create,
+      has_schema_privilege('infinyx_audit_writer', 'infinyx_audit', 'CREATE') AS audit_writer_schema_create,
       has_table_privilege('infinyx_memory_runtime', 'infinyx_memory.memory_entries', 'SELECT') AS memory_select,
       has_table_privilege('infinyx_audit_writer', 'infinyx_audit.memory_access_events', 'INSERT') AS audit_insert,
+      has_table_privilege('infinyx_audit_writer', 'infinyx_audit.memory_access_events', 'SELECT') AS audit_writer_select,
       has_table_privilege('infinyx_audit_writer', 'infinyx_audit.memory_access_events', 'UPDATE') AS audit_update,
-      has_table_privilege('infinyx_audit_writer', 'infinyx_audit.memory_access_events', 'DELETE') AS audit_delete
+      has_table_privilege('infinyx_audit_writer', 'infinyx_audit.memory_access_events', 'DELETE') AS audit_delete,
+      has_table_privilege('infinyx_audit_reader', 'infinyx_audit.memory_access_events', 'SELECT') AS audit_reader_select,
+      has_table_privilege('infinyx_audit_reader', 'infinyx_audit.memory_access_events', 'INSERT') AS audit_reader_insert,
+      has_table_privilege('infinyx_audit_reader', 'infinyx_audit.memory_access_events', 'UPDATE') AS audit_reader_update,
+      has_table_privilege('infinyx_audit_reader', 'infinyx_audit.memory_access_events', 'DELETE') AS audit_reader_delete,
+      has_table_privilege('infinyx_audit_writer', 'infinyx_audit.audit_chain_state', 'SELECT') AS chain_state_select,
+      has_table_privilege('infinyx_audit_writer', 'infinyx_audit.audit_chain_state', 'UPDATE') AS chain_state_update,
+      has_table_privilege('infinyx_audit_writer', 'infinyx_audit.audit_chain_state', 'INSERT') AS chain_state_insert,
+      has_table_privilege('infinyx_audit_writer', 'infinyx_audit.audit_chain_state', 'DELETE') AS chain_state_delete
   `);
   assert.deepEqual(schema.rows[0], {
     memory_table: true,
@@ -112,10 +124,22 @@ try {
     audit_writer_role: true,
     audit_reader_role: true,
     stage4_roles_are_restricted: true,
+    memory_schema_usage: true,
+    memory_schema_create: false,
+    audit_writer_schema_create: false,
     memory_select: true,
     audit_insert: true,
+    audit_writer_select: false,
     audit_update: false,
-    audit_delete: false
+    audit_delete: false,
+    audit_reader_select: true,
+    audit_reader_insert: false,
+    audit_reader_update: false,
+    audit_reader_delete: false,
+    chain_state_select: true,
+    chain_state_update: true,
+    chain_state_insert: false,
+    chain_state_delete: false
   });
 
   await assert.rejects(
