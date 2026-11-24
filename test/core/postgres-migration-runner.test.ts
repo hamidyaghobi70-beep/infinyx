@@ -9,6 +9,7 @@ class FakePool implements MigrationPool {
   readonly applied = new Map<string, string>();
   readonly statements: string[] = [];
   failOnSql: string | null = null;
+  ledgerInsertRowCount = 1;
 
   async connect(): Promise<MigrationConnection> {
     const staged = new Map(this.applied);
@@ -28,8 +29,8 @@ class FakePool implements MigrationPool {
           return { rows: (checksum ? [{ checksum }] : []) as Row[] };
         }
         if (sql.startsWith("INSERT INTO infinyx_meta.schema_migrations")) {
-          staged.set(String(values[0]), String(values[1]));
-          return { rows: [] as Row[], rowCount: 1 };
+          if (this.ledgerInsertRowCount === 1) staged.set(String(values[0]), String(values[1]));
+          return { rows: [] as Row[], rowCount: this.ledgerInsertRowCount };
         }
         if (sql === this.failOnSql) throw new Error("migration SQL failed");
         return { rows: [] as Row[], rowCount: 0 };
@@ -84,6 +85,18 @@ describe("PostgresMigrationRunner", () => {
     ])).rejects.toThrow("migration SQL failed");
     expect(pool.applied.size).toBe(0);
     expect(pool.statements).toContain("ROLLBACK");
+  });
+
+  it("rolls back when the migration ledger insert affects no row", async () => {
+    const pool = new FakePool();
+    pool.ledgerInsertRowCount = 0;
+    const runner = new PostgresMigrationRunner(pool);
+    await expect(runner.run([
+      { id: "0001_missing_ledger", sql: "CREATE TABLE t (id int);" }
+    ])).rejects.toThrow("Migration ledger insert did not affect exactly one row.");
+    expect(pool.applied.has("0001_missing_ledger")).toBe(false);
+    expect(pool.statements).toContain("ROLLBACK");
+    expect(pool.statements).not.toContain("COMMIT");
   });
 
   it("rejects duplicate and malformed identifiers before opening a connection", async () => {
