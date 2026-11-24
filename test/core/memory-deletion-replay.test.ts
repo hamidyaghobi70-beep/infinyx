@@ -43,8 +43,8 @@ describe("MemoryDeletionCoordinator", () => {
     store.delete = vi.fn(async () => undefined);
     ledger.append = vi.fn(async () => "forged-cursor");
     ledger.listAfter = vi.fn(async () => []);
-    (coordinator as unknown as Record<string, unknown>).store = new FakeStore();
-    (coordinator as unknown as Record<string, unknown>).ledger = new FakeLedger();
+    // The coordinator is frozen; mutate only the injected capabilities to
+    // verify that its constructor captured the original methods.
 
     await coordinator.delete(address, "user_request");
     expect(originalAppend).toHaveBeenCalledTimes(1);
