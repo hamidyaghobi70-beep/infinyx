@@ -45,14 +45,22 @@ export function createAuthenticatedMemoryGateway(
   }
 
   return (request: Request, response: Response, next) => {
-    const principal = getAuthenticatedPrincipal(request);
+    let principal;
+    try {
+      principal = getAuthenticatedPrincipal(request);
+    } catch {
+      // A malformed or unavailable upstream authentication context must fail closed.
+      response.status(503).json({ error: "memory_unavailable" });
+      return;
+    }
     if (!principal) {
       response.status(401).json({ error: "unauthorized" });
       return;
     }
 
+    let session: GuardedMemoryPort;
     try {
-      const session = createAuthenticatedMemorySession({
+      session = createAuthenticatedMemorySession({
         principal,
         moduleId,
         store,
@@ -62,13 +70,15 @@ export function createAuthenticatedMemoryGateway(
       if (!(session instanceof GuardedMemoryPort) || session.scopeModuleId !== moduleId) {
         throw new TypeError("Invalid request memory capability.");
       }
-      requestSessions.set(response, session);
-      next();
     } catch {
-      // Authentication/session composition failures never fall back to an
-      // unguarded store or expose verifier, policy, KMS, or database details.
+      // Session composition failures never fall back to raw storage or disclose internals.
       response.status(503).json({ error: "memory_unavailable" });
+      return;
     }
+
+    requestSessions.set(response, session);
+    // Keep downstream Express errors under Express's normal error-handling path.
+    next();
   };
 }
 
