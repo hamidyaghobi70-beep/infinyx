@@ -43,7 +43,12 @@ export class PostgresMemoryAuditPort implements MemoryAuditPort {
       );
       const current = state.rows[0];
       if (!current) throw new Error("Audit chain state is missing.");
-      const sequence = Number(current.sequence) + 1;
+      const previousSequence = Number(current.sequence);
+      if (!Number.isSafeInteger(previousSequence) || previousSequence < 0 ||
+          !/^[a-f0-9]{64}$/.test(current.head_hash)) {
+        throw new Error("Audit chain state is invalid.");
+      }
+      const sequence = previousSequence + 1;
       if (!Number.isSafeInteger(sequence)) throw new Error("Audit sequence exceeded safe integer range.");
       const occurredAt = new Date().toISOString();
       const record = {
@@ -66,7 +71,7 @@ export class PostgresMemoryAuditPort implements MemoryAuditPort {
       const entryHash = createHash("sha256")
         .update(current.head_hash + JSON.stringify(record), "utf8")
         .digest("hex");
-      await connection.query(
+      const inserted = await connection.query(
         `INSERT INTO infinyx_audit.memory_access_events
          (sequence, event_type, actor_id, tenant_id, module_id, operation, namespace, memory_key,
           decision, reason_code, error_name, occurred_at, previous_hash, entry_hash)
@@ -77,6 +82,9 @@ export class PostgresMemoryAuditPort implements MemoryAuditPort {
           occurredAt, current.head_hash, entryHash
         ]
       );
+      if (inserted.rowCount !== 1) {
+        throw new Error("Audit event insert did not affect exactly one row.");
+      }
       const headUpdate = await connection.query(
         "UPDATE infinyx_audit.audit_chain_state SET sequence = $1, head_hash = $2 WHERE singleton = true",
         [sequence, entryHash]
