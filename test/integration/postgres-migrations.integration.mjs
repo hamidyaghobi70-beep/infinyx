@@ -34,6 +34,22 @@ try {
   })));
 
   const runner = new PostgresMigrationRunner(migrationPool);
+
+  // A pre-existing LOGIN role must make the complete migration batch fail closed.
+  await pool.query("CREATE ROLE infinyx_memory_runtime LOGIN");
+  await assert.rejects(
+    runner.run(migrations),
+    /Stage 4 roles have unsafe attributes; refusing grants: infinyx_memory_runtime/
+  );
+  const failedPreflight = await pool.query(`
+    SELECT
+      to_regclass('infinyx_memory.memory_entries') AS memory_table,
+      EXISTS (SELECT 1 FROM infinyx_meta.schema_migrations) AS has_ledger_rows
+  `);
+  assert.equal(failedPreflight.rows[0].memory_table, null, "unsafe pre-existing role must roll back schema creation");
+  assert.equal(failedPreflight.rows[0].has_ledger_rows, false, "unsafe pre-existing role must not record migrations");
+  await pool.query("DROP ROLE infinyx_memory_runtime");
+
   const first = await runner.run(migrations);
   assert.deepEqual(first.applied, ["0001_stage4_memory_audit", "0002_stage4_least_privilege_roles"]);
   assert.deepEqual(first.skipped, []);
