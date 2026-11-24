@@ -14,7 +14,25 @@ BEGIN
     EXECUTE 'CREATE ROLE infinyx_audit_reader NOLOGIN';
   END IF;
 END
-$$;
+$;
+
+-- Existing same-name roles are not trusted merely because they already exist.
+-- Fail closed rather than silently retaining LOGIN or elevated cluster privileges.
+DO $
+DECLARE
+  unsafe_roles text;
+BEGIN
+  SELECT string_agg(rolname, ', ' ORDER BY rolname)
+    INTO unsafe_roles
+  FROM pg_roles
+  WHERE rolname IN ('infinyx_memory_runtime', 'infinyx_audit_writer', 'infinyx_audit_reader')
+    AND (rolcanlogin OR rolsuper OR rolcreatedb OR rolcreaterole OR rolreplication OR rolbypassrls);
+
+  IF unsafe_roles IS NOT NULL THEN
+    RAISE EXCEPTION 'Stage 4 roles have unsafe attributes; refusing grants: %', unsafe_roles;
+  END IF;
+END
+$;
 
 REVOKE ALL ON SCHEMA infinyx_memory FROM PUBLIC;
 REVOKE ALL ON SCHEMA infinyx_audit FROM PUBLIC;
