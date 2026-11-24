@@ -4,9 +4,12 @@ on:
   push:
     branches:
       - feature/core-engine-v1
+      - fix/core-engine-shutdown-v4
+      - fix/core-engine-shutdown-v5
   pull_request:
     branches:
       - foundation/repository-foundation
+      - feature/core-engine-v1
 
 permissions:
   contents: read

@@ -2,38 +2,77 @@ import type {
   CoreLifecycleState,
   CoreModule,
   EventBusPort,
+  EventHandler,
   MemoryPort,
   ModuleContext,
   ModuleLifecycleState,
-  PolicyEngine
+  PolicyEngine,
+  PolicyRequest,
+  PolicyDecision,
+  MemoryAddress
 } from "./contracts.js";
 import { DefaultDenyPolicyEngine } from "./default-policy-engine.js";
 import { InMemoryEventBus } from "./event-bus.js";
 import { CoreError } from "./core-error.js";
 import { ModuleRegistry } from "./module-registry.js";
+import { RollbackCoordinator } from "./rollback-coordinator.js";
+import { OperationRegistry } from "./operation-registry.js";
 
 export interface CoreEngineOptions {
   readonly events?: EventBusPort;
   readonly policy?: PolicyEngine;
   readonly memory?: MemoryPort;
+  readonly operationDrainTimeoutMs?: number;
 }
+
+export type CoreFailureReason = "drain_timeout" | "cleanup_error";
 
 export class CoreEngine {
   readonly events: EventBusPort;
   readonly policy: PolicyEngine;
 
   private readonly moduleRegistry = new ModuleRegistry();
+  private readonly operations = new OperationRegistry();
+  private readonly memory: MemoryPort | undefined;
   private lifecycle: CoreLifecycleState = "created";
+  private closingRequested = false;
+  private failure: CoreFailureReason | undefined;
+  private readonly rollbackCoordinator = new RollbackCoordinator();
   private readonly moduleStates = new Map<string, ModuleLifecycleState>();
   private initializedModules: CoreModule[] = [];
+  private readonly cleanupInFlight = new Map<string, Promise<void>>();
 
-  constructor(private readonly options: CoreEngineOptions = {}) {
-    this.events = options.events ?? new InMemoryEventBus();
-    this.policy = options.policy ?? new DefaultDenyPolicyEngine();
+  private readonly operationDrainTimeoutMs: number;
+
+  constructor(options: CoreEngineOptions = {}) {
+    this.operationDrainTimeoutMs = options.operationDrainTimeoutMs ?? 10_000;
+    this.events = this.wrapEventBus(options.events ?? new InMemoryEventBus());
+    this.policy = this.wrapPolicy(options.policy ?? new DefaultDenyPolicyEngine());
+    this.memory = options.memory ? this.wrapMemory(options.memory) : undefined;
   }
 
   get state(): CoreLifecycleState {
-    return this.lifecycle;
+    return this.closingRequested && !["stopped", "failed"].includes(this.lifecycle)
+      ? "closing"
+      : this.lifecycle;
+  }
+
+  get failureReason(): CoreFailureReason | undefined {
+    return this.failure;
+  }
+
+  get activeOperationCount(): number {
+    return this.operations.activeHandleCount;
+  }
+
+  get activePromiseCount(): number {
+    return this.operations.activePromiseCount;
+  }
+
+  /** Close independent admission immediately; valid in-flight parents may settle children. */
+  requestClose(): void {
+    this.closingRequested = true;
+    this.operations.closeAdmission();
   }
 
   getModules(): readonly CoreModule[] {
@@ -41,7 +80,7 @@ export class CoreEngine {
   }
 
   register(module: CoreModule): void {
-    if (this.lifecycle !== "created") {
+    if (this.closingRequested || this.lifecycle !== "created") {
       throw new CoreError(
         "INVALID_LIFECYCLE_TRANSITION",
         "Modules can only be registered before initialization."
@@ -61,11 +100,10 @@ export class CoreEngine {
 
     try {
       for (const module of this.moduleRegistry.resolveStartOrder()) {
+        if (this.closingRequested) break;
         this.moduleStates.set(module.id, "initializing");
-        // Track before invoking the hook so rollback also cleans up a module
-        // whose initialization failed after partially allocating resources.
         this.initializedModules.push(module);
-        await module.initialize?.(this.createContext(module.id));
+        await this.operations.run(() => module.initialize?.(this.createContext(module.id)));
         this.moduleStates.set(module.id, "initialized");
       }
       this.lifecycle = "initialized";
@@ -73,16 +111,25 @@ export class CoreEngine {
       const failedModule = [...this.moduleStates.entries()]
         .find(([, state]) => state === "initializing")?.[0];
       this.lifecycle = "failed";
-      const cleanupErrors = await this.cleanupInitializedModules(
-        failedModule ? new Set([failedModule]) : new Set()
-      );
+      let rollbackFailed = false;
+      let rollbackError: unknown;
+      this.requestClose();
+      try {
+        await this.drainOperations();
+        await this.rollbackCoordinator.run(() =>
+          this.performStartupRollback(failedModule ? new Set([failedModule]) : new Set())
+        );
+      } catch (cleanupError) {
+        rollbackFailed = true;
+        rollbackError = cleanupError;
+      }
       const failure = new CoreError(
         "MODULE_INITIALIZATION_FAILED",
         "Core Engine module initialization failed.",
         { cause: error }
       );
-      if (cleanupErrors.length) {
-        throw new AggregateError([failure, ...cleanupErrors], "Initialization and rollback failed.");
+      if (rollbackFailed) {
+        throw new AggregateError([failure, rollbackError], "Initialization and rollback failed.");
       }
       throw failure;
     }
@@ -94,8 +141,9 @@ export class CoreEngine {
 
     try {
       for (const module of this.moduleRegistry.resolveStartOrder()) {
+        if (this.closingRequested) break;
         this.moduleStates.set(module.id, "starting");
-        await module.start?.(this.createContext(module.id));
+        await this.operations.run(() => module.start?.(this.createContext(module.id)));
         this.moduleStates.set(module.id, "running");
       }
       this.lifecycle = "running";
@@ -103,37 +151,98 @@ export class CoreEngine {
       const failedModule = [...this.moduleStates.entries()]
         .find(([, state]) => state === "starting")?.[0];
       this.lifecycle = "failed";
-      const cleanupErrors = await this.cleanupInitializedModules(
-        failedModule ? new Set([failedModule]) : new Set()
-      );
+      let rollbackFailed = false;
+      let rollbackError: unknown;
+      this.requestClose();
+      try {
+        await this.drainOperations();
+        await this.rollbackCoordinator.run(() =>
+          this.performStartupRollback(failedModule ? new Set([failedModule]) : new Set())
+        );
+      } catch (cleanupError) {
+        rollbackFailed = true;
+        rollbackError = cleanupError;
+      }
       const failure = new CoreError(
         "MODULE_START_FAILED",
         "Core Engine module startup failed.",
         { cause: error }
       );
-      if (cleanupErrors.length) {
-        throw new AggregateError([failure, ...cleanupErrors], "Startup and rollback failed.");
+      if (rollbackFailed) {
+        throw new AggregateError([failure, rollbackError], "Startup and rollback failed.");
       }
       throw failure;
     }
   }
 
-  async stop(): Promise<void> {
-    if (this.lifecycle === "stopped") return;
-    if (this.lifecycle === "created") {
-      this.lifecycle = "stopped";
-      return;
-    }
-    if (!["initialized", "running", "failed"].includes(this.lifecycle)) {
-      throw new CoreError(
-        "INVALID_LIFECYCLE_TRANSITION",
-        'Cannot stop Core Engine while it is "' + this.lifecycle + '".'
-      );
-    }
+  stop(): Promise<void> {
+    return this.rollbackCoordinator.run(async () => {
+      if (this.lifecycle === "stopped") return;
+      this.requestClose();
+      if (this.lifecycle === "created") {
+        this.lifecycle = "stopped";
+        return;
+      }
+      if (!["initialized", "running", "failed"].includes(this.lifecycle)) {
+        throw new CoreError(
+          "INVALID_LIFECYCLE_TRANSITION",
+          'Cannot stop Core Engine while it is "' + this.lifecycle + '".'
+        );
+      }
 
-    this.lifecycle = "stopping";
+      this.lifecycle = "stopping";
+      try {
+        await this.drainOperations();
+      } catch (error) {
+        this.lifecycle = "failed";
+        if (error instanceof CoreError && error.code === "OPERATION_DRAIN_TIMEOUT") {
+          this.failure = "drain_timeout";
+        }
+        throw error;
+      }
+      await this.performStop();
+    });
+  }
+
+  private async drainOperations(): Promise<void> {
+    try {
+      await this.operations.drain(this.operationDrainTimeoutMs);
+    } catch (error) {
+      if (error instanceof CoreError && error.code === "OPERATION_DRAIN_TIMEOUT") {
+        this.failure = "drain_timeout";
+      }
+      throw error;
+    }
+    if (this.failure === "drain_timeout") this.failure = undefined;
+  }
+
+  private async performStartupRollback(
+    preserveFailureIds: ReadonlySet<string>
+  ): Promise<void> {
+    const errors = await this.cleanupInitializedModules(preserveFailureIds);
+    try {
+      await this.drainOperations();
+    } catch (error) {
+      this.failure = "drain_timeout";
+      throw error;
+    }
+    if (errors.length) {
+      this.failure = "cleanup_error";
+      throw new AggregateError(errors, "Startup rollback cleanup failed.");
+    }
+  }
+
+  private async performStop(): Promise<void> {
     const errors = await this.cleanupInitializedModules();
+    try {
+      await this.drainOperations();
+    } catch (error) {
+      this.lifecycle = "failed";
+      this.failure = "drain_timeout";
+      throw error;
+    }
     this.lifecycle = errors.length ? "failed" : "stopped";
+    this.failure = errors.length ? "cleanup_error" : undefined;
 
     if (errors.length) {
       throw new CoreError(
@@ -144,49 +253,94 @@ export class CoreEngine {
     }
   }
 
+  private wrapEventBus(events: EventBusPort): EventBusPort {
+    return Object.freeze({
+      subscribe: <TPayload>(type: string, handler: EventHandler<TPayload>): (() => void) => {
+        this.operations.assertSynchronousAdmission();
+        return events.subscribe(type, handler);
+      },
+      publish: <TPayload>(type: string, payload: TPayload): Promise<void> =>
+        this.operations.run(() => events.publish(type, payload))
+    });
+  }
+
+  private wrapPolicy(policy: PolicyEngine): PolicyEngine {
+    return Object.freeze({
+      evaluate: (request: PolicyRequest): Promise<PolicyDecision> =>
+        this.operations.run(() => policy.evaluate(request))
+    });
+  }
+
+  private wrapMemory(memory: MemoryPort): MemoryPort {
+    return Object.freeze({
+      read: (address: MemoryAddress): Promise<unknown | null> =>
+        this.operations.run(() => memory.read(address)),
+      write: (address: MemoryAddress, value: unknown): Promise<void> =>
+        this.operations.run(() => memory.write(address, value)),
+      delete: (address: MemoryAddress): Promise<void> =>
+        this.operations.run(() => memory.delete(address))
+    });
+  }
+
   private createContext(moduleId: string): ModuleContext {
     const base = {
       moduleId,
       events: this.events,
       policy: this.policy
     };
-    return Object.freeze(
-      this.options.memory ? { ...base, memory: this.options.memory } : base
-    );
+    return Object.freeze(this.memory ? { ...base, memory: this.memory } : base);
   }
 
   private async cleanupInitializedModules(
     preserveFailureIds: ReadonlySet<string> = new Set()
   ): Promise<unknown[]> {
     const errors: unknown[] = [];
-    const failedModuleIds = new Set<string>();
     for (const module of [...this.initializedModules].reverse()) {
-      this.moduleStates.set(module.id, "stopping");
       try {
-        await module.stop?.(this.createContext(module.id));
-        this.moduleStates.set(
-          module.id,
-          preserveFailureIds.has(module.id) ? "failed" : "stopped"
-        );
+        await this.cleanupModule(module, preserveFailureIds.has(module.id));
       } catch (error) {
-        this.moduleStates.set(module.id, "failed");
-        failedModuleIds.add(module.id);
         errors.push(error);
       }
     }
-    // Keep only modules whose cleanup actually failed. A later stop() can retry
-    // those modules without re-running successful cleanup hooks.
-    this.initializedModules = this.initializedModules.filter(
-      (module) => failedModuleIds.has(module.id)
-    );
     return errors;
   }
 
+  private async cleanupModule(module: CoreModule, preserveFailure: boolean): Promise<void> {
+    const inFlight = this.cleanupInFlight.get(module.id);
+    if (inFlight) {
+      await inFlight;
+      return;
+    }
+
+    const cleanup = this.operations.runCleanup(async (): Promise<void> => {
+      this.moduleStates.set(module.id, "cleaning");
+      try {
+        await module.stop?.(this.createContext(module.id));
+        this.moduleStates.set(module.id, preserveFailure ? "failed" : "stopped");
+        this.initializedModules = this.initializedModules.filter(
+          (initialized) => initialized.id !== module.id
+        );
+      } catch (error) {
+        this.moduleStates.set(module.id, "failed");
+        throw error;
+      }
+    });
+
+    this.cleanupInFlight.set(module.id, cleanup);
+    try {
+      await cleanup;
+    } finally {
+      if (this.cleanupInFlight.get(module.id) === cleanup) {
+        this.cleanupInFlight.delete(module.id);
+      }
+    }
+  }
+
   private assertState(expected: CoreLifecycleState, operation: string): void {
-    if (this.lifecycle !== expected) {
+    if (this.closingRequested || this.lifecycle !== expected) {
       throw new CoreError(
         "INVALID_LIFECYCLE_TRANSITION",
-        'Cannot ' + operation + ' Core Engine while it is "' + this.lifecycle + '".'
+        'Cannot ' + operation + ' Core Engine while it is "' + this.state + '".'
       );
     }
   }
