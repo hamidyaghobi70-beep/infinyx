@@ -82,6 +82,45 @@ describe("CoreEngine", () => {
     expect(engine.getModuleStates().get("broken")).toBe("failed");
   });
 
+  it("retries failed module cleanup without repeating successful cleanup", async () => {
+    const engine = new CoreEngine();
+    const calls: string[] = [];
+    let workerStopAttempts = 0;
+
+    engine.register({
+      id: "platform",
+      version: "1.0.0",
+      stop: () => { calls.push("stop:platform"); }
+    });
+    engine.register({
+      id: "worker",
+      version: "1.0.0",
+      dependencies: ["platform"],
+      stop: () => {
+        calls.push("stop:worker");
+        workerStopAttempts += 1;
+        if (workerStopAttempts === 1) {
+          throw new Error("temporary worker cleanup failure");
+        }
+      }
+    });
+
+    await engine.initialize();
+    await engine.start();
+
+    await expect(engine.stop()).rejects.toThrow(/failed to stop/i);
+    expect(engine.state).toBe("failed");
+    expect(engine.getModuleStates().get("worker")).toBe("failed");
+    expect(engine.getModuleStates().get("platform")).toBe("stopped");
+    expect(calls).toEqual(["stop:worker", "stop:platform"]);
+
+    await engine.stop();
+
+    expect(engine.state).toBe("stopped");
+    expect(engine.getModuleStates().get("worker")).toBe("stopped");
+    expect(calls).toEqual(["stop:worker", "stop:platform", "stop:worker"]);
+  });
+
   it("does not authorize actions without an explicit policy", async () => {
     const engine = new CoreEngine();
     const decision = await engine.policy.evaluate({
