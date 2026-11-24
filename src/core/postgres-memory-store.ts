@@ -123,7 +123,7 @@ export class PostgresEncryptedMemoryStore implements MemoryPort {
       `INSERT INTO ${this.#table} (tenant_id, namespace, memory_key, envelope, classification, created_at, updated_at, expires_at)
        VALUES ($1, $2, $3, $4::jsonb, $5, $6, $6, $7)
        ON CONFLICT (tenant_id, namespace, memory_key) DO UPDATE SET
-         envelope = EXCLUDED.envelope, classification = EXCLUDED.classification, updated_at = EXCLUDED.updated_at, expires_at = EXCLUDED.expires_at`,
+         envelope = EXCLUDED.envelope, classification = EXCLUDED.classification, created_at = EXCLUDED.created_at, updated_at = EXCLUDED.updated_at, expires_at = EXCLUDED.expires_at`,
       [tenantId, address.namespace, address.key, JSON.stringify(envelope), classification, now, expiresAt]
     );
   }
