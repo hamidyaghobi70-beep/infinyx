@@ -11,13 +11,14 @@ export function createApp(isReady: ReadinessCheck = () => false, authenticate?: 
   const application = express();
 
   application.disable("x-powered-by");
-  application.use(express.json({ limit: "100kb" }));
+  // Apply the request budget before parsing attacker-controlled bodies.
   application.use(rateLimit({
     windowMs: 15 * 60 * 1000,
     limit: 100,
     standardHeaders: true,
     legacyHeaders: false
   }));
+  application.use(express.json({ limit: "100kb" }));
 
   // Liveness only: confirms that the HTTP process can answer requests.
   application.get("/health", (_req, res) => {
