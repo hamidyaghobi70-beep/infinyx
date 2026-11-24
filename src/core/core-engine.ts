@@ -22,6 +22,62 @@ import { ProtectedOperationExecutor } from "./protected-operation-executor.js";
 
 const MAX_TIMER_DELAY_MS = 2_147_483_647;
 
+const MAX_EVENT_BUS_PROTOTYPE_DEPTH = 64;
+type CapturedEventBusMethod = (...args: never[]) => unknown;
+
+function captureEventBusMethod(
+  target: object,
+  name: keyof EventBusPort,
+  required: boolean
+): CapturedEventBusMethod | undefined {
+  let current: object | null = target;
+  const visited = new Set<object>();
+  try {
+    while (current !== null) {
+      if (visited.has(current) || visited.size >= MAX_EVENT_BUS_PROTOTYPE_DEPTH) {
+        throw new TypeError("Invalid Event Bus prototype chain.");
+      }
+      visited.add(current);
+      const descriptor = Object.getOwnPropertyDescriptor(current, name);
+      if (descriptor) {
+        if (!Object.prototype.hasOwnProperty.call(descriptor, "value")) {
+          throw new TypeError("Event Bus methods must be data properties.");
+        }
+        const method: unknown = descriptor.value;
+        if (method === undefined && !required) return undefined;
+        if (typeof method !== "function") {
+          throw new TypeError("Event Bus method must be a function.");
+        }
+        return Function.prototype.bind.call(method, target) as CapturedEventBusMethod;
+      }
+      current = Object.getPrototypeOf(current) as object | null;
+    }
+  } catch {
+    throw new TypeError("Event Bus capability must expose stable data methods.");
+  }
+  if (required) throw new TypeError("Event Bus capability must expose stable data methods.");
+  return undefined;
+}
+
+function captureEventBus(target: EventBusPort): EventBusPort {
+  const subscribe = captureEventBusMethod(target, "subscribe", true) as unknown as EventBusPort["subscribe"];
+  const publish = captureEventBusMethod(target, "publish", true) as unknown as EventBusPort["publish"];
+  const publishIfSubscribed = captureEventBusMethod(target, "publishIfSubscribed", false);
+  const hasSubscribers = captureEventBusMethod(target, "hasSubscribers", false);
+  return Object.freeze({
+    subscribe,
+    publish,
+    ...(publishIfSubscribed ? {
+      publishIfSubscribed: publishIfSubscribed as unknown as NonNullable<EventBusPort["publishIfSubscribed"]>
+    } : {}),
+    ...(hasSubscribers ? {
+      hasSubscribers: hasSubscribers as unknown as NonNullable<EventBusPort["hasSubscribers"]>
+    } : {})
+  });
+}
+
+
+
 function assertTimerDelay(name: string, value: number | undefined): void {
   if (value === undefined) return;
   if (!Number.isSafeInteger(value) || value <= 0 || value > MAX_TIMER_DELAY_MS) {
@@ -61,12 +117,14 @@ export class CoreEngine {
   private readonly cleanupInFlight = new Map<string, Promise<void>>();
   private readonly cleanupContext = new AsyncLocalStorage<CleanupExecutionContext>();
   private stopPromise: Promise<void> | undefined;
+  // Keep an in-flight policy shutdown shared across timeout/retry cycles.
+  private policyShutdownPromise: Promise<void> | undefined;
   private readonly moduleMemory = new Map<string, GuardedMemoryPort>();
 
   constructor(private readonly options: CoreEngineOptions = {}) {
     assertTimerDelay("policyShutdownTimeoutMs", options.policyShutdownTimeoutMs);
     assertTimerDelay("protectedOperationDrainTimeoutMs", options.protectedOperationDrainTimeoutMs);
-    this.events = options.events ?? new InMemoryEventBus();
+    this.events = captureEventBus(options.events ?? new InMemoryEventBus());
     this.policy = options.policy
       ? new FailClosedPolicyEngine(options.policy, options.policyTimeoutMs)
       : new DefaultDenyPolicyEngine();
@@ -105,6 +163,18 @@ export class CoreEngine {
     return this.protectedOperationExecutor.register(definition);
   }
 
+  /** Roll back a protected-operation registration before Core initialization. */
+  unregisterProtectedOperation<TInput, TOutput>(
+    operation: ProtectedOperationHandle<TInput, TOutput>
+  ): boolean {
+    if (this.lifecycle !== "created") {
+      throw new CoreError(
+        "INVALID_LIFECYCLE_TRANSITION",
+        "Protected operations can only be unregistered before initialization."
+      );
+    }
+    return this.protectedOperationExecutor.unregister(operation);
+  }
 
   register(module: CoreModule): void {
     if (this.lifecycle !== "created") {
@@ -113,8 +183,8 @@ export class CoreEngine {
         "Modules can only be registered before initialization."
       );
     }
-    this.moduleRegistry.register(module);
-    this.moduleStates.set(module.id, "registered");
+    const moduleId = this.moduleRegistry.register(module);
+    this.moduleStates.set(moduleId, "registered");
   }
 
   getModuleStates(): ReadonlyMap<string, ModuleLifecycleState> {
@@ -241,11 +311,24 @@ export class CoreEngine {
   }
 
   private beginPolicyShutdown(): Promise<void> {
+    if (this.policyShutdownPromise) return this.policyShutdownPromise;
+
+    let shutdown: Promise<void>;
     try {
-      return this.policy.shutdown?.() ?? Promise.resolve();
+      shutdown = Promise.resolve(this.policy.shutdown?.());
     } catch (error) {
-      return Promise.reject(error);
+      shutdown = Promise.reject(error);
     }
+    this.policyShutdownPromise = shutdown;
+
+    // A rejected shutdown may be explicitly retried. A still-pending shutdown
+    // remains shared so a timeout cannot start a second concurrent shutdown.
+    void shutdown.catch(() => {
+      if (this.policyShutdownPromise === shutdown) {
+        this.policyShutdownPromise = undefined;
+      }
+    });
+    return shutdown;
   }
 
   private async performStop(

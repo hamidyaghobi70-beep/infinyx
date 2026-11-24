@@ -350,6 +350,31 @@ describe("ProtectedOperationExecutor", () => {
     expect(Object.isFrozen(observed?.context?.attributes?.nested)).toBe(true);
   });
 
+  it("rejects accessor-backed array entries without invoking their getters", async () => {
+    const evaluator = vi.fn(async () => allow);
+    const { engine, operation, handler } = makeEngine(evaluator);
+    await ensureStarted(engine);
+    let getterCalls = 0;
+    const values: unknown[] = [];
+    Object.defineProperty(values, "0", {
+      enumerable: true,
+      configurable: true,
+      get: () => { getterCalls += 1; return "unsafe"; }
+    });
+    values.length = 1;
+
+    const result = await engine.protectedOperations.execute(
+      operation,
+      { actorId: "array-accessor", context: { attributes: { values } } },
+      { value: "x" }
+    );
+
+    expect(result).toMatchObject({ status: "denied" });
+    expect(getterCalls).toBe(0);
+    expect(evaluator).not.toHaveBeenCalled();
+    expect(handler).not.toHaveBeenCalled();
+  });
+
   it("fails closed for cyclic policy context before calling PolicyEngine", async () => {
     const evaluator = vi.fn(async () => allow);
     const { engine, operation, handler } = makeEngine(evaluator);

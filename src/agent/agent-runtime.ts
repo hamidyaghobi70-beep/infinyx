@@ -28,6 +28,7 @@ interface MutableTaskRecord {
 interface ActiveTask {
   readonly controller: AbortController;
   readonly record: MutableTaskRecord;
+  readonly settled: Promise<void>;
 }
 
 function isPlainRecord(value: unknown): value is Record<string, unknown> {
@@ -122,7 +123,20 @@ export class AgentRuntime {
     return record ? Object.freeze({ ...record }) : undefined;
   }
 
-  async execute(request: AgentTaskRequest | unknown): Promise<AgentTaskResult> {
+  execute(request: AgentTaskRequest | unknown): Promise<AgentTaskResult> {
+    return this.executeInternal(request, undefined, false);
+  }
+
+  /** Execute for a Core protected operation and wait for actual provider settlement. */
+  executeAndSettle(request: AgentTaskRequest | unknown, parentSignal?: AbortSignal): Promise<AgentTaskResult> {
+    return this.executeInternal(request, parentSignal, true);
+  }
+
+  private async executeInternal(
+    request: AgentTaskRequest | unknown,
+    parentSignal: AbortSignal | undefined,
+    waitForSettlement: boolean
+  ): Promise<AgentTaskResult> {
     if (!this.accepting) {
       return { status: "rejected", taskId: "unknown", reason: "Agent runtime is not accepting tasks." };
     }
@@ -139,7 +153,7 @@ export class AgentRuntime {
     if (this.active.has(taskId)) {
       return { status: "rejected", taskId, reason: "A task with this identifier is already active." };
     }
-    if (signal?.aborted) {
+    if (signal?.aborted || parentSignal?.aborted) {
       return { status: "cancelled", taskId, executionState: "settled" };
     }
     if (this.active.size >= MAX_ACTIVE_TASKS) {
@@ -151,17 +165,20 @@ export class AgentRuntime {
     const record: MutableTaskRecord = {
       taskId, status: "running", executionState: "running", startedAt
     };
-    this.active.set(taskId, { controller, record });
+    let resolveTask!: () => void;
+    const taskSettled = new Promise<void>((resolve) => { resolveTask = resolve; });
+    this.active.set(taskId, { controller, record, settled: taskSettled });
     this.remember(record);
 
     let providerStarted = false;
     let providerSettled = false;
     let timeout: ReturnType<typeof setTimeout> | undefined;
     let callerAbort: (() => void) | undefined;
+    let parentAbort: (() => void) | undefined;
     let resolveEarly!: (result: AgentTaskResult) => void;
     const earlyResult = new Promise<AgentTaskResult>((resolve) => { resolveEarly = resolve; });
 
-    const settleEarly = (status: "cancelled" | "timed_out", reason: string): void => {
+    const recordCancellation = (status: "cancelled" | "timed_out", reason: string): void => {
       if (record.status !== "running") return;
       record.status = status;
       record.executionState = providerSettled ? "settled" : "unresolved";
@@ -175,9 +192,9 @@ export class AgentRuntime {
       // execution exists to remain unresolved.
       if (!providerStarted) providerSettled = true;
       if (controller.signal.reason === "deadline_exceeded") {
-        settleEarly("timed_out", "Task deadline elapsed.");
+        recordCancellation("timed_out", "Task deadline elapsed.");
       } else {
-        settleEarly("cancelled", "Task cancellation was requested.");
+        recordCancellation("cancelled", "Task cancellation was requested.");
       }
     };
     controller.signal.addEventListener("abort", controllerAbort, { once: true });
@@ -187,6 +204,14 @@ export class AgentRuntime {
         if (!controller.signal.aborted) controller.abort("caller_cancelled");
       };
       signal.addEventListener("abort", callerAbort, { once: true });
+      if (signal.aborted) callerAbort();
+    }
+    if (parentSignal) {
+      parentAbort = () => {
+        if (!controller.signal.aborted) controller.abort("core_shutdown");
+      };
+      parentSignal.addEventListener("abort", parentAbort, { once: true });
+      if (parentSignal.aborted) parentAbort();
     }
 
     timeout = setTimeout(() => {
@@ -215,6 +240,7 @@ export class AgentRuntime {
           record.executionState = "settled";
           record.finishedAt = Date.now();
           this.active.delete(taskId);
+          resolveTask();
           return record.status === "cancelled"
             ? { status: "cancelled", taskId, executionState: "settled" }
             : record.status === "timed_out"
@@ -230,6 +256,7 @@ export class AgentRuntime {
           record.finishedAt = Date.now();
         }
         this.active.delete(taskId);
+        resolveTask();
         return record.status === "completed"
           ? { status: "completed", taskId, output }
           : record.status === "cancelled"
@@ -241,9 +268,10 @@ export class AgentRuntime {
         record.executionState = "settled";
         record.finishedAt = Date.now();
         this.active.delete(taskId);
+        resolveTask();
         if (record.status === "running") {
           record.status = "error";
-          record.reason = error instanceof Error ? error.message : "Model provider failed.";
+          record.reason = "Model provider failed.";
           return { status: "error", taskId, code: "MODEL_PROVIDER_ERROR" };
         }
         return record.status === "cancelled"
@@ -253,12 +281,16 @@ export class AgentRuntime {
     );
 
     try {
-      return await Promise.race([observedProvider, earlyResult]);
+      // Preserve the public Runtime's established early cancellation response.
+      // Core's protected-operation path opts into settlement-aware execution.
+      return waitForSettlement
+        ? await observedProvider
+        : await Promise.race([observedProvider, earlyResult]);
     } finally {
       if (timeout !== undefined) clearTimeout(timeout);
       if (callerAbort && signal) signal.removeEventListener("abort", callerAbort);
+      if (parentAbort && parentSignal) parentSignal.removeEventListener("abort", parentAbort);
       controller.signal.removeEventListener("abort", controllerAbort);
-      // A non-cooperative provider remains active until its promise really settles.
       this.trimRecords();
     }
   }
@@ -267,8 +299,14 @@ export class AgentRuntime {
     this.accepting = false;
     for (const task of this.active.values()) {
       if (!task.controller.signal.aborted) task.controller.abort("runtime_shutdown");
-      // The abort listener resolves the caller as cancelled/unresolved. The active slot
-      // remains occupied until the ModelPort promise actually settles.
+    }
+  }
+
+  /** Close admission and wait for actual settlement of every active provider. */
+  async shutdownAndDrain(): Promise<void> {
+    this.shutdown();
+    while (this.active.size > 0) {
+      await Promise.all([...this.active.values()].map((task) => task.settled));
     }
   }
 

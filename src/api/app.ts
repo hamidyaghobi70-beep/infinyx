@@ -1,24 +1,55 @@
-import express from "express";
+import express, { type Express } from "express";
 import { rateLimit } from "express-rate-limit";
 import { errorHandler } from "../shared/http/error-handler.js";
+import type { RequestHandler } from "express";
+import { getAuthenticatedPrincipal } from "../core/authenticated-principal.js";
 
-export const app = express();
+export type ReadinessCheck = () => boolean;
 
-app.disable("x-powered-by");
-app.use(express.json({ limit: "100kb" }));
-app.use(rateLimit({
-  windowMs: 15 * 60 * 1000,
-  limit: 100,
-  standardHeaders: true,
-  legacyHeaders: false
-}));
+/** Build an HTTP app whose readiness signal is tied to the owning runtime state. */
+export function createApp(isReady: ReadinessCheck = () => false, authenticate?: RequestHandler): Express {
+  const application = express();
 
-app.get("/health", (_req, res) => {
-  res.status(200).json({ status: "ok" });
-});
+  application.disable("x-powered-by");
+  // Apply the request budget before parsing attacker-controlled bodies.
+  application.use(rateLimit({
+    windowMs: 15 * 60 * 1000,
+    limit: 100,
+    standardHeaders: true,
+    legacyHeaders: false
+  }));
+  application.use(express.json({ limit: "100kb" }));
 
-app.use((_req, res) => {
-  res.status(404).json({ error: "Not found" });
-});
+  // Liveness only: confirms that the HTTP process can answer requests.
+  application.get("/health", (_req, res) => {
+    res.status(200).json({ status: "ok" });
+  });
 
-app.use(errorHandler);
+  // Authenticated identity introspection is mounted only when a trusted verifier is configured.
+  if (authenticate) {
+    application.get("/v1/identity", authenticate, (request, response) => {
+      const principal = getAuthenticatedPrincipal(request);
+      if (!principal) { response.status(401).json({ error: "unauthorized" }); return; }
+      response.status(200).json({ subject: principal.subject, tenantId: principal.tenantId, issuer: principal.issuer, audience: principal.audience, expiresAt: principal.expiresAt });
+    });
+  }
+
+  // Readiness reflects Core lifecycle, not downstream dependency health.
+  application.get("/ready", (_req, res) => {
+    if (!isReady()) {
+      res.status(503).json({ status: "not_ready" });
+      return;
+    }
+    res.status(200).json({ status: "ready" });
+  });
+
+  application.use((_req, res) => {
+    res.status(404).json({ error: "Not found" });
+  });
+
+  application.use(errorHandler);
+  return application;
+}
+
+// Compatibility app for isolated HTTP tests; production composition supplies Core state.
+export const app = createApp();

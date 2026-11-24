@@ -88,4 +88,15 @@ describe("InMemoryEventBus", () => {
     expect(completed).toEqual(["throws", "sync sibling", "async"]);
   });
 
+
+  it("rejects invalid subscription inputs before mutating the registry", async () => {
+    const bus = new InMemoryEventBus();
+
+    expect(() => bus.subscribe("sample.created", null as never)).toThrow(/handler must be a function/i);
+    expect(() => bus.subscribe("   ", vi.fn())).toThrow(/event type must be a non-empty string/i);
+    expect(() => bus.subscribe(42 as never, vi.fn())).toThrow(/event type must be a non-empty string/i);
+
+    expect(bus.hasSubscribers("sample.created")).toBe(false);
+    await expect(bus.publishIfSubscribed("sample.created", {})).resolves.toBe(false);
+  });
 });

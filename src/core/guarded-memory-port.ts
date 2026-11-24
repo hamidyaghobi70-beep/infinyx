@@ -130,16 +130,8 @@ export class GuardedMemoryPort implements MemoryPort {
     } catch {
       throw new TypeError("GuardedMemoryPort dependencies must be readable values.");
     }
-    if (!hasMethods(store, ["read", "write", "delete"])) {
-      throw new TypeError("GuardedMemoryPort requires a MemoryPort store.");
-    }
-    if (!hasMethods(policy, ["evaluate"])) {
-      throw new TypeError("GuardedMemoryPort requires a PolicyEngine.");
-    }
-    if (!hasMethods(audit, ["publishDecision", "publishFailure"])) {
-      throw new TypeError("GuardedMemoryPort requires a dedicated MemoryAuditPort.");
-    }
-
+    // Method capture below is also the validation step; never probe a getter
+    // once and then read it again for use.
     const maxValueBytes = options.maxValueBytes ?? DEFAULT_MAX_MEMORY_VALUE_BYTES;
     if (!Number.isSafeInteger(maxValueBytes) || maxValueBytes <= 0) {
       throw new TypeError("maxValueBytes must be a positive safe integer.");
@@ -177,9 +169,15 @@ export class GuardedMemoryPort implements MemoryPort {
       );
     }
 
-    this.#store = store as MemoryPort;
-    this.#policy = policy as PolicyEngine;
-    this.#audit = audit as MemoryAuditPort;
+    // Capture and bind every callable dependency exactly once. Retaining the
+    // original objects would re-read mutable/accessor-backed methods after validation.
+    try {
+      this.#store = captureMethods(store as object, ["read", "write", "delete"]) as MemoryPort;
+      this.#policy = captureMethods(policy as object, ["evaluate"]) as PolicyEngine;
+      this.#audit = captureMethods(audit as object, ["publishDecision", "publishFailure"]) as MemoryAuditPort;
+    } catch {
+      throw new TypeError("GuardedMemoryPort dependency methods must be readable functions.");
+    }
     this.#maxValueBytes = maxValueBytes;
     this.#policyTimeoutMs = policyTimeoutMs;
     this.#auditTimeoutMs = auditTimeoutMs;
@@ -401,10 +399,16 @@ function withTimeout<T>(work: () => Promise<T> | T, ms: number): Promise<T | typ
   });
 }
 
-function hasMethods(value: unknown, names: readonly string[]): boolean {
-  if (!value || typeof value !== "object") return false;
-  const record = value as Record<string, unknown>;
-  return names.every((name) => typeof record[name] === "function");
+function captureMethods<T extends object>(value: object, names: readonly string[]): T {
+  const captured: Record<string, unknown> = {};
+  for (const name of names) {
+    const method: unknown = Reflect.get(value, name);
+    if (typeof method !== "function") {
+      throw new TypeError("Dependency method must be a function.");
+    }
+    captured[name] = method.bind(value);
+  }
+  return Object.freeze(captured) as T;
 }
 
 function isValidSegment(value: unknown, maxLength: number): value is string {

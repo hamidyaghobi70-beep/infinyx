@@ -14,6 +14,41 @@ afterEach(() => {
 });
 
 describe("FailClosedPolicyEngine", () => {
+  it("captures policy delegate methods and ignores later replacement", async () => {
+    let evaluateCalls = 0;
+    let shutdownCalls = 0;
+    const delegate: import("../../src/core/contracts.js").PolicyEngine = {
+      evaluate: async () => {
+        evaluateCalls += 1;
+        return { effect: "allow", reason: "captured evaluator" };
+      },
+      shutdown: async () => { shutdownCalls += 1; }
+    };
+    const policy = new FailClosedPolicyEngine(delegate);
+    delegate.evaluate = async () => ({ effect: "deny", reason: "replacement evaluator" });
+    delegate.shutdown = async () => { throw new Error("replacement shutdown invoked"); };
+
+    await expect(policy.evaluate(request)).resolves.toEqual({
+      effect: "allow",
+      reason: "captured evaluator"
+    });
+    await expect(policy.shutdown()).resolves.toBeUndefined();
+    expect(evaluateCalls).toBe(1);
+    expect(shutdownCalls).toBe(1);
+  });
+
+  it("rejects a cyclic Proxy prototype chain while capturing delegate methods", () => {
+    const target = {};
+    let cyclic!: import("../../src/core/contracts.js").PolicyEngine;
+    cyclic = new Proxy(target, {
+      getPrototypeOf() {
+        return cyclic;
+      }
+    }) as import("../../src/core/contracts.js").PolicyEngine;
+
+    expect(() => new FailClosedPolicyEngine(cyclic)).toThrow(/stable data methods/i);
+  });
+
   it("preserves an explicit allow decision from the evaluator", async () => {
     const policy = new FailClosedPolicyEngine({
       evaluate: async () => ({ effect: "allow", reason: "Explicit test grant." })

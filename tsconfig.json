@@ -12,8 +12,15 @@
     "skipLibCheck": true,
     "rootDir": "src",
     "outDir": "dist",
-    "noEmitOnError": true
+    "noEmitOnError": true,
+    "declaration": true
   },
-  "include": ["src/**/*.ts"],
-  "exclude": ["node_modules", "dist", "test"]
+  "include": [
+    "src/**/*.ts"
+  ],
+  "exclude": [
+    "node_modules",
+    "dist",
+    "test"
+  ]
 }

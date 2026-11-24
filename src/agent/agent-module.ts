@@ -1,4 +1,11 @@
-import type { CoreModule, ModuleContext } from "../core/contracts.js";
+import type { CoreEngine } from "../core/core-engine.js";
+import type {
+  CoreModule,
+  ModuleContext,
+  ProtectedOperationCaller,
+  ProtectedOperationHandle,
+  ProtectedOperationPort
+} from "../core/contracts.js";
 import {
   AGENT_MODULE_ID,
   AGENT_MODULE_VERSION,
@@ -9,30 +16,74 @@ import {
 import { AgentRuntime } from "./agent-runtime.js";
 import { DisabledModelPort, type ModelPort } from "./model-port.js";
 
+/**
+ * This provider must be supplied by the trusted host composition root.
+ * A caller-supplied actorId is an authorization attribute, not authentication.
+ */
+export type TrustedAgentCallerProvider = () => ProtectedOperationCaller | undefined;
+
 export interface AgentModuleOptions {
   readonly modelPort?: ModelPort;
   readonly runtime?: AgentRuntimeOptions;
+  readonly callerProvider?: TrustedAgentCallerProvider;
+}
+
+function isPlainAgentRequest(value: unknown): value is AgentTaskRequest {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
+  const prototype = Object.getPrototypeOf(value);
+  return prototype === Object.prototype || prototype === null;
 }
 
 /**
- * Internal CoreModule only. It registers no HTTP routes, tools, memory adapter,
- * external provider, or protected operation.
+ * Internal CoreModule only. Agent execution is exposed exclusively through a
+ * Core-registered Protected Operation; no direct Runtime execution route exists.
  */
 export class AgentModule implements CoreModule {
   readonly id = AGENT_MODULE_ID;
   readonly version = AGENT_MODULE_VERSION;
   private readonly runtime: AgentRuntime;
+  private readonly callerProvider: TrustedAgentCallerProvider | undefined;
+  private operationHandle?: ProtectedOperationHandle<AgentTaskRequest, AgentTaskResult>;
+  private protectedOperations?: ProtectedOperationPort;
   private initialized = false;
   private started = false;
   private shutdownSignal: AbortSignal | undefined;
   private readonly onCoreShutdown = (): void => {
     this.shutdownSignal?.removeEventListener("abort", this.onCoreShutdown);
-    this.runtime.shutdown();
+    // ProtectedOperationExecutor also aborts the operation context. Its handler
+    // awaits AgentRuntime.execute() until the actual ModelPort promise settles.
+    void this.runtime.shutdownAndDrain();
     this.started = false;
   };
 
   constructor(options: AgentModuleOptions = {}) {
     this.runtime = new AgentRuntime(options.modelPort ?? new DisabledModelPort(), options.runtime);
+    this.callerProvider = options.callerProvider;
+  }
+
+  /**
+   * Composition-root helper. Register the protected operation before Core
+   * initialization, then register this module. The caller provider is a trusted
+   * host dependency; without it, execution fails closed.
+   */
+  registerWithCore(core: CoreEngine): void {
+    if (this.operationHandle) throw new Error("Agent module is already registered with Core.");
+    const operationHandle = core.registerProtectedOperation<AgentTaskRequest, AgentTaskResult>({
+      id: "agent.execute",
+      action: "agent.execute",
+      resource: "agent:agent",
+      validateInput: isPlainAgentRequest,
+      handler: (request, context) => this.runtime.executeAndSettle(request, context.signal)
+    });
+    try {
+      core.register(this);
+      this.operationHandle = operationHandle;
+    } catch (error) {
+      // Do not leave an orphan Protected Operation if ModuleRegistry rejects
+      // this module (for example, because its module ID is already occupied).
+      core.unregisterProtectedOperation(operationHandle);
+      throw error;
+    }
   }
 
   async initialize(context: ModuleContext): Promise<void> {
@@ -40,6 +91,7 @@ export class AgentModule implements CoreModule {
     if (this.initialized) throw new Error("Agent module is already initialized.");
     this.initialized = true;
     this.shutdownSignal = context.shutdownSignal;
+    this.protectedOperations = context.protectedOperations;
     if (this.shutdownSignal?.aborted) this.onCoreShutdown();
     else this.shutdownSignal?.addEventListener("abort", this.onCoreShutdown, { once: true });
   }
@@ -55,12 +107,40 @@ export class AgentModule implements CoreModule {
   async stop(context: ModuleContext): Promise<void> {
     if (context.moduleId !== this.id) throw new Error("Agent module received an invalid Core context.");
     this.shutdownSignal?.removeEventListener("abort", this.onCoreShutdown);
-    this.runtime.shutdown();
     this.started = false;
+    await this.runtime.shutdownAndDrain();
   }
 
-  execute(request: AgentTaskRequest | unknown): Promise<AgentTaskResult> {
-    return this.runtime.execute(request);
+  async execute(request: AgentTaskRequest | unknown): Promise<AgentTaskResult> {
+    if (!this.started || !this.operationHandle || !this.protectedOperations) {
+      return { status: "rejected", taskId: "unknown", reason: "Agent module is not available." };
+    }
+    let providedCaller: ProtectedOperationCaller | undefined;
+    try {
+      providedCaller = this.callerProvider?.();
+      if (!providedCaller) {
+        return { status: "rejected", taskId: "unknown", reason: "Trusted Agent caller is unavailable; execution denied." };
+      }
+      // Create a fresh request envelope for Core's in-memory duplicate suppression.
+      // The trusted principal provider may legitimately reuse an immutable principal object.
+      const caller: ProtectedOperationCaller = Object.freeze({
+        actorId: providedCaller.actorId,
+        ...(providedCaller.context === undefined ? {} : { context: providedCaller.context })
+      });
+      const result = await this.protectedOperations.execute(
+        this.operationHandle,
+        caller,
+        request as AgentTaskRequest
+      );
+      if (result.status === "executed") return result.value;
+      return {
+        status: "rejected",
+        taskId: "unknown",
+        reason: result.reason
+      };
+    } catch {
+      return { status: "rejected", taskId: "unknown", reason: "Trusted Agent caller could not be established." };
+    }
   }
 
   getTaskStatus(taskId: string) {
@@ -68,6 +148,6 @@ export class AgentModule implements CoreModule {
   }
 
   get isAccepting(): boolean {
-    return this.runtime.isAccepting;
+    return this.started && this.runtime.isAccepting;
   }
 }

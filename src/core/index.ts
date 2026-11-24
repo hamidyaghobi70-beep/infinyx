@@ -1,4 +1,11 @@
 export { CoreEngine } from "./core-engine.js";
+export { AuthenticationError, createJwtPrincipalVerifier, createBearerAuthMiddleware, createAsyncBearerAuthMiddleware, createJwksJwtPrincipalVerifier, createPrincipalMemoryScope, getAuthenticatedPrincipal, isAuthenticatedPrincipal } from "./authenticated-principal.js";
+export type { JwtPublicKeyResolver, JwksJwtVerifierOptions } from "./authenticated-principal.js";
+export { JwksKeyResolver } from "./jwks-key-resolver.js";
+export type { JwksKeyResolverOptions } from "./jwks-key-resolver.js";
+export { createAuthenticatedMemorySession } from "./authenticated-memory-session.js";
+export type { AuthenticatedMemorySessionOptions } from "./authenticated-memory-session.js";
+export type { AuthenticatedPrincipal, JwtVerifierOptions } from "./authenticated-principal.js";
 export type { CoreEngineOptions } from "./core-engine.js";
 export { CoreError } from "./core-error.js";
 export type { CoreErrorCode } from "./core-error.js";
@@ -20,6 +27,12 @@ export type {
   MemoryScope
 } from "./guarded-memory-port.js";
 export { InMemoryMemoryStore } from "./in-memory-memory-store.js";
+export { MemoryValueCipher, MemoryEncryptionError } from "./memory-encryption.js";
+export type { MemoryKeyProvider, EncryptedMemoryEnvelope } from "./memory-encryption.js";
+export { PostgresEncryptedMemoryStore } from "./postgres-memory-store.js";
+export type { PostgresMemoryStoreOptions, StoredMemoryEnvelope, SqlExecutor, SqlQueryResult } from "./postgres-memory-store.js";
+export { PostgresMemoryAuditPort } from "./postgres-memory-audit.js";
+export type { AuditSqlConnection, AuditSqlPool } from "./postgres-memory-audit.js";
 export { MemoryAccessError } from "./memory-error.js";
 export type { MemoryErrorCode } from "./memory-error.js";
 export { ModuleRegistry } from "./module-registry.js";
@@ -52,3 +65,9 @@ export type {
   ProtectedOperationPort,
   ProtectedOperationResult
 } from "./contracts.js";
+
+export { PostgresMigrationRunner } from "./postgres-migration-runner.js";
+export type { CoreMigration, MigrationPool, MigrationConnection, MigrationRunResult, MigrationQueryResult } from "./postgres-migration-runner.js";
+
+export { MemoryDeletionCoordinator } from "./memory-deletion-replay.js";
+export type { MemoryDeletionLedgerPort, MemoryDeletionTombstone, MemoryDeletionReplayOptions, MemoryDeletionReplayResult } from "./memory-deletion-replay.js";

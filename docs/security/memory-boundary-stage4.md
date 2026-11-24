@@ -1,6 +1,6 @@
 # Memory boundary — Stage 4 controls and acceptance criteria
 
-Status: **proposal for review; reference implementation only.** Nothing in this document
+Status: **partial implementation on a draft branch; not production approved.** Nothing in this document
 authorizes a persistent adapter, production use, merge, release, or deployment.
 
 ## Scope
@@ -9,13 +9,17 @@ Stage 4 of the [Core Engine roadmap](../engineering/core-engine-roadmap.md) requ
 storage controls below to have testable acceptance criteria before any persistence adapter
 is implemented behind `MemoryPort`.
 
-This change adds, without modifying the `MemoryPort` contract:
+The guarded boundary and initial durable adapter implementation add, without modifying the `MemoryPort` contract:
 
 - `GuardedMemoryPort` (`src/core/guarded-memory-port.ts`): a decorator that enforces tenant
   isolation, policy authorization and audit around any `MemoryPort`.
 - `InMemoryMemoryStore` (`src/core/in-memory-memory-store.ts`): a non-durable reference
   backing store for tests and local composition.
 - `MemoryAccessError` (`src/core/memory-error.ts`): generic, non-leaking error type.
+- `MemoryValueCipher` (`src/core/memory-encryption.ts`): AES-256-GCM envelope cipher backed by an injected key-provider contract; key identifiers and canonical Base64 envelope fields are validated strictly, and provider-owned key bytes are copied before use.
+- `PostgresEncryptedMemoryStore` (`src/core/postgres-memory-store.ts`): encrypted PostgreSQL adapter with explicit expiry metadata and read-time expiry enforcement. Physical expiry sweeps fail closed until a deletion-ledger coordinator is provided.
+- `PostgresMemoryAuditPort` (`src/core/postgres-memory-audit.ts`): transactional append-only audit writer with a serialized hash chain.
+- `migrations/0001_stage4_memory_audit.sql`: idempotent initial schema migration.
 
 ## Trust model
 
@@ -63,12 +67,12 @@ For `read`, `write` and `delete`, in this order:
 | M5 | No aliasing | Implemented | Mutating a value after `write`, or a value returned by `read`, never changes stored data. Backing stores only ever receive serialized strings. |
 | M6 | Failure behavior | Implemented | Backend errors and corrupt backend data (non-string, invalid JSON) become `MEMORY_BACKEND_FAILED` with `cause` preserved and no internal detail in the message. Failure-record publication through the dedicated sink is best-effort and bounded by `auditTimeoutMs`, so a stalled sink cannot mask or indefinitely delay the original error. |
 | M7 | Scope integrity | Implemented | Invalid scopes and dependencies fail at construction. The scope is snapshotted; later mutation of the caller's object has no effect. |
-| M8 | Encryption at rest and in transit | **Not implemented** | Requires an approved design (see Decisions). `InMemoryMemoryStore` is plaintext and non-durable. |
-| M9 | Key ownership and rotation | **Not implemented** | Requires an approved design and an owner decision on key custody. |
-| M10 | Retention, deletion, backup | **Not implemented** | `delete` is an immediate hard delete in the reference store. No retention schedule, soft delete, legal hold or backup exists. |
-| M11 | Durable audit | **Not implemented** | The current audit capability is an in-process sink only. Durable, tamper-evident audit storage is a separate component. |
-| M12 | Data classification | **Not implemented** | No classification labels exist. Namespaces and keys appear in audit events and policy resources, so they must not contain sensitive data. |
-| M13 | Migration strategy | **Not implemented** | Stored values are canonical JSON strings with no schema version. A versioned envelope is needed before any durable adapter. |
+| M8 | Encryption at rest and in transit | **Partial implementation** | AES-256-GCM envelope encryption is implemented behind an injected key provider. TLS is a deployment-level requirement, not enforced by this adapter. The production KMS provider is not implemented. |
+| M9 | Key ownership and rotation | **Partial implementation** | The provider contract exposes active and historical keys; cipher supports re-encryption with the active key; PostgreSQL store has bounded optimistic rotation batches that avoid overwriting concurrent writes. No concrete cloud KMS adapter, scheduled rotation orchestration, key revocation policy, or live integration test exists. |
+| M10 | Retention, deletion, backup | **Partial implementation** | PostgreSQL rows receive a configurable expiry (90-day default), and reads reject expired rows. Physical expiry deletion is deliberately disabled: `deleteExpired` always fails closed until a deletion-ledger coordinator is supplied. Backup retention, an external deletion ledger/provider, and scheduled purge orchestration remain unimplemented. |
+| M11 | Durable audit | **Partial implementation** | A transactional PostgreSQL audit writer and hash chain are implemented. `0002_stage4_least_privilege_roles.sql` provisions NOLOGIN group roles, grants the audit writer INSERT-only access to events plus narrowly scoped chain-state access, and grants a separate reader SELECT-only access. Deployment-specific LOGIN membership, externally signed checkpoints, and live privilege/integration tests remain outstanding. |
+| M12 | Data classification | **Partial implementation** | The PostgreSQL adapter requires explicit `public`, `internal`, or `confidential` classification and rejects missing/unknown/`restricted` values; the SQL schema enforces the same allow-list. Classification is not yet enforced by the general GuardedMemoryPort or every possible backend. |
+| M13 | Migration strategy | **Partial implementation** | Encrypted records carry format, encryption, key, schema, and timestamp/expiry metadata. `PostgresMigrationRunner` now applies sorted, versioned SQL migrations transactionally, records SHA-256 checksums in `infinyx_meta.schema_migrations`, serializes competing runners with a transaction-scoped advisory lock, resumes already-applied migrations, and rejects edited historical migrations. Backup-compatible upgrade workflow and live PostgreSQL concurrency/recovery tests remain unimplemented. |
 
 ## Known limitations
 
@@ -90,17 +94,52 @@ For `read`, `write` and `delete`, in this order:
 - Concurrent writes to the same address are last-write-wins. No compare-and-set exists.
 - Audit events carry namespace and key (not values). Treat those as non-secret identifiers.
 
-## Decisions required from the project owner before a persistent adapter
+## Owner decisions — resolved as an engineering baseline
 
-1. Storage technology and hosting (free/open-source preference and budget limits apply).
-2. Encryption design and key custody, including rotation and loss-recovery policy (M8, M9).
-3. Retention, deletion and backup rules, including any legal or regulatory requirements (M10).
-4. Whether durable audit lives in the same store or a separate append-only system (M11).
-5. The versioned value envelope and migration approach (M13).
-6. Data classification scheme and which classes may be stored at all (M12).
+The Founder delegated the six technical choices to the engineering coordinator, prioritizing the simplest, fastest, maintainable secure option. The decisions are recorded in [ADR-0001: Stage 4 persistent memory baseline](../architecture/decisions/adr-0001-stage4-persistent-memory.md).
+
+Selected baseline:
+
+1. PostgreSQL as the first durable backend; managed hosting for hosted deployments.
+2. TLS plus application-layer AES-256-GCM envelope encryption; keys owned by an external KMS abstraction.
+3. Default 90-day memory retention and 30-day encrypted backup retention, with deletion replay after restore.
+4. Durable audit in a separate PostgreSQL schema with separate least-privilege roles, append-only writes, and externally stored signed checkpoints where available.
+5. Canonical JSON inside a versioned envelope with resumable, idempotent forward migrations.
+6. Explicit Public/Internal/Confidential/Restricted classification; Restricted data is denied, and unknown classification defaults to deny.
+
+These are architecture decisions, **not evidence that the controls have been implemented**. The existing reference store remains in-memory and non-durable. No persistence adapter may be connected until trusted authenticated identity is available to the composition root and the implementation gates in ADR-0001 pass.
+## Implementation progress on this draft branch
+
+The initial adapter, cipher, audit writer, baseline schema and least-privilege role migrations, bounded key-rotation primitive, resumable PostgreSQL migration runner, deletion tombstone/replay coordinator, and focused unit tests have been added. The memory table now carries an explicit `tenant_id` column, and point reads/writes/deletes and rotation updates are tenant-qualified using the guarded namespace prefix. Expired rows are rejected on read, but physical expiry sweeps are disabled until a deletion-ledger coordinator can record deletions outside the PostgreSQL backup/restore failure domain. These are library components only. They have **not** been wired into `src/server.ts`, have not been tested against a live PostgreSQL service or cloud KMS, and the exact current head must pass CI before this draft's validation gate is considered current. The SQL interfaces are structural so the repository does not yet take a dependency on a specific PostgreSQL driver.
+
+Remaining blocking work includes: a production KMS provider, rotation scheduling/monitoring and key-revocation procedure; DB role/grant provisioning and external audit checkpoints; classification enforcement across all MemoryPort implementations; backup/restore and deletion replay; authenticated identity composition; integration tests against PostgreSQL and a test KMS; and independent review. No real user data may be stored with this adapter until those gates pass.
 
 ## Review gate
 
 Per the change protocol: independent review of the exact head commit is required, and no
 merge to `main`, release or deployment is implied. Stage 5 (identity, agent runtime, tool
 execution) remains disabled and out of scope.
+
+
+Deletion replay boundary: the coordinator accepts a `MemoryDeletionLedgerPort` that MUST be implemented by a system outside the PostgreSQL backup/restore failure domain. The ledger adapter must assign append-order monotonic cursors and provide stable ordered pagination. The restore runbook must keep memory writes disabled until replay completes. The in-repository implementation is an orchestration contract with unit tests only; no external ledger provider is configured. Do not connect it to production or claim restore safety until an independently administered durable ledger, access controls, retention policy, and restore drill are verified.
+
+
+## Envelope v2: record-context authentication
+
+New writes through `PostgresEncryptedMemoryStore` use AES-256-GCM envelope version 2.
+The cipher authenticates a deterministic JSON tuple containing the domain separator,
+`tenantId`, full stored `namespace`, and `memory_key` as GCM Additional Authenticated
+Data (AAD). The tuple is supplied independently from the database row identity on read
+and key rotation; moving a valid envelope to another tenant, namespace, or record key
+therefore fails authentication.
+
+Version 1 envelopes remain readable without context for backward compatibility. A
+rotation batch that encounters a v1 record decrypts it using the v1 format and writes
+the replacement as v2 using the row's identity. Version 2 decryption fails closed if
+context is missing or differs. No bulk migration is automatic; use the existing bounded
+rotation operation under an approved maintenance process.
+
+The v2 format is a library-level compatibility change only: the stored envelope JSON
+fields remain stable, with the version fields identifying the AAD requirement. This
+does not make the adapter production-ready; live PostgreSQL/KMS tests, key lifecycle
+controls, and independent review remain required.

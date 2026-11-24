@@ -1,0 +1,19 @@
+import { describe, expect, it } from "vitest";
+import { generateKeyPairSync, sign } from "node:crypto";
+import { createJwtPrincipalVerifier, createPrincipalMemoryScope, AuthenticationError } from "../../src/core/authenticated-principal.js";
+const pair = generateKeyPairSync("rsa", { modulusLength: 2048 });
+const pem = pair.publicKey.export({ type: "spki", format: "pem" }).toString();
+const options = { issuer: "https://identity.example.test/", audience: "infinyx-api", publicKeyPem: pem, now: () => 1_800_000_000 };
+function token(claims: Record<string, unknown>, alg = "RS256", extraHeader: Record<string, unknown> = {}) { const encode = (v: unknown) => Buffer.from(JSON.stringify(v)).toString("base64url"); const input = encode({ alg, typ: "JWT", ...extraHeader }) + "." + encode(claims); return input + "." + sign("RSA-SHA256", Buffer.from(input), pair.privateKey).toString("base64url"); }
+const claims = { iss: options.issuer, aud: options.audience, sub: "user-42", tenant_id: "tenant-7", exp: 1_800_000_060 };
+describe("verified JWT principal", () => {
+ it("accepts signed RS256 tokens and derives a tenant-scoped memory identity", () => { const principal = createJwtPrincipalVerifier(options)(token(claims)); expect(createPrincipalMemoryScope(principal, "notes")).toEqual({ tenantId: "tenant-7", actorId: "user-42", moduleId: "notes" }); });
+ it("rejects expired, wrong issuer, wrong audience, missing tenant and wrong algorithm", () => { const verify = createJwtPrincipalVerifier(options); for (const bad of [token({ ...claims, exp: 1_799_999_990 }), token({ ...claims, iss: "https://evil.test" }), token({ ...claims, aud: "other" }), token({ iss: claims.iss, aud: claims.aud, sub: claims.sub, exp: claims.exp }), token(claims, "none")]) expect(() => verify(bad)).toThrow(AuthenticationError); });
+ it("accepts an audience array containing the configured API audience", () => { expect(createJwtPrincipalVerifier(options)(token({ ...claims, aud: ["other-api", options.audience] })).audience).toEqual(["other-api", options.audience]); });
+ it("rejects tokens that are not yet valid", () => { expect(() => createJwtPrincipalVerifier(options)(token({ ...claims, nbf: 1_800_000_010 }))).toThrow(AuthenticationError); });
+ it("rejects unsupported JOSE critical and unencoded-payload headers", () => { const verify = createJwtPrincipalVerifier(options); expect(() => verify(token(claims, "RS256", { crit: ["b64"], b64: false }))).toThrow(AuthenticationError); expect(() => verify(token(claims, "RS256", { b64: false }))).toThrow(AuthenticationError); });
+ it("rejects non-canonical base64url token segments", () => { const verify = createJwtPrincipalVerifier(options); const valid = token(claims); const [header, payload, signature] = valid.split("."); expect(() => verify(`${header}=.${payload}.${signature}`)).toThrow(AuthenticationError); });
+ it("accepts PKCS1 RSA public PEMs as well as SPKI", () => { const pkcs1Pem = pair.publicKey.export({ type: "pkcs1", format: "pem" }).toString(); expect(createJwtPrincipalVerifier({ ...options, publicKeyPem: pkcs1Pem })(token(claims)).subject).toBe("user-42"); });
+ it("rejects non-RSA and undersized RSA trust keys", () => { const ec = generateKeyPairSync("ec", { namedCurve: "prime256v1" }); const ecPem = ec.publicKey.export({ type: "spki", format: "pem" }).toString(); expect(() => createJwtPrincipalVerifier({ ...options, publicKeyPem: ecPem })).toThrow(TypeError); const weak = generateKeyPairSync("rsa", { modulusLength: 1024 }); const weakPem = weak.publicKey.export({ type: "spki", format: "pem" }).toString(); expect(() => createJwtPrincipalVerifier({ ...options, publicKeyPem: weakPem })).toThrow(TypeError); });
+ it("rejects fabricated principal objects", () => { expect(() => createPrincipalMemoryScope({ subject: "fake", tenantId: "t" } as never, "notes")).toThrow(AuthenticationError); });
+});

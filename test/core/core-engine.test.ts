@@ -221,6 +221,35 @@ describe("CoreEngine", () => {
     expect(engine.state).toBe("stopped");
   });
 
+  it("does not start a second policy shutdown while the first timed-out shutdown is still pending", async () => {
+    let releaseShutdown!: () => void;
+    const shutdownGate = new Promise<void>((resolve) => { releaseShutdown = resolve; });
+    const shutdown = vi.fn(() => shutdownGate);
+    const cleanup = vi.fn();
+    const engine = new CoreEngine({
+      policyShutdownTimeoutMs: 5,
+      policy: {
+        evaluate: async () => ({ effect: "deny" as const, reason: "test" }),
+        shutdown
+      }
+    });
+    engine.register({ id: "shutdown-probe", version: "1.0.0", stop: cleanup });
+    await engine.initialize();
+
+    await expect(engine.stop()).rejects.toMatchObject({ code: "POLICY_SHUTDOWN_TIMEOUT" });
+    expect(engine.state).toBe("unresolved");
+    expect(shutdown).toHaveBeenCalledTimes(1);
+    expect(cleanup).not.toHaveBeenCalled();
+
+    const retry = engine.stop();
+    expect(shutdown).toHaveBeenCalledTimes(1);
+    releaseShutdown();
+    await retry;
+
+    expect(cleanup).toHaveBeenCalledTimes(1);
+    expect(engine.state).toBe("stopped");
+  });
+
   it("marks shutdown unresolved on handler drain timeout and retries after the handler settles", async () => {
     const engine = new CoreEngine({ protectedOperationDrainTimeoutMs: 5, policy: { evaluate: async () => ({ effect: "allow" as const, reason: "test" }) } });
     let release!: () => void;
@@ -426,5 +455,34 @@ describe("CoreEngine guarded memory composition", () => {
     expect(first).toBeInstanceOf(GuardedMemoryPort);
     expect(second).toBeInstanceOf(GuardedMemoryPort);
     expect(first).not.toBe(second);
+  });
+});
+
+
+describe("CoreEngine injected Event Bus capability boundary", () => {
+  it("captures stable data methods and rejects cyclic prototype chains", async () => {
+    let originalPublishes = 0;
+    const events = {
+      subscribe: () => () => undefined,
+      publish: async () => { originalPublishes += 1; }
+    } as unknown as import("../../src/core/contracts.js").EventBusPort;
+    const engine = new CoreEngine({ events });
+
+    Object.defineProperty(events, "publish", {
+      configurable: true,
+      value: async () => { throw new Error("replacement Event Bus method invoked"); }
+    });
+    await engine.events.publish("test.event", {});
+    expect(originalPublishes).toBe(1);
+    expect(Object.isFrozen(engine.events)).toBe(true);
+
+    const target = {};
+    let cyclic!: import("../../src/core/contracts.js").EventBusPort;
+    cyclic = new Proxy(target, {
+      getPrototypeOf() {
+        return cyclic;
+      }
+    }) as import("../../src/core/contracts.js").EventBusPort;
+    expect(() => new CoreEngine({ events: cyclic })).toThrow(/event bus capability/i);
   });
 });

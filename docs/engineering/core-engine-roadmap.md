@@ -129,64 +129,53 @@ Keep policy evaluation separate from execution. Do not enable agent or tool exec
 
 ## Stage 4 — memory and persistence boundary
 
-The current Core Engine defines a MemoryPort contract but does not provide a persistence adapter.
+Core Engine retains the stable MemoryPort contract and now includes partial PostgreSQL, encryption, audit, migration, and deletion-replay library adapters. These components are not yet safe to connect to a live runtime; the remaining production gates are listed below.
 
-Before implementing an adapter, document and approve:
-- Data classification and tenant isolation.
-- Encryption at rest and in transit.
-- Key ownership and rotation.
-- Retention, deletion, and backup policy.
-- Access-control enforcement and audit events.
-- Failure behavior and migration strategy.
+### Stage 4 progress — owner decisions recorded; implementation still gated
 
-Implement storage behind the existing port only after these controls have testable acceptance criteria.
-
-### Stage 4 progress (proposal, pending independent review)
-
-- Controls and acceptance criteria are documented in
+- Existing controls and acceptance criteria remain documented in
   [`docs/security/memory-boundary-stage4.md`](../security/memory-boundary-stage4.md).
-- Implemented behind the unchanged `MemoryPort`: `GuardedMemoryPort` (tenant isolation,
-  default-deny policy, fail-closed audit, input validation, no aliasing) and a non-durable
-  `InMemoryMemoryStore` reference store, with regression tests in
-  `test/core/guarded-memory-port.test.ts`.
-- **No persistence adapter exists.** Encryption, key management, retention/backup, durable
-  audit, classification and migration remain open and need owner decisions listed in that
-  document.
-- Agent and Tool Execution remain out of scope and disabled. No merge, release or deployment
-  is authorized by this update.
+- `GuardedMemoryPort` and `InMemoryMemoryStore` remain the implemented guarded boundary
+  and non-durable reference store; the public `MemoryPort` contract is unchanged.
+- Founder delegated the six design choices. The selected baseline is recorded in
+  [ADR-0001](../architecture/decisions/adr-0001-stage4-persistent-memory.md):
+  PostgreSQL; TLS plus AES-256-GCM envelope encryption with external KMS custody;
+  90-day default memory retention and 30-day encrypted backup retention; separate
+  append-only audit schema/roles with signed external checkpoints; versioned canonical
+  JSON envelopes with resumable migrations; and four-level data classification with
+  Restricted data denied by default.
+- Initial implementation on this draft branch: AES-256-GCM envelope cipher with injected key-provider contract and bounded re-encryption support; PostgreSQL `MemoryPort` adapter with explicit tenant column/tenant-qualified queries, 90-day default expiry metadata and read-time expiry enforcement, fail-closed physical expiry deletion pending a deletion-ledger coordinator, and explicit classification allow-list; transactional PostgreSQL audit writer with hash-chain sequencing; baseline schema and least-privilege NOLOGIN role migrations; checksum-protected, advisory-lock-serialized PostgreSQL migration runner; and a deletion tombstone/replay coordinator designed to sit beneath `GuardedMemoryPort`.
+- Focused tests cover the cipher, adapter, audit writer, migration runner, and deletion replay contract. CI run `45218422158` passed all four jobs (Ubuntu, macOS, Windows, and Dependency Security Audit) on head `bd113dd7d4aee4db822b772509e1f2bcb12d0dc3`. Later authentication hardening commits are not covered by that run and require a fresh exact-head CI result.
+- This is **partial library implementation**, not production-ready persistence. No concrete cloud KMS adapter, external tombstone ledger, backup/restore provider or restore drill, external signed audit checkpoints, trusted authenticated identity composition, or live PostgreSQL/KMS integration test is complete. No persistence adapter is wired into the server or live Core runtime.
+- Persistence must remain disconnected from live user traffic until the request-scoped authenticated memory factory is integrated into a real workload and the ADR implementation gates pass. The factory now provides the principal-to-scope boundary, but it does not itself configure KMS, PostgreSQL, or a user-facing route.
+- Agent and Tool Execution remain disabled. No merge, release, deployment, or runtime
+  activation is authorized by this update.
+## Stage 5 — authenticated identity and execution boundaries
 
-## Stage 5 — identity, agent runtime, and tool execution
+### Authenticated identity — implementation present, deployment trust not configured
+- A configurable RS256 verifier, bearer middleware, verified-principal guard, and authenticated identity introspection route exist.
+- JWT verification is restricted to RSA keys of at least 2048 bits, canonical base64url segments, the RS256 algorithm, and the configured issuer/audience/expiry contract.
+- The actual identity provider, issuer, API audience, and public signing key/JWKS source have not been supplied by the owner. Production authentication therefore remains unconfigured; do not guess trust anchors.
+- Added a bounded OIDC/JWKS resolver and wired it into the server through an asynchronous RS256 verifier and fail-closed bearer middleware. Configuration requires `AUTH_ISSUER`, `AUTH_AUDIENCE`, and exactly one of `AUTH_JWKS_URL` or `AUTH_PUBLIC_KEY_PEM`; trust anchors are operator-supplied, never inferred. Focused tests cover signature/claim validation, async identity endpoint behavior, key rotation/cache, invalid endpoints, and provider outage.
+- Added `createAuthenticatedMemorySession`, a request-scoped factory that accepts only a verifier-issued principal and derives tenant/actor scope from signed claims; fabricated principals and caller-supplied tenant/actor IDs are rejected. It is exported from the supported Core package API and has focused tests.
+- The request-scoped factory is intentionally not installed as a singleton `CoreModule` memory capability: Core module contexts live for the module lifecycle, while authenticated users vary per request. A future HTTP workload must create a fresh session per authenticated request. The factory is not yet connected to a live user-facing memory route or PostgreSQL deployment.
 
-These capabilities are not enabled by the reviewed Core Engine v1 scope.
+### Agent and Tool Execution — disabled
+Require explicit capability grants, per-action policy checks, least-privilege boundaries, timeouts, cancellation, quotas, idempotency, immutable audit, secret redaction, and sandboxing before any execution path is enabled. Agent remains OFF and Phase 0 remains NOT GRANTED. Do not connect real providers, credentials, financial operations, or external tools without dedicated review and separate owner authorization.
 
-Design provider-neutral interfaces first. Require:
-- Authenticated principal and tenant context.
-- Explicit capability grants and per-action policy checks.
-- Least-privilege execution boundaries.
-- Timeouts, cancellation, quotas, and idempotency.
-- Immutable audit records and secret redaction.
-- Sandboxed execution and denial-by-default behavior.
-
-Do not connect real providers, credentials, financial operations, or external tools until their dedicated security review and owner authorization are complete.
-
-## Stage 6 — operational readiness
-
-After earlier stages pass:
-- Define health/readiness semantics and structured operational events.
-- Verify graceful shutdown under active HTTP requests and long-lived connections.
-- Define resource limits, restart policy, and deployment rollback criteria.
-- Produce an operations runbook and incident test plan.
-
-Production deployment remains a separately authorized action.
+## Stage 6 — operational readiness (partial; not production-ready)
+- `/health` liveness and `/ready` Core-lifecycle readiness endpoints are implemented and tested.
+- Graceful shutdown and process-level signal/fatal-event tests are covered by CI.
+- An operational runbook exists, but dependency-aware readiness, deployment resource limits, restart policy, rollback automation, load/soak/capacity evidence, and a tested incident/recovery procedure remain open.
+- No production deployment is authorized or claimed.
 
 ## Merge governance and PR target
 
-- PR #3 targets `fix/core-engine-shutdown-v6`; that is the intended integration base. It does not target `main`.
-- Hanieh, as Project Leader, owns the readiness decision and issues the explicit instruction to merge a specific PR/head SHA after technical acceptance.
-- Parvaneh performs GitHub operations only in response to Hanieh's explicit merge instruction for that specific PR/head SHA.
-- Hamid, as Founder & Owner, separately authorizes each Release and each Deployment. Neither merge readiness nor a merge instruction authorizes either action.
-- `main`, Release, and Deployment are outside the scope of the current PR #3 operation. No merge or deployment is to occur before Hanieh's final review and instruction.
-- Agent and Tool Execution remain out of scope.
+- Current implementation work is isolated in PR #61 (`fix/f01-f02-atomic-registration`) against `integration/infinyx-core-runtime-v1`.
+- PR #61 must remain Draft and unmerged pending independent review and closure of all required gates.
+- PR #60 remains untouched, Draft, and unmerged.
+- No merge, auto-merge, release, deployment, or Agent activation is authorized by implementation progress or CI success. Each remains subject to separate explicit Founder authorization.
+- Agent remains OFF; Phase 0 remains NOT GRANTED.
 
 ## Change and review protocol
 
@@ -198,3 +187,24 @@ For every stage:
 5. Obtain independent review of the exact head commit.
 6. Record unresolved risks explicitly.
 7. Stop before merge or deployment pending separate owner approval.
+
+
+### Stage 6 progress — operational runbook (working draft)
+
+- Added `docs/operations/core-engine-v1-runbook.md` against the current branch.
+- The runbook records the actual Node/npm commands, environment configuration, startup
+  ordering, current `/health` semantics, graceful HTTP/Core shutdown behavior, security
+  limitations, and deployment/rollback gates.
+- It records `/health` as liveness-only and `/ready` as Core-lifecycle readiness; neither checks downstream dependency health.
+- It does not claim production readiness. Resource limits, restart policy, rollback automation, load/soak measurements, dependency-aware readiness, and external infrastructure remain unverified.
+- Stage 6 remains **OPEN / draft pending independent review and owner approval**. This
+  documentation change does not authorize deployment or release.
+
+
+### Stage 6 progress — Core lifecycle readiness probe
+
+- Added `GET /ready`, wired to the actual `CoreEngine.state` in the server composition.
+- Returns HTTP 200 only while Core is `running`; returns HTTP 503 before readiness and
+  after shutdown begins. `GET /health` remains a liveness-only endpoint.
+- Added API regression coverage for starting, running and stopping states.
+- This is not dependency-aware readiness and does not establish production readiness.

@@ -35,19 +35,45 @@ describe("Agent security boundary", () => {
     await runtime.shutdown();
   });
 
-  it("does not change Core default-deny policy or register privileged operations", async () => {
+  it("does not bypass Core policy through AgentModule.execute", async () => {
     const core = new CoreEngine();
-    const agent = new AgentModule({ modelPort: { complete: async () => "answer" } });
-    core.register(agent);
+    const agent = new AgentModule({
+      modelPort: { complete: async () => "must-not-run" },
+      callerProvider: () => ({ actorId: "untrusted:caller" })
+    });
+    agent.registerWithCore(core);
     await core.initialize();
     await core.start();
 
+    await expect(agent.execute({ taskId: "policy-denied", prompt: "hello" }))
+      .resolves.toMatchObject({ status: "rejected" });
     await expect(core.policy.evaluate({
-      actorId: "untrusted",
+      actorId: "untrusted:caller",
       action: "agent.execute",
       resource: "agent:agent"
     })).resolves.toMatchObject({ effect: "deny" });
     expect(core.getModules().map((module) => module.id)).toEqual(["agent"]);
+    await core.stop();
+  });
+
+  it("fails closed when the host does not provide a trusted principal", async () => {
+    let policyCalls = 0;
+    const core = new CoreEngine({
+      policy: {
+        evaluate: async () => {
+          policyCalls += 1;
+          return { effect: "allow", reason: "must not be reached" };
+        }
+      }
+    });
+    const agent = new AgentModule({ modelPort: { complete: async () => "must-not-run" } });
+    agent.registerWithCore(core);
+    await core.initialize();
+    await core.start();
+
+    await expect(agent.execute({ taskId: "missing-principal", prompt: "hello" }))
+      .resolves.toMatchObject({ status: "rejected" });
+    expect(policyCalls).toBe(0);
     await core.stop();
   });
 });
