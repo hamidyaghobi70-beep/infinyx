@@ -17,7 +17,7 @@ END
 $stage4_create_roles$;
 
 -- Existing same-name roles are not trusted merely because they already exist.
--- Fail closed on login/elevated attributes and inherited role memberships.
+-- Fail closed on login/elevated attributes and direct or transitive role memberships.
 DO $stage4_validate_roles$
 DECLARE
   unsafe_roles text;
@@ -30,9 +30,17 @@ BEGIN
       r.rolcanlogin OR r.rolsuper OR r.rolcreatedb OR r.rolcreaterole
       OR r.rolreplication OR r.rolbypassrls
       OR EXISTS (
-        SELECT 1
-        FROM pg_auth_members AS membership
-        WHERE membership.member = r.oid
+        WITH RECURSIVE inherited_roles(role_oid) AS (
+          SELECT membership.roleid
+          FROM pg_auth_members AS membership
+          WHERE membership.member = r.oid
+          UNION
+          SELECT membership.roleid
+          FROM pg_auth_members AS membership
+          JOIN inherited_roles AS inherited
+            ON membership.member = inherited.role_oid
+        )
+        SELECT 1 FROM inherited_roles
       )
     );
 
