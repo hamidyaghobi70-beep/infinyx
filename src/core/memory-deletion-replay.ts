@@ -53,11 +53,24 @@ export class MemoryDeletionCoordinator implements MemoryPort {
   ) {
     this.#store = captureMethods<MemoryPort>(store, ["read", "write", "delete"]);
     this.#ledger = captureMethods<MemoryDeletionLedgerPort>(ledger, ["append", "listAfter"]);
-    this.#batchSize = options.batchSize ?? 250;
-    this.#now = options.now ?? (() => new Date());
+    let configuredBatchSize: unknown;
+    let configuredNow: unknown;
+    try {
+      configuredBatchSize = options.batchSize;
+      configuredNow = options.now;
+    } catch {
+      throw new TypeError("Deletion coordinator options must be readable.");
+    }
+    this.#batchSize = configuredBatchSize === undefined ? 250 : configuredBatchSize as number;
     if (!Number.isSafeInteger(this.#batchSize) || this.#batchSize < 1 || this.#batchSize > 5000) {
       throw new TypeError("batchSize must be an integer between 1 and 5000.");
     }
+    if (configuredNow !== undefined && typeof configuredNow !== "function") {
+      throw new TypeError("now must be a function.");
+    }
+    this.#now = configuredNow === undefined
+      ? () => new Date()
+      : (configuredNow as () => Date).bind(options);
     Object.freeze(this);
   }
 
