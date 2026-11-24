@@ -22,6 +22,62 @@ import { ProtectedOperationExecutor } from "./protected-operation-executor.js";
 
 const MAX_TIMER_DELAY_MS = 2_147_483_647;
 
+const MAX_EVENT_BUS_PROTOTYPE_DEPTH = 64;
+type CapturedEventBusMethod = (...args: never[]) => unknown;
+
+function captureEventBusMethod(
+  target: object,
+  name: keyof EventBusPort,
+  required: boolean
+): CapturedEventBusMethod | undefined {
+  let current: object | null = target;
+  const visited = new Set<object>();
+  try {
+    while (current !== null) {
+      if (visited.has(current) || visited.size >= MAX_EVENT_BUS_PROTOTYPE_DEPTH) {
+        throw new TypeError("Invalid Event Bus prototype chain.");
+      }
+      visited.add(current);
+      const descriptor = Object.getOwnPropertyDescriptor(current, name);
+      if (descriptor) {
+        if (!Object.prototype.hasOwnProperty.call(descriptor, "value")) {
+          throw new TypeError("Event Bus methods must be data properties.");
+        }
+        const method: unknown = descriptor.value;
+        if (method === undefined && !required) return undefined;
+        if (typeof method !== "function") {
+          throw new TypeError("Event Bus method must be a function.");
+        }
+        return Function.prototype.bind.call(method, target) as CapturedEventBusMethod;
+      }
+      current = Object.getPrototypeOf(current) as object | null;
+    }
+  } catch {
+    throw new TypeError("Event Bus capability must expose stable data methods.");
+  }
+  if (required) throw new TypeError("Event Bus capability must expose stable data methods.");
+  return undefined;
+}
+
+function captureEventBus(target: EventBusPort): EventBusPort {
+  const subscribe = captureEventBusMethod(target, "subscribe", true) as unknown as EventBusPort["subscribe"];
+  const publish = captureEventBusMethod(target, "publish", true) as unknown as EventBusPort["publish"];
+  const publishIfSubscribed = captureEventBusMethod(target, "publishIfSubscribed", false);
+  const hasSubscribers = captureEventBusMethod(target, "hasSubscribers", false);
+  return Object.freeze({
+    subscribe,
+    publish,
+    ...(publishIfSubscribed ? {
+      publishIfSubscribed: publishIfSubscribed as unknown as NonNullable<EventBusPort["publishIfSubscribed"]>
+    } : {}),
+    ...(hasSubscribers ? {
+      hasSubscribers: hasSubscribers as unknown as NonNullable<EventBusPort["hasSubscribers"]>
+    } : {})
+  });
+}
+
+
+
 function assertTimerDelay(name: string, value: number | undefined): void {
   if (value === undefined) return;
   if (!Number.isSafeInteger(value) || value <= 0 || value > MAX_TIMER_DELAY_MS) {
@@ -68,7 +124,7 @@ export class CoreEngine {
   constructor(private readonly options: CoreEngineOptions = {}) {
     assertTimerDelay("policyShutdownTimeoutMs", options.policyShutdownTimeoutMs);
     assertTimerDelay("protectedOperationDrainTimeoutMs", options.protectedOperationDrainTimeoutMs);
-    this.events = options.events ?? new InMemoryEventBus();
+    this.events = captureEventBus(options.events ?? new InMemoryEventBus());
     this.policy = options.policy
       ? new FailClosedPolicyEngine(options.policy, options.policyTimeoutMs)
       : new DefaultDenyPolicyEngine();
