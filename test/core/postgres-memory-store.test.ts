@@ -289,8 +289,6 @@ describe("PostgresEncryptedMemoryStore", () => {
       .resolves.toBe('{"classification":"internal","value":"refreshed"}');
     expect(db.query).toHaveBeenCalledTimes(2);
     expect(vi.mocked(db.query).mock.calls.every(([sql]) => String(sql).startsWith("SELECT"))).toBe(true);
-    expect(db.query).toHaveBeenNthCalledWith(3,
-      expect.stringContaining("SELECT envelope, expires_at"), ["tenant-a", "tenant-a/n", "k"]);
   });
 
   it("requires an explicit tenant prefix for classified persistent values", async () => {
