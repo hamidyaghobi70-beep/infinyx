@@ -48,6 +48,9 @@ try {
       to_regclass('infinyx_audit.memory_access_events') IS NOT NULL AS audit_table,
       EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'infinyx_memory_runtime') AS memory_role,
       EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'infinyx_audit_writer') AS audit_writer_role,
+      EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'infinyx_audit_reader') AS audit_reader_role,
+      (SELECT bool_and(NOT rolcanlogin AND NOT rolsuper AND NOT rolcreatedb AND NOT rolcreaterole AND NOT rolreplication AND NOT rolbypassrls)
+       FROM pg_roles WHERE rolname IN ('infinyx_memory_runtime', 'infinyx_audit_writer', 'infinyx_audit_reader')) AS stage4_roles_are_restricted,
       has_table_privilege('infinyx_memory_runtime', 'infinyx_memory.memory_entries', 'SELECT') AS memory_select,
       has_table_privilege('infinyx_audit_writer', 'infinyx_audit.memory_access_events', 'INSERT') AS audit_insert,
       has_table_privilege('infinyx_audit_writer', 'infinyx_audit.memory_access_events', 'UPDATE') AS audit_update,
@@ -58,6 +61,8 @@ try {
     audit_table: true,
     memory_role: true,
     audit_writer_role: true,
+    audit_reader_role: true,
+    stage4_roles_are_restricted: true,
     memory_select: true,
     audit_insert: true,
     audit_update: false,
