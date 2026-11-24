@@ -105,6 +105,32 @@ describe("PostgresEncryptedMemoryStore", () => {
     expect(db.query).not.toHaveBeenCalled();
   });
 
+  it("captures SQL and cipher capabilities before dependency replacement", async () => {
+    const db: SqlExecutor = { query: vi.fn(async () => ({ rows: [], rowCount: 1 })) };
+    const cipher = new MemoryValueCipher(keys());
+    const originalQuery = vi.spyOn(db, "query");
+    const originalEncrypt = vi.spyOn(cipher, "encrypt");
+    const store = new PostgresEncryptedMemoryStore(db, cipher);
+    db.query = vi.fn(async () => ({ rows: [], rowCount: 1 }));
+    cipher.encrypt = vi.fn(async () => { throw new Error("replacement cipher invoked"); });
+    await store.write(
+      { namespace: "tenant-a/notes", key: "k" },
+      '{"classification":"internal","value":"captured"}'
+    );
+    expect(originalEncrypt).toHaveBeenCalledOnce();
+    expect(originalQuery).toHaveBeenCalledOnce();
+  });
+
+  it("rejects throwing persistent memory option accessors", () => {
+    const db: SqlExecutor = { query: vi.fn(async () => ({ rows: [], rowCount: 1 })) };
+    const options = Object.defineProperty({}, "retentionDays", {
+      get() { throw new Error("untrusted options getter"); }
+    }) as never;
+    expect(() => new PostgresEncryptedMemoryStore(db, new MemoryValueCipher(keys()), options))
+      .toThrow("options must be readable");
+    expect(db.query).not.toHaveBeenCalled();
+  });
+
   it("snapshots an accessor-backed address once for the full write", async () => {
     const db: SqlExecutor = { query: vi.fn(async () => ({ rows: [], rowCount: 1 })) };
     const store = new PostgresEncryptedMemoryStore(db, new MemoryValueCipher(keys()));
