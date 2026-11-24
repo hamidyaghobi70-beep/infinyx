@@ -101,6 +101,49 @@ try {
   const rollback = await pool.query("SELECT to_regclass('public.infinyx_rollback_probe') AS probe");
   assert.equal(rollback.rows[0].probe, null, "failed migration batch must roll back prior DDL");
 
+  // A ledger-write failure after migration DDL must also roll back that DDL.
+  await pool.query(`
+    CREATE FUNCTION public.infinyx_reject_test_ledger_insert()
+    RETURNS trigger
+    LANGUAGE plpgsql
+    AS $
+    BEGIN
+      IF NEW.migration_id = '9003_integration_ledger_failure' THEN
+        RAISE EXCEPTION 'forced migration ledger insert failure';
+      END IF;
+      RETURN NEW;
+    END;
+    $
+  `);
+  await pool.query(`
+    CREATE TRIGGER infinyx_reject_test_ledger_insert
+    BEFORE INSERT ON infinyx_meta.schema_migrations
+    FOR EACH ROW
+    EXECUTE FUNCTION public.infinyx_reject_test_ledger_insert()
+  `);
+  try {
+    await assert.rejects(
+      runner.run([{
+        id: "9003_integration_ledger_failure",
+        sql: "CREATE TABLE public.infinyx_ledger_failure_probe (id integer PRIMARY KEY);"
+      }]),
+      /forced migration ledger insert failure/
+    );
+    const ledgerFailureRollback = await pool.query(`
+      SELECT
+        to_regclass('public.infinyx_ledger_failure_probe') AS probe,
+        EXISTS (
+          SELECT 1 FROM infinyx_meta.schema_migrations
+          WHERE migration_id = '9003_integration_ledger_failure'
+        ) AS ledger_row
+    `);
+    assert.equal(ledgerFailureRollback.rows[0].probe, null, "ledger insert failure must roll back migration DDL");
+    assert.equal(ledgerFailureRollback.rows[0].ledger_row, false, "failed ledger insert must leave no migration record");
+  } finally {
+    await pool.query("DROP TRIGGER infinyx_reject_test_ledger_insert ON infinyx_meta.schema_migrations");
+    await pool.query("DROP FUNCTION public.infinyx_reject_test_ledger_insert()");
+  }
+
   console.log("PostgreSQL integration checks passed: migrations, idempotency, least-privilege grants, and atomic rollback.");
 } finally {
   await pool.end();
