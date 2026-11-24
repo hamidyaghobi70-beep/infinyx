@@ -2,7 +2,7 @@
 -- Run as a database administrator/migration owner. Bind service LOGIN roles to these
 -- NOLOGIN groups separately in deployment configuration; never store passwords here.
 
-DO $$
+DO $stage4_create_roles$
 BEGIN
   IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'infinyx_memory_runtime') THEN
     EXECUTE 'CREATE ROLE infinyx_memory_runtime NOLOGIN';
@@ -14,11 +14,11 @@ BEGIN
     EXECUTE 'CREATE ROLE infinyx_audit_reader NOLOGIN';
   END IF;
 END
-$;
+$stage4_create_roles$;
 
 -- Existing same-name roles are not trusted merely because they already exist.
 -- Fail closed rather than silently retaining LOGIN or elevated cluster privileges.
-DO $
+DO $stage4_validate_roles$
 DECLARE
   unsafe_roles text;
 BEGIN
@@ -32,7 +32,7 @@ BEGIN
     RAISE EXCEPTION 'Stage 4 roles have unsafe attributes; refusing grants: %', unsafe_roles;
   END IF;
 END
-$;
+$stage4_validate_roles$;
 
 REVOKE ALL ON SCHEMA infinyx_memory FROM PUBLIC;
 REVOKE ALL ON SCHEMA infinyx_audit FROM PUBLIC;
