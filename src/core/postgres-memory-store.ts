@@ -33,18 +33,49 @@ export class PostgresEncryptedMemoryStore implements MemoryPort {
   readonly #table: string;
   readonly #retentionDays: number;
   readonly #now: () => Date;
+  readonly #query: SqlExecutor["query"];
+  readonly #encrypt: MemoryValueCipher["encrypt"];
+  readonly #decrypt: MemoryValueCipher["decrypt"];
+  readonly #reencrypt: MemoryValueCipher["reencrypt"];
+  readonly #activeKeyId: MemoryValueCipher["activeKeyId"];
 
   constructor(
-    private readonly db: SqlExecutor,
-    private readonly cipher: MemoryValueCipher,
+    db: SqlExecutor,
+    cipher: MemoryValueCipher,
     options: PostgresMemoryStoreOptions = {}
   ) {
-    if (options.tableName !== undefined && options.tableName !== "infinyx_memory.memory_entries") {
+    try {
+      const query = Reflect.get(db, "query");
+      const encrypt = Reflect.get(cipher, "encrypt");
+      const decrypt = Reflect.get(cipher, "decrypt");
+      const reencrypt = Reflect.get(cipher, "reencrypt");
+      const activeKeyId = Reflect.get(cipher, "activeKeyId");
+      if (typeof query !== "function" || typeof encrypt !== "function" ||
+          typeof decrypt !== "function" || typeof reencrypt !== "function" ||
+          typeof activeKeyId !== "function") throw new TypeError();
+      this.#query = query.bind(db) as SqlExecutor["query"];
+      this.#encrypt = encrypt.bind(cipher) as MemoryValueCipher["encrypt"];
+      this.#decrypt = decrypt.bind(cipher) as MemoryValueCipher["decrypt"];
+      this.#reencrypt = reencrypt.bind(cipher) as MemoryValueCipher["reencrypt"];
+      this.#activeKeyId = activeKeyId.bind(cipher) as MemoryValueCipher["activeKeyId"];
+    } catch {
+      throw new TypeError("Persistent memory dependencies must expose readable methods.");
+    }
+    let tableName: unknown, retentionDays: unknown, now: unknown;
+    try {
+      tableName = options.tableName;
+      retentionDays = options.retentionDays;
+      now = options.now;
+    } catch {
+      throw new TypeError("Persistent memory options must be readable.");
+    }
+    if (tableName !== undefined && tableName !== "infinyx_memory.memory_entries") {
       throw new TypeError("Unsupported persistent memory table.");
     }
-    this.#table = options.tableName ?? "infinyx_memory.memory_entries";
-    this.#retentionDays = options.retentionDays ?? 90;
-    this.#now = options.now ?? (() => new Date());
+    this.#table = tableName ?? "infinyx_memory.memory_entries";
+    this.#retentionDays = retentionDays === undefined ? 90 : retentionDays as number;
+    if (now !== undefined && typeof now !== "function") throw new TypeError("now must be a function.");
+    this.#now = now === undefined ? () => new Date() : (now as () => Date).bind(options);
     if (!Number.isSafeInteger(this.#retentionDays) || this.#retentionDays < 1 || this.#retentionDays > 3650) {
       throw new TypeError("retentionDays must be an integer between 1 and 3650.");
     }
@@ -53,7 +84,7 @@ export class PostgresEncryptedMemoryStore implements MemoryPort {
   async read(address: MemoryAddress): Promise<unknown | null> {
     const target = snapshotMemoryAddress(address);
     const tenantId = tenantFromScopedNamespace(target.namespace);
-    const result = await this.db.query<{ envelope: StoredMemoryEnvelope; expires_at: Date | string }>(
+    const result = await this.#query<{ envelope: StoredMemoryEnvelope; expires_at: Date | string }>(
       `SELECT envelope, expires_at FROM ${this.#table}
        WHERE tenant_id = $1 AND namespace = $2 AND memory_key = $3 LIMIT 1`,
       [tenantId, target.namespace, target.key]
@@ -68,7 +99,7 @@ export class PostgresEncryptedMemoryStore implements MemoryPort {
       // The row may have been refreshed after SELECT. Delete only the exact
       // expired version observed above; an unconditional delete can erase a
       // concurrent write that extended the record's retention window.
-      const deletion = await this.db.query(
+      const deletion = await this.#query(
         `DELETE FROM ${this.#table}
          WHERE tenant_id = $1 AND namespace = $2 AND memory_key = $3
            AND expires_at = $4 AND envelope = $5::jsonb`,
@@ -79,7 +110,7 @@ export class PostgresEncryptedMemoryStore implements MemoryPort {
       // A zero-row conditional delete means the observed version changed (or
       // another reader removed it). Re-read once so a concurrent refresh is
       // visible to this caller instead of being reported as a false cache miss.
-      const refreshed = await this.db.query<{ envelope: StoredMemoryEnvelope; expires_at: Date | string }>(
+      const refreshed = await this.#query<{ envelope: StoredMemoryEnvelope; expires_at: Date | string }>(
         `SELECT envelope, expires_at FROM ${this.#table}
          WHERE tenant_id = $1 AND namespace = $2 AND memory_key = $3 LIMIT 1`,
         [tenantId, target.namespace, target.key]
@@ -91,9 +122,9 @@ export class PostgresEncryptedMemoryStore implements MemoryPort {
         throw new Error("Persistent memory record has an invalid expiry timestamp.");
       }
       if (currentExpiresAt <= this.#now().getTime()) return null;
-      return this.cipher.decrypt(current.envelope, encryptionContext(target, tenantId));
+      return this.#decrypt(current.envelope, encryptionContext(target, tenantId));
     }
-    return this.cipher.decrypt(row.envelope, encryptionContext(target, tenantId));
+    return this.#decrypt(row.envelope, encryptionContext(target, tenantId));
   }
 
   async write(address: MemoryAddress, value: unknown): Promise<void> {
@@ -110,7 +141,7 @@ export class PostgresEncryptedMemoryStore implements MemoryPort {
       throw new TypeError("Persistent memory classification is missing, unsupported, or restricted.");
     }
     const tenantId = tenantFromScopedNamespace(target.namespace);
-    const encrypted = await this.cipher.encrypt(value, encryptionContext(target, tenantId));
+    const encrypted = await this.#encrypt(value, encryptionContext(target, tenantId));
     const now = this.#now();
     const expiresAt = new Date(now.getTime() + this.#retentionDays * 24 * 60 * 60 * 1000);
     const envelope: StoredMemoryEnvelope = Object.freeze({
@@ -121,7 +152,7 @@ export class PostgresEncryptedMemoryStore implements MemoryPort {
       expiresAt: expiresAt.toISOString(),
       classification
     });
-    await this.db.query(
+    await this.#query(
       `INSERT INTO ${this.#table} (tenant_id, namespace, memory_key, envelope, classification, created_at, updated_at, expires_at)
        VALUES ($1, $2, $3, $4::jsonb, $5, $6, $6, $7)
        ON CONFLICT (tenant_id, namespace, memory_key) DO UPDATE SET
@@ -133,7 +164,7 @@ export class PostgresEncryptedMemoryStore implements MemoryPort {
   async delete(address: MemoryAddress): Promise<void> {
     const target = snapshotMemoryAddress(address);
     const tenantId = tenantFromScopedNamespace(target.namespace);
-    await this.db.query(`DELETE FROM ${this.#table} WHERE tenant_id = $1 AND namespace = $2 AND memory_key = $3`, [
+    await this.#query(`DELETE FROM ${this.#table} WHERE tenant_id = $1 AND namespace = $2 AND memory_key = $3`, [
       tenantId, target.namespace, target.key
     ]);
   }
@@ -147,8 +178,8 @@ export class PostgresEncryptedMemoryStore implements MemoryPort {
     if (!Number.isSafeInteger(batchSize) || batchSize < 1 || batchSize > 1000) {
       throw new TypeError("batchSize must be between 1 and 1000.");
     }
-    const activeKeyId = await this.cipher.activeKeyId();
-    const selected = await this.db.query<{
+    const activeKeyId = await this.#activeKeyId();
+    const selected = await this.#query<{
       tenant_id: string;
       namespace: string;
       memory_key: string;
@@ -167,9 +198,9 @@ export class PostgresEncryptedMemoryStore implements MemoryPort {
     for (const row of selected.rows) {
       try {
         const context = encryptionContext({ namespace: row.namespace, key: row.memory_key }, row.tenant_id);
-        const encrypted = await this.cipher.reencrypt(row.envelope, context);
+        const encrypted = await this.#reencrypt(row.envelope, context);
         const updatedAt = this.#now();
-        const result = await this.db.query(
+        const result = await this.#query(
           `UPDATE ${this.#table}
            SET envelope = $1::jsonb, updated_at = $2
            WHERE tenant_id = $3 AND namespace = $4 AND memory_key = $5 AND envelope = $6::jsonb`,
