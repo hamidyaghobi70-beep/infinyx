@@ -121,18 +121,21 @@ describe("PostgresEncryptedMemoryStore", () => {
 
   it("captures SQL and cipher capabilities before dependency replacement", async () => {
     const db: SqlExecutor = { query: vi.fn(async () => ({ rows: [], rowCount: 1 })) };
+    const cipherEncrypt = vi.spyOn(MemoryValueCipher.prototype, "encrypt");
     const cipher = new MemoryValueCipher(keys());
     const originalQuery = vi.spyOn(db, "query");
-    const originalEncrypt = vi.spyOn(cipher, "encrypt");
     const store = new PostgresEncryptedMemoryStore(db, cipher);
     db.query = vi.fn(async () => ({ rows: [], rowCount: 1 }));
-    cipher.encrypt = vi.fn(async () => { throw new Error("replacement cipher invoked"); });
+    MemoryValueCipher.prototype.encrypt = vi.fn(async () => {
+      throw new Error("replacement cipher invoked");
+    });
     await store.write(
       { namespace: "tenant-a/notes", key: "k" },
       '{"classification":"internal","value":"captured"}'
     );
-    expect(originalEncrypt).toHaveBeenCalledOnce();
+    expect(cipherEncrypt).toHaveBeenCalledOnce();
     expect(originalQuery).toHaveBeenCalledOnce();
+    MemoryValueCipher.prototype.encrypt = cipherEncrypt.getMockImplementation() as typeof MemoryValueCipher.prototype.encrypt;
   });
 
   it("rejects throwing persistent memory option accessors", () => {
