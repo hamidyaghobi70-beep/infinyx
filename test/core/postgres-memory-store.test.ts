@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import { randomBytes } from "node:crypto";
 import { MemoryValueCipher, type MemoryKeyProvider } from "../../src/core/memory-encryption.js";
 import { PostgresEncryptedMemoryStore, type SqlExecutor } from "../../src/core/postgres-memory-store.js";
+import type { MemoryAddress } from "../../src/core/contracts.js";
 
 function keys(): MemoryKeyProvider {
   const key = randomBytes(32);
