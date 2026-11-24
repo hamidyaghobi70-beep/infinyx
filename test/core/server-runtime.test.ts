@@ -204,6 +204,52 @@ describe("server shutdown runtime", () => {
     expect(exit).toHaveBeenCalledWith(0);
   });
 
+  it("retries CoreEngine stop once and exits successfully after transient cleanup failure", async () => {
+    let attempts = 0;
+    const setup = fixture({
+      stop: async () => {
+        attempts += 1;
+        if (attempts === 1) throw new Error("transient cleanup failure");
+      }
+    });
+    const runtime = await setup.start();
+
+    await runtime.shutdown();
+
+    expect(setup.core.stop).toHaveBeenCalledTimes(2);
+    expect(setup.logger.error).toHaveBeenCalledWith(
+      expect.objectContaining({ attempt: 1, maxAttempts: 2 }),
+      "Core Engine shutdown failed; retrying once"
+    );
+    expect(setup.exit).toHaveBeenCalledOnce();
+    expect(setup.exit).toHaveBeenCalledWith(0);
+    expect(setup.fakeProcess.exitCode).toBe(0);
+  });
+
+  it("exits non-zero after both CoreEngine stop attempts fail", async () => {
+    const firstError = new Error("first cleanup failure");
+    const retryError = new Error("second cleanup failure");
+    let attempts = 0;
+    const setup = fixture({
+      stop: async () => {
+        attempts += 1;
+        throw attempts === 1 ? firstError : retryError;
+      }
+    });
+    const runtime = await setup.start();
+
+    await runtime.shutdown();
+
+    expect(setup.core.stop).toHaveBeenCalledTimes(2);
+    expect(setup.logger.error).toHaveBeenCalledWith(
+      expect.objectContaining({ err: retryError, firstError, attempt: 2, maxAttempts: 2 }),
+      "Core Engine shutdown failed after retry"
+    );
+    expect(setup.exit).toHaveBeenCalledOnce();
+    expect(setup.exit).toHaveBeenCalledWith(1);
+    expect(setup.fakeProcess.exitCode).toBe(1);
+  });
+
   it("does not invoke the real process exit in tests", async () => {
     const setup = fixture();
     const runtime = await setup.start();
