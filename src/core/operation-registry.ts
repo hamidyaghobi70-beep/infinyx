@@ -99,11 +99,11 @@ export class OperationRegistry {
     }
   }
 
-  run<T>(operation: () => T | PromiseLike<T>): Promise<T> {
+  run<T>(operation: () => T | PromiseLike<T>): Promise<Awaited<T>> {
     return this.runWithAdmission(operation, false);
   }
 
-  runCleanup<T>(operation: () => T | PromiseLike<T>): Promise<T> {
+  runCleanup<T>(operation: () => T | PromiseLike<T>): Promise<Awaited<T>> {
     // Cleanup is an internal root operation. Its nested service calls remain
     // tracked as children even though ordinary admission has been closed.
     return this.runWithAdmission(operation, true);
@@ -112,10 +112,21 @@ export class OperationRegistry {
   private runWithAdmission<T>(
     operation: () => T | PromiseLike<T>,
     allowClosedRoot: boolean
-  ): Promise<T> {
+  ): Promise<Awaited<T>> {
     const parent = this.context.getStore();
-    const handle = this.tryEnter(parent, allowClosedRoot);
-    const promise = this.context.run(handle, () => Promise.resolve().then(operation));
+    let handle: OperationHandle;
+    try {
+      handle = this.tryEnter(parent, allowClosedRoot);
+    } catch (error) {
+      return Promise.reject(error);
+    }
+    const promise = this.context.run(handle, () => {
+      try {
+        return Promise.resolve(operation());
+      } catch (error) {
+        return Promise.reject(error);
+      }
+    });
     return handle.track(promise);
   }
 
