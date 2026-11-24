@@ -17,7 +17,7 @@ describe("JWKS key resolver", () => {
     expect(fetcher).toHaveBeenCalledTimes(1);
   });
 
-  it("captures resolver options and protects cache state from instance replacement", async () => {
+  it("reads resolver options once and freezes the instance", async () => {
     let urlReads = 0;
     let fetcherReads = 0;
     const fetcher = vi.fn(async () => response([{ ...jwk, kid: "fixed", use: "sig", alg: "RS256" }]));
