@@ -49,7 +49,7 @@ export class JwksKeyResolver {
     if (!kid || kid.length > 256) throw new TypeError("A valid JWT key id is required.");
     const cached = this.cache.get(kid);
     if (cached && cached.expiresAt > this.now()) return cached.key;
-    await this.refresh(!cached || cached.expiresAt <= this.now());
+    await this.refresh(this.cache.size === 0 || (cached !== undefined && cached.expiresAt <= this.now()));
     const refreshed = this.cache.get(kid);
     if (!refreshed || refreshed.expiresAt <= this.now()) throw new Error("No trusted RS256 signing key matches this key id.");
     return refreshed.key;
@@ -58,6 +58,7 @@ export class JwksKeyResolver {
   private async refresh(force: boolean): Promise<void> {
     if (!force && this.now() - this.lastRefreshAt < this.refreshCooldownMs) return;
     if (!this.refreshInFlight) {
+      this.lastRefreshAt = this.now();
       this.refreshInFlight = this.load().finally(() => { this.refreshInFlight = undefined; });
     }
     await this.refreshInFlight;
@@ -111,6 +112,5 @@ export class JwksKeyResolver {
     }
     if (next.size === 0) throw new Error("JWKS contains no acceptable RS256 signing keys.");
     this.cache = next;
-    this.lastRefreshAt = this.now();
   }
 }
