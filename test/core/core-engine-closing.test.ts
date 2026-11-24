@@ -47,4 +47,28 @@ describe("CoreEngine CLOSING lifecycle", () => {
     await engine.stop();
     expect(engine.state).toBe("stopped");
   });
+  it("C03: reports failed cleanup honestly while keeping admission closed, then permits retry", async () => {
+    const engine = new CoreEngine();
+    let attempts = 0;
+    engine.register({
+      id: "worker",
+      version: "1.0.0",
+      stop: () => {
+        attempts += 1;
+        if (attempts === 1) throw new Error("temporary cleanup failure");
+      }
+    });
+
+    await engine.initialize();
+    await engine.start();
+    engine.requestClose();
+
+    await expect(engine.stop()).rejects.toThrow(/failed to stop/i);
+    expect(engine.state).toBe("failed");
+
+    await engine.stop();
+    expect(engine.state).toBe("stopped");
+    expect(attempts).toBe(2);
+  });
+
 });

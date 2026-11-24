@@ -37,7 +37,7 @@ export class CoreEngine {
   }
 
   get state(): CoreLifecycleState {
-    return this.closingRequested && this.lifecycle !== "stopped"
+    return this.closingRequested && !["stopped", "failed"].includes(this.lifecycle)
       ? "closing"
       : this.lifecycle;
   }
