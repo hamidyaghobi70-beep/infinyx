@@ -63,8 +63,10 @@ export function snapshotBoundedPolicyData<T>(input: T): T | undefined {
         }
         const length = lengthDescriptor.value;
         const keys = Reflect.ownKeys(value);
-        // Check the returned key count before scanning it. ownKeys itself may
-        // already have allocated the list or executed arbitrary Proxy code.
+        // Check the returned key count before scanning it. Reflect.ownKeys has
+        // already materialized the complete key list at this point, even for
+        // an ordinary object; this limit does not cap that allocation. For a
+        // Proxy, ownKeys may additionally execute arbitrary user code.
         if (length > MAX_CONTAINER_ENTRIES || keys.length > MAX_CONTAINER_ENTRIES + 1) {
           throw new TypeError("Policy input exceeds resource limits.");
         }
@@ -86,6 +88,8 @@ export function snapshotBoundedPolicyData<T>(input: T): T | undefined {
         return Object.freeze(result);
       }
 
+      // Reflection materializes every own key before this limit is enforceable.
+      // This is a traversal bound, not a pre-allocation memory bound.
       const keys = Reflect.ownKeys(value);
       if (keys.length > MAX_CONTAINER_ENTRIES || keys.some((key) => typeof key !== "string")) {
         throw new TypeError("Policy input exceeds resource limits or contains symbol keys.");

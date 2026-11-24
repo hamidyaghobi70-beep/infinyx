@@ -37,6 +37,13 @@ describe("snapshotBoundedPolicyData", () => {
     expect(snapshotBoundedPolicyData({ values: Array.from({ length: 17 }, () => "c".repeat(16_000)) })).toBeUndefined();
   });
 
+  it("rejects an ordinary record with more than the maximum number of own keys", () => {
+    const oversized: Record<string, number> = {};
+    for (let index = 0; index < 1_001; index += 1) oversized[`key-${index}`] = index;
+
+    expect(snapshotBoundedPolicyData(oversized)).toBeUndefined();
+  });
+
   it("accepts the exact aggregate UTF-8 byte limit and rejects one byte over", () => {
     const atLimit = Array.from({ length: 16 }, () => "x".repeat(16_384));
     const overLimit = [...atLimit, "y"];
@@ -66,7 +73,7 @@ describe("snapshotBoundedPolicyData", () => {
     expect(Object.isFrozen(snapshot?.nested.values)).toBe(true);
   });
 
-  it("documents that Proxy ownKeys traps run before returned-key limits can be checked", () => {
+  it("documents that own-key enumeration completes before returned-key limits can be checked for Proxies", () => {
     const observed: string[] = [];
     const keys = Array.from({ length: 1_001 }, (_, index) => `k${index}`);
     const input = new Proxy({}, {
