@@ -106,14 +106,14 @@ try {
     CREATE FUNCTION public.infinyx_reject_test_ledger_insert()
     RETURNS trigger
     LANGUAGE plpgsql
-    AS $
+    AS $infinyx$
     BEGIN
       IF NEW.migration_id = '9003_integration_ledger_failure' THEN
         RAISE EXCEPTION 'forced migration ledger insert failure';
       END IF;
       RETURN NEW;
     END;
-    $
+    $infinyx$
   `);
   await pool.query(`
     CREATE TRIGGER infinyx_reject_test_ledger_insert
