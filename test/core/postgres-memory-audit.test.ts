@@ -38,7 +38,34 @@ describe("PostgresMemoryAuditPort", () => {
     expect(state.connection.release).toHaveBeenCalledOnce();
   });
 
-  it("rolls back and propagates audit failures so guarded writes fail closed", async () => {
+  it("rolls back when the audit event insert affects no rows", async () => {
+    const state = setup();
+    state.connection.query = vi.fn(async (sql: string, values?: readonly unknown[]) => {
+      state.statements.push({ sql, values });
+      if (sql.startsWith("SELECT sequence")) return { rows: [{ sequence: 0, head_hash: "0".repeat(64) }] };
+      if (sql.startsWith("INSERT")) return { rows: [], rowCount: 0 };
+      return { rows: [], rowCount: 1 };
+    });
+    const audit = new PostgresMemoryAuditPort(state.pool);
+    await expect(audit.publishDecision(event)).rejects.toThrow("Audit event insert did not affect exactly one row.");
+    expect(state.statements.some((s) => s.sql === "ROLLBACK")).toBe(true);
+    expect(state.statements.some((s) => s.sql.startsWith("UPDATE"))).toBe(false);
+  });
+
+  it("rejects malformed chain state before appending", async () => {
+    const state = setup();
+    state.connection.query = vi.fn(async (sql: string, values?: readonly unknown[]) => {
+      state.statements.push({ sql, values });
+      if (sql.startsWith("SELECT sequence")) return { rows: [{ sequence: 0, head_hash: "invalid" }] };
+      return { rows: [], rowCount: 1 };
+    });
+    const audit = new PostgresMemoryAuditPort(state.pool);
+    await expect(audit.publishDecision(event)).rejects.toThrow("Audit chain state is invalid.");
+    expect(state.statements.some((s) => s.sql === "ROLLBACK")).toBe(true);
+    expect(state.statements.some((s) => s.sql.startsWith("INSERT"))).toBe(false);
+  });
+
+  it("rolls back and propagates audit failures so guarded writes fail closed", async () =>
     const state = setup(true);
     const audit = new PostgresMemoryAuditPort(state.pool);
     await expect(audit.publishDecision(event)).rejects.toThrow("database unavailable");
