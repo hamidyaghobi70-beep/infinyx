@@ -9,7 +9,9 @@ import {
 import type { MemoryAuditPort } from "../core/guarded-memory-port.js";
 import { GuardedMemoryPort } from "../core/guarded-memory-port.js";
 
-const SESSION_LOCAL = "authenticatedMemorySession";
+// A private weak association prevents response.locals or downstream middleware from
+// injecting or replacing the capability returned for a request.
+const requestSessions = new WeakMap<Response, GuardedMemoryPort>();
 
 export interface AuthenticatedMemoryGatewayOptions {
   /** Fixed by trusted server composition; never read from request input. */
@@ -21,9 +23,9 @@ export interface AuthenticatedMemoryGatewayOptions {
 
 /**
  * Creates a new guarded memory capability for each authenticated HTTP request.
- * The capability is placed in response.locals for downstream handlers only;
- * it is never installed in CoreEngine's module-lifetime context or shared across
- * concurrent requests.
+ * The capability is held in a private WeakMap keyed by the Express response;
+ * it is never exposed through mutable response.locals, installed in CoreEngine's
+ * module-lifetime context, or shared across concurrent requests.
  */
 export function createAuthenticatedMemoryGateway(
   options: AuthenticatedMemoryGatewayOptions
@@ -60,7 +62,7 @@ export function createAuthenticatedMemoryGateway(
       if (!(session instanceof GuardedMemoryPort) || session.scopeModuleId !== moduleId) {
         throw new TypeError("Invalid request memory capability.");
       }
-      response.locals[SESSION_LOCAL] = session;
+      requestSessions.set(response, session);
       next();
     } catch {
       // Authentication/session composition failures never fall back to an
@@ -74,6 +76,5 @@ export function createAuthenticatedMemoryGateway(
 export function getAuthenticatedMemorySession(
   response: Response
 ): GuardedMemoryPort | null {
-  const candidate: unknown = response.locals[SESSION_LOCAL];
-  return candidate instanceof GuardedMemoryPort ? candidate : null;
+  return requestSessions.get(response) ?? null;
 }
