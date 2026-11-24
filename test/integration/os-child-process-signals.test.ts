@@ -98,4 +98,78 @@ describe("OS child-process signal handling", () => {
     },
     15_000
   );
+
+  it("CP02: exits non-zero after drain timeout while an accepted operation is still active", async () => {
+    const runtimeUrl = pathToFileURL(resolve(process.cwd(), "dist/core/server-runtime.js")).href;
+    const engineUrl = pathToFileURL(resolve(process.cwd(), "dist/core/core-engine.js")).href;
+    const script = `
+      import express from "express";
+      import { CoreEngine } from ${JSON.stringify(engineUrl)};
+      import { startServerRuntime } from ${JSON.stringify(runtimeUrl)};
+      let markActive;
+      const active = new Promise((resolve) => { markActive = resolve; });
+      const core = new CoreEngine({ operationDrainTimeoutMs: 150 });
+      core.events.subscribe("blocked-operation", async () => {
+        markActive();
+        await new Promise(() => undefined);
+      });
+      await startServerRuntime({
+        app: express(),
+        core,
+        process,
+        exit: (code) => process.stdout.write("EXIT:" + code + "\\n", () => process.exit(code)),
+        logger: { info: () => undefined, error: () => undefined },
+        host: "127.0.0.1",
+        port: 0,
+        environment: "test",
+        drainTimeoutMs: 1000
+      });
+      const pending = core.events.publish("blocked-operation", {});
+      await active;
+      process.stdout.write("ACTIVE\\n");
+      process.stdout.write("READY\\n");
+      void pending;
+    `;
+    const child = spawn(process.execPath, ["--input-type=module", "-e", script], {
+      cwd: process.cwd(),
+      stdio: ["ignore", "pipe", "pipe"]
+    });
+    let stdout = "";
+    let stderr = "";
+    child.stdout?.setEncoding("utf8");
+    child.stderr?.setEncoding("utf8");
+    child.stdout?.on("data", (chunk: string) => { stdout += chunk; });
+    child.stderr?.on("data", (chunk: string) => { stderr += chunk; });
+
+    try {
+      await waitForReady(child, () => stdout);
+      expect(stdout).toContain("ACTIVE");
+      const exited = new Promise<{ code: number | null; signal: NodeJS.Signals | null }>((resolveExit) => {
+        child.once("exit", (code, exitSignal) => resolveExit({ code, signal: exitSignal }));
+      });
+      expect(child.kill("SIGTERM")).toBe(true);
+      const result = await new Promise<{ code: number | null; signal: NodeJS.Signals | null }>((resolveExit, reject) => {
+        const timeout = setTimeout(() => reject(new Error("Child process did not exit after Core Engine drain timeout.")), 10_000);
+        exited.then(
+          (value) => {
+            clearTimeout(timeout);
+            resolveExit(value);
+          },
+          (error: unknown) => {
+            clearTimeout(timeout);
+            reject(error);
+          }
+        );
+      });
+
+      expect(result.code).toBe(1);
+      expect(result.signal).toBeNull();
+      expect(stdout).toContain("EXIT:1");
+      expect(stdout).not.toContain("STOPPED");
+      expect(stderr).toBe("");
+    } finally {
+      if (child.exitCode === null && child.signalCode === null) child.kill("SIGKILL");
+    }
+  }, 15_000);
+
 });
