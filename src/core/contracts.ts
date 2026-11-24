@@ -6,7 +6,8 @@ export type CoreLifecycleState =
   | "running"
   | "stopping"
   | "stopped"
-  | "failed";
+  | "failed"
+  | "closing";
 
 export type ModuleLifecycleState =
   | "registered"
