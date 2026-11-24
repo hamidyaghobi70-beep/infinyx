@@ -43,6 +43,19 @@ describe("MemoryDeletionCoordinator", () => {
     expect(ledger.entries[0]?.reason).toBe("user_request");
   });
 
+  it("rejects unsupported deletion reasons before writing a tombstone or deleting memory", async () => {
+    const store = new FakeStore();
+    const ledger = new FakeLedger();
+    const address = { namespace: "tenant-a", key: "k" };
+    await store.write(address, "secret");
+    const coordinator = new MemoryDeletionCoordinator(store, ledger);
+    await expect(coordinator.delete(address, "unknown" as never))
+      .rejects.toThrow("supported memory deletion reason");
+    expect(ledger.entries).toHaveLength(0);
+    expect(store.deleted).toHaveLength(0);
+    expect(await store.read(address)).toBe("secret");
+  });
+
   it("fails closed when the external ledger cannot persist a tombstone", async () => {
     const store = new FakeStore();
     const ledger = new FakeLedger();
