@@ -59,7 +59,11 @@ export class PostgresEncryptedMemoryStore implements MemoryPort {
     );
     const row = result.rows[0];
     if (!row) return null;
-    if (new Date(row.expires_at).getTime() <= this.#now().getTime()) {
+    const expiresAt = new Date(row.expires_at).getTime();
+    if (!Number.isFinite(expiresAt)) {
+      throw new Error("Persistent memory record has an invalid expiry timestamp.");
+    }
+    if (expiresAt <= this.#now().getTime()) {
       // The row may have been refreshed after SELECT. Delete only the exact
       // expired version observed above; an unconditional delete can erase a
       // concurrent write that extended the record's retention window.
@@ -80,7 +84,12 @@ export class PostgresEncryptedMemoryStore implements MemoryPort {
         [tenantId, address.namespace, address.key]
       );
       const current = refreshed.rows[0];
-      if (!current || new Date(current.expires_at).getTime() <= this.#now().getTime()) return null;
+      if (!current) return null;
+      const currentExpiresAt = new Date(current.expires_at).getTime();
+      if (!Number.isFinite(currentExpiresAt)) {
+        throw new Error("Persistent memory record has an invalid expiry timestamp.");
+      }
+      if (currentExpiresAt <= this.#now().getTime()) return null;
       return this.cipher.decrypt(current.envelope, encryptionContext(address, tenantId));
     }
     return this.cipher.decrypt(row.envelope, encryptionContext(address, tenantId));
