@@ -11,6 +11,7 @@ import { DefaultDenyPolicyEngine } from "./default-policy-engine.js";
 import { InMemoryEventBus } from "./event-bus.js";
 import { CoreError } from "./core-error.js";
 import { ModuleRegistry } from "./module-registry.js";
+import { RollbackCoordinator } from "./rollback-coordinator.js";
 
 export interface CoreEngineOptions {
   readonly events?: EventBusPort;
@@ -24,10 +25,11 @@ export class CoreEngine {
 
   private readonly moduleRegistry = new ModuleRegistry();
   private lifecycle: CoreLifecycleState = "created";
+  private closingRequested = false;
+  private readonly rollbackCoordinator = new RollbackCoordinator();
   private readonly moduleStates = new Map<string, ModuleLifecycleState>();
   private initializedModules: CoreModule[] = [];
   private readonly cleanupInFlight = new Map<string, Promise<void>>();
-  private stopPromise: Promise<void> | undefined;
 
   constructor(private readonly options: CoreEngineOptions = {}) {
     this.events = options.events ?? new InMemoryEventBus();
@@ -35,7 +37,14 @@ export class CoreEngine {
   }
 
   get state(): CoreLifecycleState {
-    return this.lifecycle;
+    return this.closingRequested && this.lifecycle !== "stopped"
+      ? "closing"
+      : this.lifecycle;
+  }
+
+  /** Close admission immediately; in-flight lifecycle hooks are allowed to settle. */
+  requestClose(): void {
+    this.closingRequested = true;
   }
 
   getModules(): readonly CoreModule[] {
@@ -43,7 +52,7 @@ export class CoreEngine {
   }
 
   register(module: CoreModule): void {
-    if (this.lifecycle !== "created") {
+    if (this.closingRequested || this.lifecycle !== "created") {
       throw new CoreError(
         "INVALID_LIFECYCLE_TRANSITION",
         "Modules can only be registered before initialization."
@@ -75,8 +84,8 @@ export class CoreEngine {
       const failedModule = [...this.moduleStates.entries()]
         .find(([, state]) => state === "initializing")?.[0];
       this.lifecycle = "failed";
-      const cleanupErrors = await this.cleanupInitializedModules(
-        failedModule ? new Set([failedModule]) : new Set()
+      const cleanupErrors = await this.rollbackCoordinator.run(() =>
+        this.cleanupInitializedModules(failedModule ? new Set([failedModule]) : new Set())
       );
       const failure = new CoreError(
         "MODULE_INITIALIZATION_FAILED",
@@ -121,33 +130,22 @@ export class CoreEngine {
   }
 
   stop(): Promise<void> {
-    if (this.stopPromise) return this.stopPromise;
-    if (this.lifecycle === "stopped") return Promise.resolve();
-    if (this.lifecycle === "created") {
-      this.lifecycle = "stopped";
-      return Promise.resolve();
-    }
-    if (!["initialized", "running", "failed"].includes(this.lifecycle)) {
-      return Promise.reject(new CoreError(
-        "INVALID_LIFECYCLE_TRANSITION",
-        'Cannot stop Core Engine while it is "' + this.lifecycle + '".'
-      ));
-    }
-
-    this.lifecycle = "stopping";
-    // Defer execution one microtask so the shared promise is installed before
-    // any module stop hook can re-enter CoreEngine.stop().
-    const stopPromise = Promise.resolve().then(() => this.performStop());
-    this.stopPromise = stopPromise;
-    void stopPromise.then(
-      () => {
-        if (this.stopPromise === stopPromise) this.stopPromise = undefined;
-      },
-      () => {
-        if (this.stopPromise === stopPromise) this.stopPromise = undefined;
+    return this.rollbackCoordinator.run(async () => {
+      if (this.lifecycle === "stopped") return;
+      if (this.lifecycle === "created") {
+        this.lifecycle = "stopped";
+        return;
       }
-    );
-    return stopPromise;
+      if (!["initialized", "running", "failed"].includes(this.lifecycle)) {
+        throw new CoreError(
+          "INVALID_LIFECYCLE_TRANSITION",
+          'Cannot stop Core Engine while it is "' + this.lifecycle + '".'
+        );
+      }
+
+      this.lifecycle = "stopping";
+      await this.performStop();
+    });
   }
 
   private async performStop(): Promise<void> {
@@ -220,7 +218,7 @@ export class CoreEngine {
   }
 
   private assertState(expected: CoreLifecycleState, operation: string): void {
-    if (this.lifecycle !== expected) {
+    if (this.closingRequested || this.lifecycle !== expected) {
       throw new CoreError(
         "INVALID_LIFECYCLE_TRANSITION",
         'Cannot ' + operation + ' Core Engine while it is "' + this.lifecycle + '".'
