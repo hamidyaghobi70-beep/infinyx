@@ -88,6 +88,7 @@ export class MemoryDeletionCoordinator implements MemoryPort {
     let cursor: string | null = null;
     let replayed = 0;
     let batches = 0;
+    const seenIds = new Set<string>();
     for (;;) {
       const entries = await this.ledger.listAfter(cursor, this.#batchSize);
       if (entries.length === 0) break;
@@ -98,15 +99,20 @@ export class MemoryDeletionCoordinator implements MemoryPort {
       for (const entry of entries) {
         validateTombstone(entry);
         // Cursors are opaque: never compare them lexicographically or numerically.
-        // The ledger contract owns append ordering; the coordinator enforces progress
-        // and rejects duplicate/repeated cursors to prevent an infinite replay loop.
-        if (entry.id === cursor || pageIds.has(entry.id)) {
+        // Enforce uniqueness across the entire replay, not just within one page.
+        if (entry.id === cursor || pageIds.has(entry.id) || seenIds.has(entry.id)) {
           throw new Error("Deletion ledger pagination repeated a cursor.");
         }
         pageIds.add(entry.id);
+      }
+
+      // Validate the complete page before applying any deletion from it. A
+      // malformed later entry must not leave a partially applied page.
+      for (const entry of entries) {
         await this.store.delete({ namespace: entry.namespace, key: entry.key });
         replayed += 1;
       }
+      for (const id of pageIds) seenIds.add(id);
       cursor = entries[entries.length - 1]!.id;
       batches += 1;
       if (entries.length < this.#batchSize) break;
