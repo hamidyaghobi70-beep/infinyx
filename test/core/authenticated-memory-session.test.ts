@@ -9,11 +9,11 @@ const pem = pair.publicKey.export({ type: "spki", format: "pem" }).toString();
 const issuer = "https://identity.example.test/";
 const audience = "infinyx-api";
 const claims = { iss: issuer, aud: audience, sub: "actor-9", tenant_id: "tenant-3", exp: 1_900_000_000 };
-function verifiedPrincipal() {
+function verifiedPrincipal(expiresAt = claims.exp, verificationTime = 1_800_000_000) {
   const encode = (value: unknown) => Buffer.from(JSON.stringify(value)).toString("base64url");
-  const input = encode({ alg: "RS256", typ: "JWT" }) + "." + encode(claims);
+  const input = encode({ alg: "RS256", typ: "JWT" }) + "." + encode({ ...claims, exp: expiresAt });
   const token = input + "." + sign("RSA-SHA256", Buffer.from(input), pair.privateKey).toString("base64url");
-  return createJwtPrincipalVerifier({ issuer, audience, publicKeyPem: pem, now: () => 1_800_000_000 })(token);
+  return createJwtPrincipalVerifier({ issuer, audience, publicKeyPem: pem, now: () => verificationTime })(token);
 }
 function dependencies() {
   return {
@@ -29,6 +29,14 @@ describe("authenticated request-scoped memory session", () => {
     const session = createAuthenticatedMemorySession({ ...deps, principal: verifiedPrincipal(), moduleId: "notes" });
     expect(session).toBeInstanceOf(GuardedMemoryPort);
     expect(session.scopeModuleId).toBe("notes");
+  });
+
+  it("rejects a principal whose token expired after verification but before session creation", () => {
+    const deps = dependencies();
+    const expiredAt = Math.floor(Date.now() / 1000) - 10;
+    const principal = verifiedPrincipal(expiredAt, expiredAt - 1);
+    expect(() => createAuthenticatedMemorySession({ ...deps, principal, moduleId: "notes" }))
+      .toThrow(/unexpired authenticated principal/i);
   });
 
   it("rejects fabricated principals and invalid module identities", () => {
