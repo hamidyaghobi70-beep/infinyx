@@ -95,4 +95,17 @@ describe("JWKS key resolver", () => {
     expect(fetcher).toHaveBeenCalledTimes(2);
   });
 
+
+  it("throttles retries when the initial JWKS fetch fails", async () => {
+    let now = 30_000;
+    const fetcher = vi.fn(async () => response([], 503));
+    const resolver = new JwksKeyResolver({ jwksUrl: "https://id.example.test/jwks", fetcher, now: () => now, refreshCooldownMs: 1_000 });
+    await expect(resolver.resolve("first-kid")).rejects.toThrow();
+    await expect(resolver.resolve("second-kid")).rejects.toThrow();
+    expect(fetcher).toHaveBeenCalledTimes(1);
+    now += 1_001;
+    await expect(resolver.resolve("third-kid")).rejects.toThrow();
+    expect(fetcher).toHaveBeenCalledTimes(2);
+  });
+
 });
