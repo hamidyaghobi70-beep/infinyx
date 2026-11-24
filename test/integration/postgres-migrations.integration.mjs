@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import pg from "pg";
-import { PostgresMigrationRunner } from "../dist/core/postgres-migration-runner.js";
+import { PostgresMigrationRunner } from "../../dist/core/postgres-migration-runner.js";
 
 const { Pool } = pg;
 const connectionString = process.env.DATABASE_URL;
