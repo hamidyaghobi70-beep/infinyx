@@ -159,6 +159,7 @@ export class CoreEngine {
     preserveFailureIds: ReadonlySet<string> = new Set()
   ): Promise<unknown[]> {
     const errors: unknown[] = [];
+    const failedModuleIds = new Set<string>();
     for (const module of [...this.initializedModules].reverse()) {
       this.moduleStates.set(module.id, "stopping");
       try {
@@ -169,10 +170,15 @@ export class CoreEngine {
         );
       } catch (error) {
         this.moduleStates.set(module.id, "failed");
+        failedModuleIds.add(module.id);
         errors.push(error);
       }
     }
-    this.initializedModules = [];
+    // Keep only modules whose cleanup actually failed. A later stop() can retry
+    // those modules without re-running successful cleanup hooks.
+    this.initializedModules = this.initializedModules.filter(
+      (module) => failedModuleIds.has(module.id)
+    );
     return errors;
   }
 
