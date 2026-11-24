@@ -17,6 +17,35 @@ describe("JWKS key resolver", () => {
     expect(fetcher).toHaveBeenCalledTimes(1);
   });
 
+  it("captures resolver options and protects cache state from instance replacement", async () => {
+    let urlReads = 0;
+    let fetcherReads = 0;
+    const fetcher = vi.fn(async () => response([{ ...jwk, kid: "fixed", use: "sig", alg: "RS256" }]));
+    const options = {
+      get jwksUrl() { urlReads += 1; return "https://id.example.test/jwks"; },
+      get fetcher() { fetcherReads += 1; return fetcher; },
+      cacheTtlMs: 5_000,
+      refreshCooldownMs: 0,
+      now: () => 10_000
+    };
+    const resolver = new JwksKeyResolver(options);
+    (resolver as unknown as Record<string, unknown>).cache = new Map();
+    (resolver as unknown as Record<string, unknown>).fetcher = vi.fn(async () => response([]));
+    await resolver.resolve("fixed");
+    expect(urlReads).toBe(1);
+    expect(fetcherReads).toBe(1);
+    expect(fetcher).toHaveBeenCalledOnce();
+    expect(Object.isFrozen(resolver)).toBe(true);
+    expect(Reflect.ownKeys(resolver)).toEqual([]);
+  });
+
+  it("rejects throwing JWKS option accessors before creating resolver state", () => {
+    const options = Object.defineProperty({ jwksUrl: "https://id.example.test/jwks" }, "fetcher", {
+      get() { throw new Error("untrusted fetcher getter"); }
+    }) as never;
+    expect(() => new JwksKeyResolver(options)).toThrow("options must be readable");
+  });
+
   it("refreshes once when a rotated key id is requested", async () => {
     const secondPair = generateKeyPairSync("rsa", { modulusLength: 2048 });
     const secondJwk = secondPair.publicKey.export({ format: "jwk" });
