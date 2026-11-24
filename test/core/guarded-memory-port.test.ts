@@ -816,6 +816,85 @@ describe("GuardedMemoryPort — construction", () => {
     expect(store.size).toBe(1);
   });
 
+  it("captures dependency methods once and ignores later method replacement", async () => {
+    const store = new InMemoryMemoryStore();
+    const storeCalls = { read: 0, write: 0, delete: 0 };
+    const originalRead = store.read.bind(store);
+    const originalWrite = store.write.bind(store);
+    const originalDelete = store.delete.bind(store);
+    for (const [name, original] of [
+      ["read", originalRead], ["write", originalWrite], ["delete", originalDelete]
+    ] as const) {
+      Object.defineProperty(store, name, {
+        configurable: true,
+        get() {
+          storeCalls[name] += 1;
+          return original;
+        }
+      });
+    }
+
+    let policyReads = 0;
+    const policy = {
+      get evaluate() {
+        policyReads += 1;
+        return async () => ({ effect: "allow" as const, reason: "captured policy" });
+      }
+    };
+    let decisionReads = 0;
+    let failureReads = 0;
+    const audited: MemoryAccessDecidedEvent[] = [];
+    const audit = {
+      get publishDecision() {
+        decisionReads += 1;
+        return async (event: MemoryAccessDecidedEvent) => {
+          audited.push(event);
+          return true;
+        };
+      },
+      get publishFailure() {
+        failureReads += 1;
+        return async () => undefined;
+      }
+    };
+
+    const guard = new GuardedMemoryPort({ store, policy, audit, scope: scopeA });
+
+    Object.defineProperty(store, "write", { configurable: true, value: vi.fn(async () => {
+      throw new Error("replacement store method invoked");
+    }) });
+    Object.defineProperty(policy, "evaluate", { configurable: true, value: async () => ({
+      effect: "deny" as const, reason: "replacement policy invoked"
+    }) });
+    Object.defineProperty(audit, "publishDecision", { configurable: true, value: async () => false });
+
+    await guard.write({ namespace: "n", key: "k" }, "captured");
+    expect(await guard.read({ namespace: "n", key: "k" })).toBe("captured");
+    await guard.delete({ namespace: "n", key: "k" });
+
+    expect(storeCalls).toEqual({ read: 1, write: 1, delete: 1 });
+    expect(policyReads).toBe(1);
+    expect(decisionReads).toBe(1);
+    expect(failureReads).toBe(1);
+    expect(audited.map((event) => event.operation)).toEqual(["write", "read", "delete"]);
+  });
+
+  it("fails closed when a dependency method accessor throws during capture", () => {
+    const store = new InMemoryMemoryStore();
+    Object.defineProperty(store, "write", {
+      configurable: true,
+      get() {
+        throw new Error("private accessor failure");
+      }
+    });
+    expect(() => new GuardedMemoryPort({
+      store,
+      policy: allowAll,
+      audit: createAuditPort(new InMemoryEventBus()),
+      scope: scopeA
+    })).toThrow("GuardedMemoryPort dependency methods must be readable functions.");
+  });
+
   it("keeps capability internals private and prevents instance method replacement", async () => {
     const { guard } = setup();
     const exposed = guard as unknown as Record<string, unknown>;
