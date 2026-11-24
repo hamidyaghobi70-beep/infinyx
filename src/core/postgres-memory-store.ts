@@ -51,11 +51,12 @@ export class PostgresEncryptedMemoryStore implements MemoryPort {
   }
 
   async read(address: MemoryAddress): Promise<unknown | null> {
-    const tenantId = tenantFromScopedNamespace(address.namespace);
+    const target = snapshotMemoryAddress(address);
+    const tenantId = tenantFromScopedNamespace(target.namespace);
     const result = await this.db.query<{ envelope: StoredMemoryEnvelope; expires_at: Date | string }>(
       `SELECT envelope, expires_at FROM ${this.#table}
        WHERE tenant_id = $1 AND namespace = $2 AND memory_key = $3 LIMIT 1`,
-      [tenantId, address.namespace, address.key]
+      [tenantId, target.namespace, target.key]
     );
     const row = result.rows[0];
     if (!row) return null;
@@ -71,7 +72,7 @@ export class PostgresEncryptedMemoryStore implements MemoryPort {
         `DELETE FROM ${this.#table}
          WHERE tenant_id = $1 AND namespace = $2 AND memory_key = $3
            AND expires_at = $4 AND envelope = $5::jsonb`,
-        [tenantId, address.namespace, address.key, row.expires_at, JSON.stringify(row.envelope)]
+        [tenantId, target.namespace, target.key, row.expires_at, JSON.stringify(row.envelope)]
       );
       if ((deletion.rowCount ?? 0) > 0) return null;
 
@@ -81,7 +82,7 @@ export class PostgresEncryptedMemoryStore implements MemoryPort {
       const refreshed = await this.db.query<{ envelope: StoredMemoryEnvelope; expires_at: Date | string }>(
         `SELECT envelope, expires_at FROM ${this.#table}
          WHERE tenant_id = $1 AND namespace = $2 AND memory_key = $3 LIMIT 1`,
-        [tenantId, address.namespace, address.key]
+        [tenantId, target.namespace, target.key]
       );
       const current = refreshed.rows[0];
       if (!current) return null;
@@ -96,6 +97,7 @@ export class PostgresEncryptedMemoryStore implements MemoryPort {
   }
 
   async write(address: MemoryAddress, value: unknown): Promise<void> {
+    const target = snapshotMemoryAddress(address);
     if (typeof value !== "string") throw new TypeError("GuardedMemoryPort must provide serialized JSON strings.");
     let parsed: unknown;
     try { parsed = JSON.parse(value); } catch { throw new TypeError("Persistent memory values must be valid classified JSON."); }
@@ -107,7 +109,7 @@ export class PostgresEncryptedMemoryStore implements MemoryPort {
       // Restricted and unclassified values are denied by default.
       throw new TypeError("Persistent memory classification is missing, unsupported, or restricted.");
     }
-    const tenantId = tenantFromScopedNamespace(address.namespace);
+    const tenantId = tenantFromScopedNamespace(target.namespace);
     const encrypted = await this.cipher.encrypt(value, encryptionContext(address, tenantId));
     const now = this.#now();
     const expiresAt = new Date(now.getTime() + this.#retentionDays * 24 * 60 * 60 * 1000);
@@ -124,14 +126,15 @@ export class PostgresEncryptedMemoryStore implements MemoryPort {
        VALUES ($1, $2, $3, $4::jsonb, $5, $6, $6, $7)
        ON CONFLICT (tenant_id, namespace, memory_key) DO UPDATE SET
          envelope = EXCLUDED.envelope, classification = EXCLUDED.classification, created_at = EXCLUDED.created_at, updated_at = EXCLUDED.updated_at, expires_at = EXCLUDED.expires_at`,
-      [tenantId, address.namespace, address.key, JSON.stringify(envelope), classification, now, expiresAt]
+      [tenantId, target.namespace, target.key, JSON.stringify(envelope), classification, now, expiresAt]
     );
   }
 
   async delete(address: MemoryAddress): Promise<void> {
-    const tenantId = tenantFromScopedNamespace(address.namespace);
+    const target = snapshotMemoryAddress(address);
+    const tenantId = tenantFromScopedNamespace(target.namespace);
     await this.db.query(`DELETE FROM ${this.#table} WHERE tenant_id = $1 AND namespace = $2 AND memory_key = $3`, [
-      tenantId, address.namespace, address.key
+      tenantId, target.namespace, target.key
     ]);
   }
 
@@ -208,6 +211,22 @@ export class PostgresEncryptedMemoryStore implements MemoryPort {
  * This is defense in depth, not authentication: the composition root must still
  * derive the namespace from a trusted principal.
  */
+function snapshotMemoryAddress(address: MemoryAddress): MemoryAddress {
+  let namespace: unknown;
+  let key: unknown;
+  try {
+    namespace = address?.namespace;
+    key = address?.key;
+  } catch {
+    throw new TypeError("Persistent memory address must be readable.");
+  }
+  if (typeof namespace !== "string" || !namespace ||
+      typeof key !== "string" || !key) {
+    throw new TypeError("Persistent memory address is invalid.");
+  }
+  return Object.freeze({ namespace, key });
+}
+
 function tenantFromScopedNamespace(namespace: string): string {
   const separator = namespace.indexOf("/");
   if (separator <= 0 || separator === namespace.length - 1) {
@@ -231,5 +250,5 @@ function tenantFromScopedNamespace(namespace: string): string {
 
 /** The exact same canonical identity is supplied on writes, reads, and key rotation. */
 function encryptionContext(address: MemoryAddress, tenantId: string): MemoryEncryptionContext {
-  return Object.freeze({ tenantId, namespace: address.namespace, key: address.key });
+  return Object.freeze({ tenantId, namespace: target.namespace, key: target.key });
 }
