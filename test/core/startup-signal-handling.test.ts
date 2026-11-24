@@ -27,6 +27,7 @@ function fixture(options?: {
   readonly initialize?: () => Promise<void>;
   readonly start?: () => Promise<void>;
   readonly stop?: () => Promise<void>;
+  readonly startupTimeoutMs?: number;
 }) {
   const fakeProcess = new FakeProcess();
   const close = vi.fn((callback: (error?: Error) => void) => callback());
@@ -57,7 +58,8 @@ function fixture(options?: {
       host: "127.0.0.1",
       port: 3000,
       environment: "test",
-      drainTimeoutMs: 50
+      drainTimeoutMs: 50,
+      startupTimeoutMs: options?.startupTimeoutMs ?? 10_000
     })
   };
 }
@@ -216,6 +218,28 @@ describe("Startup Signal Handling (Revision v5)", () => {
     expect(setup.listen).not.toHaveBeenCalled();
     expect(runtime.server.listening).toBe(false);
     await runtime.shutdown();
+  });
+
+  it("R11: a permanently pending startup is bounded and exits non-zero without racing core.stop", async () => {
+    const gate = deferred();
+    const setup = fixture({
+      initialize: () => gate.promise,
+      startupTimeoutMs: 30
+    });
+    const starting = setup.start();
+    await Promise.resolve();
+
+    setup.fakeProcess.emit("SIGTERM");
+
+    await vi.waitFor(() => {
+      expect(setup.exit).toHaveBeenCalledWith(1);
+    }, { timeout: 500 });
+
+    expect(setup.core.stop).not.toHaveBeenCalled();
+    expect(setup.listen).not.toHaveBeenCalled();
+    expect(setup.fakeProcess.exitCode).toBe(1);
+    // The unresolved startup hook is deliberately not raced with cleanup.
+    void starting;
   });
 
   it("R10: shutdown remains injectable and invokes the exit callback exactly once", async () => {
