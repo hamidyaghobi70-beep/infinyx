@@ -135,7 +135,7 @@ describe("PostgresEncryptedMemoryStore", () => {
     );
     expect(cipherEncrypt).toHaveBeenCalledOnce();
     expect(originalQuery).toHaveBeenCalledOnce();
-    MemoryValueCipher.prototype.encrypt = cipherEncrypt.getMockImplementation() as typeof MemoryValueCipher.prototype.encrypt;
+    cipherEncrypt.mockRestore();
   });
 
   it("rejects throwing persistent memory option accessors", () => {
