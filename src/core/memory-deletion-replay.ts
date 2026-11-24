@@ -74,13 +74,13 @@ export class MemoryDeletionCoordinator implements MemoryPort {
     address: MemoryAddress,
     reason: MemoryDeletionTombstone["reason"] = "user_request"
   ): Promise<void> {
-    validateAddress(address);
+    const target = snapshotAddress(address);
     if (!["user_request", "retention_expiry", "policy"].includes(reason)) {
       throw new TypeError("A supported memory deletion reason is required.");
     }
     const tombstone = Object.freeze({
-      namespace: address.namespace,
-      key: address.key,
+      namespace: target.namespace,
+      key: target.key,
       deletedAt: this.#now().toISOString(),
       reason
     });
@@ -89,7 +89,7 @@ export class MemoryDeletionCoordinator implements MemoryPort {
     if (typeof cursor !== "string" || cursor.length < 1 || cursor.length > 512) {
       throw new Error("Deletion ledger returned an invalid append cursor.");
     }
-    await this.#store.delete({ namespace: address.namespace, key: address.key });
+    await this.#store.delete(target);
   }
 
   async replayAfterRestore(): Promise<MemoryDeletionReplayResult> {
@@ -104,8 +104,8 @@ export class MemoryDeletionCoordinator implements MemoryPort {
         throw new Error("Deletion ledger exceeded the requested page size.");
       }
       const pageIds = new Set<string>();
-      for (const entry of entries) {
-        validateTombstone(entry);
+      const page = entries.map(snapshotTombstone);
+      for (const entry of page) {
         // Cursors are opaque: never compare them lexicographically or numerically.
         // Enforce uniqueness across the entire replay, not just within one page.
         if (entry.id === cursor || pageIds.has(entry.id) || seenIds.has(entry.id)) {
@@ -114,14 +114,13 @@ export class MemoryDeletionCoordinator implements MemoryPort {
         pageIds.add(entry.id);
       }
 
-      // Validate the complete page before applying any deletion from it. A
-      // malformed later entry must not leave a partially applied page.
-      for (const entry of entries) {
+      // Validate and snapshot the complete page before applying any deletion.
+      for (const entry of page) {
         await this.#store.delete({ namespace: entry.namespace, key: entry.key });
         replayed += 1;
       }
       for (const id of pageIds) seenIds.add(id);
-      cursor = entries[entries.length - 1]!.id;
+      cursor = page[page.length - 1]!.id;
       batches += 1;
       if (entries.length < this.#batchSize) break;
     }
@@ -144,19 +143,27 @@ function captureMethods<T extends object>(value: object, names: readonly string[
   return Object.freeze(captured) as T;
 }
 
-function validateAddress(address: MemoryAddress): void {
-  if (!address || typeof address.namespace !== "string" || !address.namespace ||
-      typeof address.key !== "string" || !address.key) {
+function snapshotAddress(address: MemoryAddress): MemoryAddress {
+  let namespace: unknown;
+  let key: unknown;
+  try { namespace = address?.namespace; key = address?.key; }
+  catch { throw new TypeError("A valid memory namespace and key are required."); }
+  if (typeof namespace !== "string" || !namespace || typeof key !== "string" || !key) {
     throw new TypeError("A valid memory namespace and key are required.");
   }
+  return Object.freeze({ namespace, key });
 }
 
-function validateTombstone(value: MemoryDeletionTombstone): void {
-  if (!value || typeof value.id !== "string" || !value.id ||
-      typeof value.namespace !== "string" || !value.namespace ||
-      typeof value.key !== "string" || !value.key ||
-      typeof value.deletedAt !== "string" || !Number.isFinite(Date.parse(value.deletedAt)) ||
-      !["user_request", "retention_expiry", "policy"].includes(value.reason)) {
+function snapshotTombstone(value: MemoryDeletionTombstone): MemoryDeletionTombstone {
+  let id: unknown; let namespace: unknown; let key: unknown; let deletedAt: unknown; let reason: unknown;
+  try {
+    id = value?.id; namespace = value?.namespace; key = value?.key;
+    deletedAt = value?.deletedAt; reason = value?.reason;
+  } catch { throw new Error("Deletion ledger returned a malformed tombstone."); }
+  if (typeof id !== "string" || !id || typeof namespace !== "string" || !namespace ||
+      typeof key !== "string" || !key || typeof deletedAt !== "string" || !Number.isFinite(Date.parse(deletedAt)) ||
+      !["user_request", "retention_expiry", "policy"].includes(reason as string)) {
     throw new Error("Deletion ledger returned a malformed tombstone.");
   }
+  return Object.freeze({ id, namespace, key, deletedAt, reason }) as MemoryDeletionTombstone;
 }
