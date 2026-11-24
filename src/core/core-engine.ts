@@ -61,6 +61,8 @@ export class CoreEngine {
   private readonly cleanupInFlight = new Map<string, Promise<void>>();
   private readonly cleanupContext = new AsyncLocalStorage<CleanupExecutionContext>();
   private stopPromise: Promise<void> | undefined;
+  // Keep an in-flight policy shutdown shared across timeout/retry cycles.
+  private policyShutdownPromise: Promise<void> | undefined;
   private readonly moduleMemory = new Map<string, GuardedMemoryPort>();
 
   constructor(private readonly options: CoreEngineOptions = {}) {
@@ -253,11 +255,24 @@ export class CoreEngine {
   }
 
   private beginPolicyShutdown(): Promise<void> {
+    if (this.policyShutdownPromise) return this.policyShutdownPromise;
+
+    let shutdown: Promise<void>;
     try {
-      return this.policy.shutdown?.() ?? Promise.resolve();
+      shutdown = Promise.resolve(this.policy.shutdown?.());
     } catch (error) {
-      return Promise.reject(error);
+      shutdown = Promise.reject(error);
     }
+    this.policyShutdownPromise = shutdown;
+
+    // A rejected shutdown may be explicitly retried. A still-pending shutdown
+    // remains shared so a timeout cannot start a second concurrent shutdown.
+    void shutdown.catch(() => {
+      if (this.policyShutdownPromise === shutdown) {
+        this.policyShutdownPromise = undefined;
+      }
+    });
+    return shutdown;
   }
 
   private async performStop(
