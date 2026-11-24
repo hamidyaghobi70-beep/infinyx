@@ -60,6 +60,29 @@ try {
   await pool.query("DROP ROLE infinyx_test_privileged_group");
   await pool.query("DROP ROLE infinyx_memory_runtime");
 
+  // Object ownership is an implicit privilege; REVOKE cannot neutralize it.
+  // A pre-existing schema owned by a service role must block the migration.
+  await pool.query("CREATE ROLE infinyx_memory_runtime NOLOGIN");
+  await pool.query("CREATE SCHEMA infinyx_memory AUTHORIZATION infinyx_memory_runtime");
+  await assert.rejects(
+    runner.run(migrations),
+    /Stage 4 roles have unsafe attributes or memberships; refusing grants: infinyx_memory_runtime/
+  );
+  const ownershipPreflight = await pool.query(`
+    SELECT
+      to_regclass('infinyx_memory.memory_entries') AS memory_table,
+      to_regclass('infinyx_meta.schema_migrations') AS migration_ledger,
+      (SELECT r.rolname
+       FROM pg_namespace AS n
+       JOIN pg_roles AS r ON r.oid = n.nspowner
+       WHERE n.nspname = 'infinyx_memory') AS schema_owner
+  `);
+  assert.equal(ownershipPreflight.rows[0].memory_table, null, "owned pre-existing schema must block memory table creation");
+  assert.equal(ownershipPreflight.rows[0].migration_ledger, null, "owned pre-existing schema must roll back migration ledger creation");
+  assert.equal(ownershipPreflight.rows[0].schema_owner, "infinyx_memory_runtime", "failed preflight must not silently transfer schema ownership");
+  await pool.query("DROP SCHEMA infinyx_memory CASCADE");
+  await pool.query("DROP ROLE infinyx_memory_runtime");
+
   const first = await runner.run(migrations);
   assert.deepEqual(first.applied, ["0001_stage4_memory_audit", "0002_stage4_least_privilege_roles"]);
   assert.deepEqual(first.skipped, []);

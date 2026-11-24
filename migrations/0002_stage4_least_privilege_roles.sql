@@ -29,6 +29,16 @@ BEGIN
     AND (
       r.rolcanlogin OR r.rolsuper OR r.rolcreatedb OR r.rolcreaterole
       OR r.rolreplication OR r.rolbypassrls
+      -- Ownership is an implicit privilege and cannot be neutralized by REVOKE.
+      -- Reject these service roles if they own any database object, including a
+      -- pre-existing Stage 4 schema/table that CREATE IF NOT EXISTS would preserve.
+      OR EXISTS (
+        SELECT 1
+        FROM pg_shdepend AS dependency
+        WHERE dependency.refclassid = 'pg_authid'::regclass
+          AND dependency.refobjid = r.oid
+          AND dependency.deptype = 'o'
+      )
       OR EXISTS (
         WITH RECURSIVE inherited_roles(role_oid) AS (
           SELECT membership.roleid
