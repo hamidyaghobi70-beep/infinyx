@@ -120,6 +120,28 @@ describe("CoreEngine operation admission and drain", () => {
     expect(engine.failureReason).toBeUndefined();
   });
 
+  it("rejects a shutdown initiated by an operation that would otherwise wait for itself", async () => {
+    const engine = new CoreEngine();
+    engine.register({
+      id: "worker",
+      version: "1.0.0",
+      initialize: (context) => {
+        context.events.subscribe("stop-inside-operation", async () => {
+          await expect(engine.stop()).rejects.toMatchObject({
+            code: "OPERATION_DRAIN_SELF_WAIT"
+          });
+        });
+      }
+    });
+
+    await engine.initialize();
+    await engine.events.publish("stop-inside-operation", {});
+    expect(engine.state).toBe("failed");
+
+    await engine.stop();
+    expect(engine.state).toBe("stopped");
+  });
+
   it("tracks operations started by module lifecycle hooks and blocks detached work after settlement", async () => {
     const detachedResult = deferred<string>();
     const engine = new CoreEngine();

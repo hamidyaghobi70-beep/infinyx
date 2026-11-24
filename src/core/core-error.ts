@@ -11,7 +11,8 @@ export type CoreErrorCode =
   | "OPERATION_PARENT_SETTLED"
   | "OPERATION_HANDLE_ALREADY_RELEASED"
   | "OPERATION_COUNTER_UNDERFLOW"
-  | "OPERATION_DRAIN_TIMEOUT";
+  | "OPERATION_DRAIN_TIMEOUT"
+  | "OPERATION_DRAIN_SELF_WAIT";
 
 export class CoreError extends Error {
   constructor(

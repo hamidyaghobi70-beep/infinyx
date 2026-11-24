@@ -196,6 +196,13 @@ export class OperationRegistry {
   }
 
   drain(timeoutMs: number): Promise<void> {
+    const current = this.context.getStore();
+    if (current && this.handles.has(current)) {
+      return Promise.reject(new CoreError(
+        "OPERATION_DRAIN_SELF_WAIT",
+        "An active operation cannot wait for a drain that includes itself."
+      ));
+    }
     if (this.handles.size === 0) return Promise.resolve();
 
     return new Promise<void>((resolve, reject) => {

@@ -195,7 +195,9 @@ export class CoreEngine {
         await this.drainOperations();
       } catch (error) {
         this.lifecycle = "failed";
-        this.failure = "drain_timeout";
+        if (error instanceof CoreError && error.code === "OPERATION_DRAIN_TIMEOUT") {
+          this.failure = "drain_timeout";
+        }
         throw error;
       }
       await this.performStop();
@@ -203,7 +205,14 @@ export class CoreEngine {
   }
 
   private async drainOperations(): Promise<void> {
-    await this.operations.drain(this.operationDrainTimeoutMs);
+    try {
+      await this.operations.drain(this.operationDrainTimeoutMs);
+    } catch (error) {
+      if (error instanceof CoreError && error.code === "OPERATION_DRAIN_TIMEOUT") {
+        this.failure = "drain_timeout";
+      }
+      throw error;
+    }
     if (this.failure === "drain_timeout") this.failure = undefined;
   }
 
