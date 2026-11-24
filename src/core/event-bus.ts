@@ -4,8 +4,11 @@ export class InMemoryEventBus implements EventBusPort {
   private readonly handlers = new Map<string, Set<EventHandler<unknown>>>();
 
   subscribe<TPayload>(type: string, handler: EventHandler<TPayload>): () => void {
-    if (!type.trim()) {
+    if (typeof type !== "string" || !type.trim()) {
       throw new TypeError("Event type must be a non-empty string.");
+    }
+    if (typeof handler !== "function") {
+      throw new TypeError("Event handler must be a function.");
     }
 
     const bucket = this.handlers.get(type) ?? new Set<EventHandler<unknown>>();
@@ -40,7 +43,7 @@ export class InMemoryEventBus implements EventBusPort {
     payload: TPayload,
     requireSubscriber: boolean
   ): Promise<boolean> {
-    if (!type.trim()) {
+    if (typeof type !== "string" || !type.trim()) {
       throw new TypeError("Event type must be a non-empty string.");
     }
 
