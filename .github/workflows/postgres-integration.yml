@@ -4,9 +4,11 @@ on:
   push:
     branches:
       - test/stage4-postgres-integration
+      - feat/request-scoped-memory-gateway
   pull_request:
     branches:
       - fix/f01-f02-atomic-registration
+      - test/stage4-postgres-integration
 
 permissions:
   contents: read
