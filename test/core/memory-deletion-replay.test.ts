@@ -100,6 +100,33 @@ describe("MemoryDeletionCoordinator", () => {
     expect(store.deleted).toEqual([{ namespace: "tenant-a", key: "protected" }]);
   });
 
+  it("snapshots coordinator options without rereading accessors", async () => {
+    const store = new FakeStore();
+    const ledger = new FakeLedger();
+    let batchReads = 0;
+    let nowReads = 0;
+    const fixedDate = new Date("2026-11-23T12:00:00.000Z");
+    const options = {
+      get batchSize() { batchReads += 1; return batchReads === 1 ? 1 : 0; },
+      get now() { nowReads += 1; return () => fixedDate; }
+    };
+    const coordinator = new MemoryDeletionCoordinator(store, ledger, options);
+    await coordinator.delete({ namespace: "tenant-a", key: "k" });
+    expect(batchReads).toBe(1);
+    expect(nowReads).toBe(1);
+    expect(ledger.entries[0]?.deletedAt).toBe(fixedDate.toISOString());
+  });
+
+  it("rejects throwing option accessors before accepting the coordinator", () => {
+    const store = new FakeStore();
+    const ledger = new FakeLedger();
+    const options = Object.defineProperty({}, "now", {
+      get() { throw new Error("untrusted option getter"); }
+    }) as never;
+    expect(() => new MemoryDeletionCoordinator(store, ledger, options))
+      .toThrow("options must be readable");
+  });
+
   it("persists an external tombstone before deleting live memory", async () => {
     const store = new FakeStore();
     const ledger = new FakeLedger();
