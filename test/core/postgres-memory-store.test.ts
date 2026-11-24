@@ -325,6 +325,19 @@ describe("PostgresEncryptedMemoryStore", () => {
     expect(updateValues.slice(2, 5)).toEqual(["tenant-a", "tenant-a/notes", "k"]);
   });
 
+  it("fails closed when expiry deletion has no deletion-ledger coordinator", async () => {
+    const db: SqlExecutor = { query: vi.fn(async () => ({ rows: [], rowCount: 0 })) };
+    const cipher = new MemoryValueCipher({
+      getActiveKey: async () => ({ keyId: "active-key", key: randomBytes(32) }),
+      getKey: async () => null
+    });
+    const store = new PostgresEncryptedMemoryStore(db, cipher);
+    await expect(store.deleteExpired()).rejects.toThrow(
+      "Expiry deletion requires a deletion-ledger coordinator."
+    );
+    expect(db.query).not.toHaveBeenCalled();
+  });
+
   it("upgrades a v1 envelope to v2 even when its key id is already active", async () => {
     const key = randomBytes(32);
     const provider: MemoryKeyProvider = {
