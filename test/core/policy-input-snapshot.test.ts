@@ -31,17 +31,23 @@ describe("snapshotBoundedPolicyData", () => {
 
   it("rejects excessive node counts and container entries", () => {
     expect(snapshotBoundedPolicyData(Array.from({ length: 1_001 }, () => 1))).toBeUndefined();
-    const manyNodes = Array.from({ length: 10 }, () => Array.from({ length: 1_000 }, () => 1));
-    expect(snapshotBoundedPolicyData(manyNodes)).toBeUndefined();
+    const manyNodes = Array.from({ length: 10 }, (_, index) =>
+      Array.from({ length: index === 9 ? 998 : 999 }, () => 1));
+    expect(snapshotBoundedPolicyData(manyNodes)).toBeDefined();
+
+    const overNodeLimit = Array.from({ length: 10 }, () => Array.from({ length: 999 }, () => 1));
+    expect(snapshotBoundedPolicyData(overNodeLimit)).toBeUndefined();
     expect(snapshotBoundedPolicyData({ values: ["a".repeat(16_000), "b".repeat(16_000)] })).toBeDefined();
     expect(snapshotBoundedPolicyData({ values: Array.from({ length: 17 }, () => "c".repeat(16_000)) })).toBeUndefined();
   });
 
-  it("rejects an ordinary record with more than the maximum number of own keys", () => {
-    const oversized: Record<string, number> = {};
-    for (let index = 0; index < 1_001; index += 1) oversized[`key-${index}`] = index;
+  it("accepts exactly the maximum number of own keys and rejects one over", () => {
+    const atLimit: Record<string, number> = {};
+    for (let index = 0; index < 1_000; index += 1) atLimit[`k${index}`] = index;
+    const overLimit = { ...atLimit, extra: 1 };
 
-    expect(snapshotBoundedPolicyData(oversized)).toBeUndefined();
+    expect(snapshotBoundedPolicyData(atLimit)).toBeDefined();
+    expect(snapshotBoundedPolicyData(overLimit)).toBeUndefined();
   });
 
   it("accepts the exact aggregate UTF-8 byte limit and rejects one byte over", () => {
@@ -61,6 +67,20 @@ describe("snapshotBoundedPolicyData", () => {
     expect(snapshotBoundedPolicyData(accessor)).toBeUndefined();
     expect(snapshotBoundedPolicyData(sparse)).toBeUndefined();
     expect(snapshotBoundedPolicyData({ value: Number.NaN })).toBeUndefined();
+  });
+
+  it("does not execute a getter when rejecting accessor properties", () => {
+    let getterCalls = 0;
+    const input = Object.defineProperty({}, "secret", {
+      enumerable: true,
+      get() {
+        getterCalls += 1;
+        return "value";
+      }
+    });
+
+    expect(snapshotBoundedPolicyData(input)).toBeUndefined();
+    expect(getterCalls).toBe(0);
   });
 
   it("returns a detached, deeply frozen snapshot", () => {
