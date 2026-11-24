@@ -149,6 +149,16 @@ describe("PostgresEncryptedMemoryStore", () => {
     )).toBe(true);
   });
 
+  it("fails closed when a stored record has an invalid expiry timestamp", async () => {
+    const db: SqlExecutor = {
+      query: vi.fn(async () => ({ rows: [{ envelope: {}, expires_at: "not-a-date" }] }))
+    };
+    const store = new PostgresEncryptedMemoryStore(db, new MemoryValueCipher(keys()));
+    await expect(store.read({ namespace: "tenant-a/n", key: "k" }))
+      .rejects.toThrow("invalid expiry timestamp");
+    expect(db.query).toHaveBeenCalledOnce();
+  });
+
   it("preserves a concurrent rewrite when the expiry timestamp is unchanged", async () => {
     const sameExpiry = new Date(Date.now() - 60_000);
     const context = { tenantId: "tenant-a", namespace: "tenant-a/n", key: "k" };
@@ -217,7 +227,8 @@ describe("PostgresEncryptedMemoryStore", () => {
     const store = new PostgresEncryptedMemoryStore(db, cipher);
     await expect(store.read({ namespace: "tenant-a/n", key: "k" }))
       .resolves.toBe('{"classification":"internal","value":"refreshed"}');
-    expect(deleteValues).toEqual(["tenant-a", "tenant-a/n", "k", expiredAt]);
+    expect(deleteValues?.slice(0, 4)).toEqual(["tenant-a", "tenant-a/n", "k", expiredAt]);
+    expect(JSON.parse(String(deleteValues?.[4]))).toEqual({});
     expect(db.query).toHaveBeenNthCalledWith(2,
       expect.stringContaining("AND expires_at = $4"), deleteValues);
     expect(db.query).toHaveBeenNthCalledWith(3,
