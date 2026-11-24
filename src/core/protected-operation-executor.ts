@@ -41,7 +41,21 @@ function cloneContextValue(value: unknown, ancestors: WeakSet<object>): unknown 
   ancestors.add(value);
   try {
     if (Array.isArray(value)) {
-      const result = value.map((item) => cloneContextValue(item, ancestors));
+      const descriptors = Object.getOwnPropertyDescriptors(value);
+      const result: unknown[] = new Array(value.length);
+      for (const key of Reflect.ownKeys(descriptors)) {
+        if (key === "length") continue;
+        if (typeof key !== "string" || !/^(0|[1-9][0-9]*)$/.test(key)) {
+          throw new TypeError("Policy context arrays cannot contain custom or symbol properties.");
+        }
+        const index = Number(key);
+        const descriptor = descriptors[key];
+        if (!Number.isSafeInteger(index) || index >= value.length ||
+            !descriptor || !("value" in descriptor) || !descriptor.enumerable) {
+          throw new TypeError("Policy context array accessors and hidden properties are not supported.");
+        }
+        result[index] = cloneContextValue(descriptor.value, ancestors);
+      }
       return result;
     }
     if (!isPlainRecord(value)) throw new TypeError("Policy context must contain only plain records and arrays.");
