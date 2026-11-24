@@ -60,20 +60,27 @@ BEGIN
 END
 $stage4_validate_roles$;
 
+-- Normalize pre-existing direct ACLs before applying the allowlist. REVOKE from
+-- PUBLIC alone is insufficient when a same-name service role already has grants.
 REVOKE ALL ON SCHEMA infinyx_memory FROM PUBLIC;
+REVOKE ALL ON SCHEMA infinyx_memory FROM infinyx_memory_runtime, infinyx_audit_writer, infinyx_audit_reader;
 REVOKE ALL ON SCHEMA infinyx_audit FROM PUBLIC;
-GRANT USAGE ON SCHEMA infinyx_memory TO infinyx_memory_runtime;
-GRANT USAGE ON SCHEMA infinyx_audit TO infinyx_audit_writer, infinyx_audit_reader;
+REVOKE ALL ON SCHEMA infinyx_audit FROM infinyx_memory_runtime, infinyx_audit_writer, infinyx_audit_reader;
 
 REVOKE ALL ON infinyx_memory.memory_entries FROM PUBLIC;
+REVOKE ALL ON infinyx_memory.memory_entries FROM infinyx_memory_runtime, infinyx_audit_writer, infinyx_audit_reader;
+REVOKE ALL ON infinyx_audit.audit_chain_state FROM PUBLIC;
+REVOKE ALL ON infinyx_audit.audit_chain_state FROM infinyx_memory_runtime, infinyx_audit_writer, infinyx_audit_reader;
+REVOKE ALL ON infinyx_audit.memory_access_events FROM PUBLIC;
+REVOKE ALL ON infinyx_audit.memory_access_events FROM infinyx_memory_runtime, infinyx_audit_writer, infinyx_audit_reader;
+
+GRANT USAGE ON SCHEMA infinyx_memory TO infinyx_memory_runtime;
 GRANT SELECT, INSERT, UPDATE, DELETE
   ON infinyx_memory.memory_entries TO infinyx_memory_runtime;
 
-REVOKE ALL ON infinyx_audit.audit_chain_state FROM PUBLIC;
+GRANT USAGE ON SCHEMA infinyx_audit TO infinyx_audit_writer, infinyx_audit_reader;
 GRANT SELECT, UPDATE
   ON infinyx_audit.audit_chain_state TO infinyx_audit_writer;
-
-REVOKE ALL ON infinyx_audit.memory_access_events FROM PUBLIC;
 GRANT INSERT ON infinyx_audit.memory_access_events TO infinyx_audit_writer;
 GRANT SELECT ON infinyx_audit.memory_access_events TO infinyx_audit_reader;
 
