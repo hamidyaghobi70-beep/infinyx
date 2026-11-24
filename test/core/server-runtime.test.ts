@@ -145,6 +145,17 @@ describe("server shutdown runtime", () => {
     expect(setup.fakeProcess.exitCode).toBe(1);
   });
 
+  it.each([0, -1, 1.5, Number.NaN, Number.POSITIVE_INFINITY, 2_147_483_648])(
+    "rejects invalid HTTP drain timeout %s before startup",
+    async (drainTimeoutMs) => {
+      const setup = fixture({ drainTimeoutMs });
+      await expect(setup.start()).rejects.toThrow(/drainTimeoutMs must be an integer/i);
+      expect(setup.core.initialize).not.toHaveBeenCalled();
+      expect(setup.listen).not.toHaveBeenCalled();
+      expect(setup.fakeProcess.listenerCount("SIGINT")).toBe(0);
+    }
+  );
+
   it("forces remaining HTTP connections closed after the configured drain timeout", async () => {
     vi.useFakeTimers();
     const setup = fixture({
