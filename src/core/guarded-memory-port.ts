@@ -177,9 +177,15 @@ export class GuardedMemoryPort implements MemoryPort {
       );
     }
 
-    this.#store = store as MemoryPort;
-    this.#policy = policy as PolicyEngine;
-    this.#audit = audit as MemoryAuditPort;
+    // Capture and bind every callable dependency exactly once. Retaining the
+    // original objects would re-read mutable/accessor-backed methods after validation.
+    try {
+      this.#store = captureMethods(store, ["read", "write", "delete"]) as MemoryPort;
+      this.#policy = captureMethods(policy, ["evaluate"]) as PolicyEngine;
+      this.#audit = captureMethods(audit, ["publishDecision", "publishFailure"]) as MemoryAuditPort;
+    } catch {
+      throw new TypeError("GuardedMemoryPort dependency methods must be readable functions.");
+    }
     this.#maxValueBytes = maxValueBytes;
     this.#policyTimeoutMs = policyTimeoutMs;
     this.#auditTimeoutMs = auditTimeoutMs;
@@ -399,6 +405,18 @@ function withTimeout<T>(work: () => Promise<T> | T, ms: number): Promise<T | typ
       (error: unknown) => { if (!settled) { settled = true; clearTimeout(timer); reject(error); } }
     );
   });
+}
+
+function captureMethods<T extends object>(value: T, names: readonly (keyof T)[]): T {
+  const captured: Partial<T> = {};
+  for (const name of names) {
+    const method: unknown = Reflect.get(value, name);
+    if (typeof method !== "function") {
+      throw new TypeError("Dependency method must be a function.");
+    }
+    captured[name] = method.bind(value) as T[keyof T];
+  }
+  return Object.freeze(captured) as T;
 }
 
 function hasMethods(value: unknown, names: readonly string[]): boolean {
