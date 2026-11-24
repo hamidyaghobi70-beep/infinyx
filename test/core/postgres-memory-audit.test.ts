@@ -82,7 +82,7 @@ describe("PostgresMemoryAuditPort", () => {
     expect(state.statements.some((s) => s.sql === "COMMIT")).toBe(false);
   });
 
-  it("rolls back and propagates audit failures so guarded writes fail closed", async () =>
+  it("rolls back and propagates audit failures so guarded writes fail closed", async () => {
     const state = setup(true);
     const audit = new PostgresMemoryAuditPort(state.pool);
     await expect(audit.publishDecision(event)).rejects.toThrow("database unavailable");
