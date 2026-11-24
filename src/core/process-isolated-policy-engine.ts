@@ -180,6 +180,11 @@ export class ProcessIsolatedPolicyEngine implements PolicyEngine {
         deny("Policy request is invalid or unsafe; access denied."),
         "NOT_STARTED", "NOT_REQUIRED");
     }
+    if (options?.deadlineAt !== undefined && !Number.isFinite(options.deadlineAt)) {
+      return makeRecord("TERMINAL", "FAILED",
+        deny("Policy deadline is invalid; access denied."),
+        "NOT_STARTED", "NOT_REQUIRED");
+    }
     if (this.shuttingDown) {
       return makeRecord("TERMINAL", "CANCELLED",
         deny("Runtime shutdown is in progress; access denied."),
