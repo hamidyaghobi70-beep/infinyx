@@ -35,11 +35,25 @@ export class MemoryEncryptionError extends Error {
  * remain v1 for compatibility with existing standalone callers and old records.
  */
 export class MemoryValueCipher {
-  constructor(private readonly keys: MemoryKeyProvider) {}
+  readonly #getActiveKey: MemoryKeyProvider["getActiveKey"];
+  readonly #getKey: MemoryKeyProvider["getKey"];
+
+  constructor(keys: MemoryKeyProvider) {
+    try {
+      const getActiveKey = Reflect.get(keys, "getActiveKey");
+      const getKey = Reflect.get(keys, "getKey");
+      if (typeof getActiveKey !== "function" || typeof getKey !== "function") throw new TypeError();
+      this.#getActiveKey = getActiveKey.bind(keys) as MemoryKeyProvider["getActiveKey"];
+      this.#getKey = getKey.bind(keys) as MemoryKeyProvider["getKey"];
+      Object.freeze(this);
+    } catch {
+      throw new TypeError("Memory key provider methods must be readable functions.");
+    }
+  }
 
   async encrypt(plaintext: string, context?: MemoryEncryptionContext): Promise<EncryptedMemoryEnvelope> {
     try {
-      const active = await this.keys.getActiveKey();
+      const active = await this.#getActiveKey();
       assertKey(active.key);
       assertKeyId(active.keyId);
       const nonce = randomBytes(12);
@@ -62,7 +76,7 @@ export class MemoryValueCipher {
   }
 
   async activeKeyId(): Promise<string> {
-    const active = await this.keys.getActiveKey();
+    const active = await this.#getActiveKey();
     assertKey(active.key);
     try { assertKeyId(active.keyId); } catch (cause) { throw new MemoryEncryptionError(undefined, { cause }); }
     return active.keyId;
@@ -84,7 +98,7 @@ export class MemoryValueCipher {
         throw new Error("Authenticated memory context is required.");
       }
       assertKeyId(envelope.keyId);
-      const key = await this.keys.getKey(envelope.keyId);
+      const key = await this.#getKey(envelope.keyId);
       if (!key) throw new Error("Memory decryption key is unavailable.");
       assertKey(key);
       const nonce = decodeCanonicalBase64(envelope.nonce);
