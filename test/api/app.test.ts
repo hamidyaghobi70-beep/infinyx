@@ -30,6 +30,21 @@ describe("HTTP foundation", () => {
     expect(stopping.body).toEqual({ status: "not_ready" });
   });
 
+  it("applies the request limit before parsing malformed JSON bodies", async () => {
+    const application = createApp();
+    let lastStatus = 0;
+
+    for (let index = 0; index < 101; index += 1) {
+      const response = await request(application)
+        .post("/health")
+        .set("content-type", "application/json")
+        .send("{");
+      lastStatus = response.status;
+    }
+
+    expect(lastStatus).toBe(429);
+  });
+
   it("returns a JSON 404 for unknown routes", async () => {
     const response = await request(app).get("/not-a-route");
 
