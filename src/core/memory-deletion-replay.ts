@@ -41,28 +41,33 @@ export interface MemoryDeletionReplayResult {
  * be run after every restore without maintaining a cursor in the restored DB.
  */
 export class MemoryDeletionCoordinator implements MemoryPort {
+  readonly #store: MemoryPort;
+  readonly #ledger: MemoryDeletionLedgerPort;
   readonly #batchSize: number;
   readonly #now: () => Date;
 
   constructor(
-    private readonly store: MemoryPort,
-    private readonly ledger: MemoryDeletionLedgerPort,
+    store: MemoryPort,
+    ledger: MemoryDeletionLedgerPort,
     options: MemoryDeletionReplayOptions = {}
   ) {
+    this.#store = captureMethods<MemoryPort>(store, ["read", "write", "delete"]);
+    this.#ledger = captureMethods<MemoryDeletionLedgerPort>(ledger, ["append", "listAfter"]);
     this.#batchSize = options.batchSize ?? 250;
     this.#now = options.now ?? (() => new Date());
     if (!Number.isSafeInteger(this.#batchSize) || this.#batchSize < 1 || this.#batchSize > 5000) {
       throw new TypeError("batchSize must be an integer between 1 and 5000.");
     }
+    Object.freeze(this);
   }
 
   /** Delegate reads/writes unchanged so this coordinator can sit beneath GuardedMemoryPort. */
   read(address: MemoryAddress): Promise<unknown | null> {
-    return this.store.read(address);
+    return this.#store.read(address);
   }
 
   write(address: MemoryAddress, value: unknown): Promise<void> {
-    return this.store.write(address, value);
+    return this.#store.write(address, value);
   }
 
   async delete(
@@ -80,11 +85,11 @@ export class MemoryDeletionCoordinator implements MemoryPort {
       reason
     });
     // Fail closed: if the independent ledger is unavailable, do not delete.
-    const cursor = await this.ledger.append(tombstone);
+    const cursor = await this.#ledger.append(tombstone);
     if (typeof cursor !== "string" || cursor.length < 1 || cursor.length > 512) {
       throw new Error("Deletion ledger returned an invalid append cursor.");
     }
-    await this.store.delete({ namespace: address.namespace, key: address.key });
+    await this.#store.delete({ namespace: address.namespace, key: address.key });
   }
 
   async replayAfterRestore(): Promise<MemoryDeletionReplayResult> {
@@ -93,7 +98,7 @@ export class MemoryDeletionCoordinator implements MemoryPort {
     let batches = 0;
     const seenIds = new Set<string>();
     for (;;) {
-      const entries = await this.ledger.listAfter(cursor, this.#batchSize);
+      const entries = await this.#ledger.listAfter(cursor, this.#batchSize);
       if (entries.length === 0) break;
       if (entries.length > this.#batchSize) {
         throw new Error("Deletion ledger exceeded the requested page size.");
@@ -112,7 +117,7 @@ export class MemoryDeletionCoordinator implements MemoryPort {
       // Validate the complete page before applying any deletion from it. A
       // malformed later entry must not leave a partially applied page.
       for (const entry of entries) {
-        await this.store.delete({ namespace: entry.namespace, key: entry.key });
+        await this.#store.delete({ namespace: entry.namespace, key: entry.key });
         replayed += 1;
       }
       for (const id of pageIds) seenIds.add(id);
@@ -122,6 +127,21 @@ export class MemoryDeletionCoordinator implements MemoryPort {
     }
     return Object.freeze({ recorded: cursor ?? "", replayed, batches });
   }
+}
+
+function captureMethods<T extends object>(value: object, names: readonly string[]): T {
+  if (!value || typeof value !== "object") throw new TypeError("Deletion coordinator dependencies must be objects.");
+  const captured: Record<string, unknown> = {};
+  try {
+    for (const name of names) {
+      const method: unknown = Reflect.get(value, name);
+      if (typeof method !== "function") throw new TypeError("Dependency method must be a function.");
+      captured[name] = method.bind(value);
+    }
+  } catch {
+    throw new TypeError("Deletion coordinator dependency methods must be readable functions.");
+  }
+  return Object.freeze(captured) as T;
 }
 
 function validateAddress(address: MemoryAddress): void {
