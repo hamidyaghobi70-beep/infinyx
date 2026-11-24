@@ -13,6 +13,20 @@ function keys(): MemoryKeyProvider {
 }
 
 describe("MemoryValueCipher", () => {
+  it("captures key-provider methods against post-construction replacement", async () => {
+    const provider = keys();
+    const originalActive = vi.spyOn(provider, "getActiveKey");
+    const originalLookup = vi.spyOn(provider, "getKey");
+    const cipher = new MemoryValueCipher(provider);
+    provider.getActiveKey = vi.fn(async () => { throw new Error("replacement active key provider invoked"); });
+    provider.getKey = vi.fn(async () => null);
+    const envelope = await cipher.encrypt("captured-provider");
+    await expect(cipher.decrypt(envelope)).resolves.toBe("captured-provider");
+    expect(originalActive).toHaveBeenCalledOnce();
+    expect(originalLookup).toHaveBeenCalledOnce();
+    expect(Object.isFrozen(cipher)).toBe(true);
+  });
+
   it("round-trips plaintext without storing it in the envelope", async () => {
     const cipher = new MemoryValueCipher(keys());
     const envelope = await cipher.encrypt('{"classification":"internal","value":"hello"}');
