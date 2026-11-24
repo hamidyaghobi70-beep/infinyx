@@ -94,6 +94,16 @@ describe("MemoryValueCipher", () => {
 });
 
 describe("PostgresEncryptedMemoryStore", () => {
+  it("rejects runtime table-name overrides before executing SQL", () => {
+    const db: SqlExecutor = { query: vi.fn(async () => ({ rows: [] })) };
+    expect(() => new PostgresEncryptedMemoryStore(
+      db,
+      new MemoryValueCipher(keys()),
+      { tableName: "infinyx_memory.memory_entries; DROP SCHEMA public CASCADE" as never }
+    )).toThrow("Unsupported persistent memory table.");
+    expect(db.query).not.toHaveBeenCalled();
+  });
+
   it("writes only an authenticated ciphertext envelope and reads it back", async () => {
     const cipher = new MemoryValueCipher(keys());
     let saved: Record<string, unknown> | undefined;
