@@ -65,4 +65,35 @@ describe("ModuleRegistry", () => {
       "stop:stateful"
     ]);
   });
+
+  it("snapshots accessor-backed module metadata exactly once", () => {
+    const registry = new ModuleRegistry();
+    let idReads = 0;
+    let versionReads = 0;
+    let dependencyReads = 0;
+    const module = {
+      get id() { idReads += 1; return idReads === 1 ? "stable" : "invalid"; },
+      get version() { versionReads += 1; return versionReads === 1 ? "1.0.0" : ""; },
+      get dependencies() { dependencyReads += 1; return []; }
+    } as unknown as CoreModule;
+
+    registry.register(module);
+
+    expect(idReads).toBe(1);
+    expect(versionReads).toBe(1);
+    expect(dependencyReads).toBe(1);
+    expect(registry.get("stable")?.id).toBe("stable");
+    expect(registry.get("invalid")).toBeUndefined();
+  });
+
+  it("rejects malformed runtime dependency collections and lifecycle hooks", () => {
+    const registry = new ModuleRegistry();
+
+    expect(() => registry.register({
+      id: "bad-dependencies", version: "1.0.0", dependencies: "platform" as unknown as readonly string[]
+    })).toThrowError(CoreError);
+    expect(() => registry.register({
+      id: "bad-hook", version: "1.0.0", initialize: 42 as unknown as () => void
+    })).toThrowError(CoreError);
+  });
 });
