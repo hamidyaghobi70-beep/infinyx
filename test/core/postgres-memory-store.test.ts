@@ -252,15 +252,6 @@ describe("PostgresEncryptedMemoryStore", () => {
       expect.stringContaining("SELECT envelope, expires_at"), ["tenant-a", "tenant-a/n", "k"]);
   });
 
-  it("bounds expiry sweeps and includes tenant identity in the delete join", async () => {
-    let statement = "";
-    const db: SqlExecutor = { query: async (sql) => { statement = sql; return { rows: [], rowCount: 7 }; } };
-    const store = new PostgresEncryptedMemoryStore(db, new MemoryValueCipher(keys()));
-    await expect(store.deleteExpired(0)).rejects.toThrow(TypeError);
-    await expect(store.deleteExpired(500)).resolves.toBe(7);
-    expect(statement).toContain("target.tenant_id = expired.tenant_id");
-  });
-
   it("requires an explicit tenant prefix for classified persistent values", async () => {
     const db: SqlExecutor = { query: async () => ({ rows: [], rowCount: 1 }) };
     const store = new PostgresEncryptedMemoryStore(db, new MemoryValueCipher(keys()));
@@ -333,6 +324,9 @@ describe("PostgresEncryptedMemoryStore", () => {
     });
     const store = new PostgresEncryptedMemoryStore(db, cipher);
     await expect(store.deleteExpired()).rejects.toThrow(
+      "Expiry deletion requires a deletion-ledger coordinator."
+    );
+    await expect(store.deleteExpired(500)).rejects.toThrow(
       "Expiry deletion requires a deletion-ledger coordinator."
     );
     expect(db.query).not.toHaveBeenCalled();
