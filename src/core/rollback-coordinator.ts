@@ -6,11 +6,11 @@
  * through unchanged so callers retain the original failure and its causes.
  */
 export class RollbackCoordinator {
-  private inFlight: Promise<unknown> | undefined;
+  private inFlight: Promise<void> | undefined;
 
   run(operation: () => Promise<void>): Promise<void> {
     if (this.inFlight) {
-      return this.inFlight as Promise<void>;
+      return this.inFlight;
     }
 
     const attempt = Promise.resolve().then(operation);
