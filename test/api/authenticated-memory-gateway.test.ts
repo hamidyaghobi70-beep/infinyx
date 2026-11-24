@@ -89,8 +89,29 @@ describe("request-scoped authenticated memory gateway", () => {
     expect(next).not.toHaveBeenCalled();
   });
 
-  it("does not expose a capability unless the gateway installed one", () => {
+  it("does not accept a capability injected through mutable response.locals", () => {
     const { response } = harness();
+    response.locals.authenticatedMemorySession = new GuardedMemoryPort("notes");
     expect(getAuthenticatedMemorySession(response)).toBeNull();
+  });
+
+  it("keeps capabilities isolated to the response that created each request session", () => {
+    const principal = Object.freeze({ subject: "actor", tenantId: "tenant", issuer: "issuer", audience: ["api"], expiresAt: 9_999_999_999 });
+    const firstSession = new GuardedMemoryPort("notes");
+    const secondSession = new GuardedMemoryPort("notes");
+    getPrincipal.mockReturnValue(principal);
+    createSession.mockReturnValueOnce(firstSession).mockReturnValueOnce(secondSession);
+    const first = harness();
+    const second = harness();
+    const gateway = createAuthenticatedMemoryGateway(dependencies);
+
+    gateway({ res: first.response } as Request, first.response, first.next);
+    gateway({ res: second.response } as Request, second.response, second.next);
+
+    expect(getAuthenticatedMemorySession(first.response)).toBe(firstSession);
+    expect(getAuthenticatedMemorySession(second.response)).toBe(secondSession);
+    expect(getAuthenticatedMemorySession({ locals: {} } as Response)).toBeNull();
+    expect(first.next).toHaveBeenCalledOnce();
+    expect(second.next).toHaveBeenCalledOnce();
   });
 });
