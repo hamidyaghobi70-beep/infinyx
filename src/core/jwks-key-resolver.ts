@@ -19,53 +19,67 @@ const DEFAULT_CACHE_TTL_MS = 5 * 60_000;
  * The endpoint must be configured by the operator; redirects are never followed.
  */
 export class JwksKeyResolver {
-  private readonly url: URL;
-  private readonly fetcher: typeof fetch;
-  private readonly ttl: number;
-  private readonly refreshCooldownMs: number;
-  private readonly now: () => number;
-  private lastRefreshAt = Number.NEGATIVE_INFINITY;
-  private cache = new Map<string, CachedKey>();
-  private refreshInFlight: Promise<void> | undefined;
+  readonly #url: URL;
+  readonly #fetcher: typeof fetch;
+  readonly #ttl: number;
+  readonly #refreshCooldownMs: number;
+  readonly #now: () => number;
+  #lastRefreshAt = Number.NEGATIVE_INFINITY;
+  #cache = new Map<string, CachedKey>();
+  #refreshInFlight: Promise<void> | undefined;
 
   constructor(options: JwksKeyResolverOptions) {
+    let jwksUrl: unknown, fetcher: unknown, ttlValue: unknown, cooldownValue: unknown, nowValue: unknown;
+    try {
+      jwksUrl = options.jwksUrl;
+      fetcher = options.fetcher;
+      ttlValue = options.cacheTtlMs;
+      cooldownValue = options.refreshCooldownMs;
+      nowValue = options.now;
+    } catch {
+      throw new TypeError("JWKS resolver options must be readable.");
+    }
     let url: URL;
-    try { url = new URL(options.jwksUrl); } catch { throw new TypeError("Invalid JWKS URL."); }
+    try { url = new URL(jwksUrl as string); } catch { throw new TypeError("Invalid JWKS URL."); }
     if (url.protocol !== "https:" || url.username || url.password || url.hash) {
       throw new TypeError("JWKS URL must be an HTTPS URL without credentials or fragment.");
     }
-    const ttl = options.cacheTtlMs ?? DEFAULT_CACHE_TTL_MS;
+    const ttl = ttlValue === undefined ? DEFAULT_CACHE_TTL_MS : ttlValue as number;
     if (!Number.isInteger(ttl) || ttl < 1_000 || ttl > 15 * 60_000) throw new TypeError("Invalid JWKS cache TTL.");
-    const refreshCooldownMs = options.refreshCooldownMs ?? 1_000;
+    const refreshCooldownMs = cooldownValue === undefined ? 1_000 : cooldownValue as number;
     if (!Number.isInteger(refreshCooldownMs) || refreshCooldownMs < 0 || refreshCooldownMs > 60_000) throw new TypeError("Invalid JWKS refresh cooldown.");
-    this.url = url;
-    this.fetcher = options.fetcher ?? fetch;
-    this.ttl = ttl;
-    this.refreshCooldownMs = refreshCooldownMs;
-    this.now = options.now ?? Date.now;
+    const selectedFetcher = fetcher === undefined ? fetch : fetcher;
+    if (typeof selectedFetcher !== "function") throw new TypeError("JWKS fetcher must be a function.");
+    if (nowValue !== undefined && typeof nowValue !== "function") throw new TypeError("JWKS clock must be a function.");
+    this.#url = url;
+    this.#fetcher = selectedFetcher as typeof fetch;
+    this.#ttl = ttl;
+    this.#refreshCooldownMs = refreshCooldownMs;
+    this.#now = nowValue === undefined ? Date.now : (nowValue as () => number).bind(options);
+    Object.freeze(this);
   }
 
   async resolve(kid: string): Promise<KeyObject> {
     if (!kid || kid.length > 256) throw new TypeError("A valid JWT key id is required.");
-    const cached = this.cache.get(kid);
-    if (cached && cached.expiresAt > this.now()) return cached.key;
-    await this.refresh(cached !== undefined && cached.expiresAt <= this.now());
-    const refreshed = this.cache.get(kid);
-    if (!refreshed || refreshed.expiresAt <= this.now()) throw new Error("No trusted RS256 signing key matches this key id.");
+    const cached = this.#cache.get(kid);
+    if (cached && cached.expiresAt > this.#now()) return cached.key;
+    await this.refresh(cached !== undefined && cached.expiresAt <= this.#now());
+    const refreshed = this.#cache.get(kid);
+    if (!refreshed || refreshed.expiresAt <= this.#now()) throw new Error("No trusted RS256 signing key matches this key id.");
     return refreshed.key;
   }
 
   private async refresh(force: boolean): Promise<void> {
-    if (!force && this.now() - this.lastRefreshAt < this.refreshCooldownMs) return;
-    if (!this.refreshInFlight) {
-      this.lastRefreshAt = this.now();
-      this.refreshInFlight = this.load().finally(() => { this.refreshInFlight = undefined; });
+    if (!force && this.#now() - this.#lastRefreshAt < this.#refreshCooldownMs) return;
+    if (!this.#refreshInFlight) {
+      this.#lastRefreshAt = this.#now();
+      this.#refreshInFlight = this.load().finally(() => { this.#refreshInFlight = undefined; });
     }
-    await this.refreshInFlight;
+    await this.#refreshInFlight;
   }
 
   private async load(): Promise<void> {
-    const response = await this.fetcher(this.url, {
+    const response = await this.#fetcher(this.#url, {
       method: "GET",
       headers: { accept: "application/json" },
       redirect: "error",
@@ -107,10 +121,10 @@ export class JwksKeyResolver {
       try {
         const key = createPublicKey({ key: { kty: "RSA", n: candidate.n, e: candidate.e }, format: "jwk" });
         if (key.asymmetricKeyType !== "rsa" || (key.asymmetricKeyDetails?.modulusLength ?? 0) < 2048) continue;
-        next.set(candidate.kid, { key, expiresAt: this.now() + this.ttl });
+        next.set(candidate.kid, { key, expiresAt: this.#now() + this.#ttl });
       } catch { /* Ignore malformed or unsuitable keys; never weaken verification. */ }
     }
     if (next.size === 0) throw new Error("JWKS contains no acceptable RS256 signing keys.");
-    this.cache = next;
+    this.#cache = next;
   }
 }
