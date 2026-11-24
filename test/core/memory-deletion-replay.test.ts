@@ -30,7 +30,7 @@ class FakeLedger implements MemoryDeletionLedgerPort {
 const key = (address: MemoryAddress) => address.namespace + "/" + address.key;
 
 describe("MemoryDeletionCoordinator", () => {
-  it("snapshots store and ledger capabilities against replacement and instance tampering", async () => {
+  it("snapshots store and ledger capabilities against replacement", async () => {
     const store = new FakeStore();
     const ledger = new FakeLedger();
     const address = { namespace: "tenant-a", key: "protected" };
