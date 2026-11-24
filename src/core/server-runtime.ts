@@ -13,6 +13,7 @@ export interface ServerRuntimeOptions {
   readonly port: number;
   readonly environment: string;
   readonly drainTimeoutMs?: number;
+  readonly startupTimeoutMs?: number;
 }
 
 export interface ServerRuntime {
@@ -75,14 +76,13 @@ class ShutdownController {
   }
 
   private async performShutdown(): Promise<void> {
-    // A signal during initialize/start must wait for the startup hook to settle.
-    // This prevents CoreEngine.stop() from racing an in-flight lifecycle hook.
+    // A signal during initialize/start must not race an in-flight lifecycle hook.
+    // Bound the wait so a permanently pending startup cannot suppress process shutdown.
     if (this.startupPromise) {
-      try {
-        await this.startupPromise;
-      } catch (error) {
-        this.finalExitCode = 1;
-        this.options.logger.error({ err: error }, "Application startup failed during shutdown");
+      const startupSettled = await this.waitForStartup();
+      if (!startupSettled) {
+        await this.exitOnce();
+        return;
       }
     }
 
@@ -103,6 +103,38 @@ class ShutdownController {
     }
 
     await this.exitOnce();
+  }
+
+  private async waitForStartup(): Promise<boolean> {
+    const timeoutMs = this.options.startupTimeoutMs ?? 10_000;
+    let timeout: ReturnType<typeof setTimeout> | undefined;
+
+    const timedOut = new Promise<false>((resolve) => {
+      timeout = setTimeout(() => resolve(false), timeoutMs);
+    });
+    const settled = this.startupPromise!.then(
+      () => true,
+      (error: unknown) => {
+        this.finalExitCode = 1;
+        this.options.logger.error(
+          { err: error },
+          "Application startup failed during shutdown"
+        );
+        return true;
+      }
+    );
+
+    const result = await Promise.race([settled, timedOut]);
+    if (timeout) clearTimeout(timeout);
+
+    if (!result) {
+      this.finalExitCode = 1;
+      this.options.logger.error(
+        { timeoutMs },
+        "Application startup did not settle before shutdown timeout"
+      );
+    }
+    return result;
   }
 
   private drainHttpServer(server: Server): Promise<void> {
