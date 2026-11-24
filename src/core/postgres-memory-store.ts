@@ -65,8 +65,9 @@ export class PostgresEncryptedMemoryStore implements MemoryPort {
       // concurrent write that extended the record's retention window.
       const deletion = await this.db.query(
         `DELETE FROM ${this.#table}
-         WHERE tenant_id = $1 AND namespace = $2 AND memory_key = $3 AND expires_at = $4`,
-        [tenantId, address.namespace, address.key, row.expires_at]
+         WHERE tenant_id = $1 AND namespace = $2 AND memory_key = $3
+           AND expires_at = $4 AND envelope = $5::jsonb`,
+        [tenantId, address.namespace, address.key, row.expires_at, JSON.stringify(row.envelope)]
       );
       if ((deletion.rowCount ?? 0) > 0) return null;
 
