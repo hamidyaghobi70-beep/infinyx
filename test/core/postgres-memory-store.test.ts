@@ -133,6 +133,23 @@ describe("PostgresEncryptedMemoryStore", () => {
     );
   });
 
+  it("keeps the row creation timestamp synchronized with the encrypted envelope on overwrite", async () => {
+    let insertSql = "";
+    const db: SqlExecutor = {
+      query: vi.fn(async (sql: string) => {
+        if (sql.startsWith("INSERT")) insertSql = sql;
+        return { rows: [], rowCount: 1 };
+      })
+    };
+    const store = new PostgresEncryptedMemoryStore(db, new MemoryValueCipher(keys()));
+    await store.write(
+      { namespace: "tenant-a/notes", key: "k" },
+      '{"classification":"internal","value":"replacement"}'
+    );
+    expect(insertSql).toContain("created_at = EXCLUDED.created_at");
+    expect(insertSql).toContain("updated_at = EXCLUDED.updated_at");
+  });
+
   it("deletes expired records before returning a miss", async () => {
     const statements: string[] = [];
     const db: SqlExecutor = {
