@@ -23,7 +23,7 @@ describe("JWKS key resolver", () => {
     const fetcher = vi.fn()
       .mockResolvedValueOnce(response([{ ...jwk, kid: "old", use: "sig", alg: "RS256" }]))
       .mockResolvedValueOnce(response([{ ...secondJwk, kid: "new", use: "sig", alg: "RS256" }]));
-    const resolver = new JwksKeyResolver({ jwksUrl: "https://id.example.test/jwks", fetcher });
+    const resolver = new JwksKeyResolver({ jwksUrl: "https://id.example.test/jwks", fetcher, refreshCooldownMs: 0 });
     await resolver.resolve("old");
     expect((await resolver.resolve("new")).asymmetricKeyType).toBe("rsa");
     expect(fetcher).toHaveBeenCalledTimes(2);
