@@ -83,10 +83,13 @@ export class PostgresMigrationRunner {
         // SQL and ledger insertion share the batch transaction. A failed migration
         // rolls back every schema change and ledger row from this invocation.
         await connection.query(migration.sql);
-        await connection.query(
+        const ledgerInsert = await connection.query(
           "INSERT INTO infinyx_meta.schema_migrations (migration_id, checksum) VALUES ($1, $2)",
           [migration.id, checksum]
         );
+        if (ledgerInsert.rowCount !== 1) {
+          throw new Error("Migration ledger insert did not affect exactly one row.");
+        }
         applied.push(migration.id);
       }
       await connection.query("COMMIT");
