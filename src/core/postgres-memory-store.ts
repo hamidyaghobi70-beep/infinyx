@@ -96,20 +96,10 @@ export class PostgresEncryptedMemoryStore implements MemoryPort {
       throw new Error("Persistent memory record has an invalid expiry timestamp.");
     }
     if (expiresAt <= this.#now().getTime()) {
-      // The row may have been refreshed after SELECT. Delete only the exact
-      // expired version observed above; an unconditional delete can erase a
-      // concurrent write that extended the record's retention window.
-      const deletion = await this.#query(
-        `DELETE FROM ${this.#table}
-         WHERE tenant_id = $1 AND namespace = $2 AND memory_key = $3
-           AND expires_at = $4 AND envelope = $5::jsonb`,
-        [tenantId, target.namespace, target.key, row.expires_at, JSON.stringify(row.envelope)]
-      );
-      if ((deletion.rowCount ?? 0) > 0) return null;
-
-      // A zero-row conditional delete means the observed version changed (or
-      // another reader removed it). Re-read once so a concurrent refresh is
-      // visible to this caller instead of being reported as a false cache miss.
+      // Expired records are invisible immediately, but physical deletion must
+      // go through the independent deletion ledger. A direct DELETE here could
+      // let a later backup restore resurrect data without a replay tombstone.
+      // Re-read once to observe a concurrent refresh without mutating storage.
       const refreshed = await this.#query<{ envelope: StoredMemoryEnvelope; expires_at: Date | string }>(
         `SELECT envelope, expires_at FROM ${this.#table}
          WHERE tenant_id = $1 AND namespace = $2 AND memory_key = $3 LIMIT 1`,

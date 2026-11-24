@@ -228,20 +228,19 @@ describe("PostgresEncryptedMemoryStore", () => {
     expect(insertSql).toContain("updated_at = EXCLUDED.updated_at");
   });
 
-  it("deletes expired records before returning a miss", async () => {
+  it("does not physically delete expired records without a deletion-ledger tombstone", async () => {
     const statements: string[] = [];
     const db: SqlExecutor = {
       query: async (sql) => {
         statements.push(sql);
-        if (sql.startsWith("SELECT")) return { rows: [{ envelope: {}, expires_at: new Date(0) }] };
-        return { rows: [], rowCount: 1 };
+        return { rows: [{ envelope: {}, expires_at: new Date(0) }] };
       }
     };
     const store = new PostgresEncryptedMemoryStore(db, new MemoryValueCipher(keys()));
     expect(await store.read({ namespace: "tenant-a/n", key: "k" })).toBeNull();
-    expect(statements.some((sql) =>
-      sql.startsWith("DELETE") && sql.includes("AND expires_at = $4 AND envelope = $5::jsonb")
-    )).toBe(true);
+    expect(statements).toHaveLength(2);
+    expect(statements.every((sql) => sql.startsWith("SELECT"))).toBe(true);
+    expect(statements.some((sql) => sql.startsWith("DELETE"))).toBe(false);
   });
 
   it("fails closed when a stored record has an invalid expiry timestamp", async () => {
@@ -254,46 +253,21 @@ describe("PostgresEncryptedMemoryStore", () => {
     expect(db.query).toHaveBeenCalledOnce();
   });
 
-  it("preserves a concurrent rewrite when the expiry timestamp is unchanged", async () => {
+  it("keeps an expired concurrent rewrite invisible without bypassing the deletion ledger", async () => {
     const sameExpiry = new Date(Date.now() - 60_000);
-    const context = { tenantId: "tenant-a", namespace: "tenant-a/n", key: "k" };
-    const cipher = new MemoryValueCipher(keys());
-    const replacement = await cipher.encrypt(
-      '{"classification":"internal","value":"concurrent-rewrite"}',
-      context
-    );
-    let selectCount = 0;
-    let deleteValues: readonly unknown[] | undefined;
     const db: SqlExecutor = {
-      query: vi.fn(async (sql: string, values: readonly unknown[] = []) => {
-        if (sql.startsWith("SELECT")) {
-          selectCount += 1;
-          if (selectCount === 1) {
-            return { rows: [{ envelope: { stale: true }, expires_at: sameExpiry }] };
-          }
-          return { rows: [{ envelope: { ...replacement, schemaVersion: 1,
-            createdAt: sameExpiry.toISOString(), updatedAt: sameExpiry.toISOString(),
-            expiresAt: sameExpiry.toISOString(), classification: "internal" },
-            expires_at: new Date(Date.now() + 60_000) }] };
-        }
-        if (sql.startsWith("DELETE")) {
-          deleteValues = values;
-          // A concurrent update changed the envelope but retained the same expiry.
-          return { rows: [], rowCount: 0 };
-        }
-        return { rows: [], rowCount: 0 };
+      query: vi.fn(async (sql: string) => {
+        expect(sql).toContain("SELECT envelope, expires_at");
+        return { rows: [{ envelope: { changed: true }, expires_at: sameExpiry }] };
       })
     };
-    const store = new PostgresEncryptedMemoryStore(db, cipher);
-    await expect(store.read({ namespace: "tenant-a/n", key: "k" }))
-      .resolves.toBe('{"classification":"internal","value":"concurrent-rewrite"}');
-    expect(deleteValues?.[3]).toEqual(sameExpiry);
-    expect(JSON.parse(String(deleteValues?.[4]))).toEqual({ stale: true });
-    expect(db.query).toHaveBeenNthCalledWith(2,
-      expect.stringContaining("AND expires_at = $4 AND envelope = $5::jsonb"), deleteValues);
+    const store = new PostgresEncryptedMemoryStore(db, new MemoryValueCipher(keys()));
+    await expect(store.read({ namespace: "tenant-a/n", key: "k" })).resolves.toBeNull();
+    expect(db.query).toHaveBeenCalledTimes(2);
+    expect(vi.mocked(db.query).mock.calls.every(([sql]) => String(sql).startsWith("SELECT"))).toBe(true);
   });
 
-  it("returns a concurrently refreshed record after the conditional expiry delete loses its race", async () => {
+  it("returns a concurrently refreshed record after an expired snapshot without deleting it", async () => {
     const expiredAt = new Date(0);
     const context = { tenantId: "tenant-a", namespace: "tenant-a/n", key: "k" };
     const cipher = new MemoryValueCipher(keys());
@@ -302,32 +276,19 @@ describe("PostgresEncryptedMemoryStore", () => {
       context
     );
     let selectCount = 0;
-    let deleteValues: readonly unknown[] | undefined;
     const db: SqlExecutor = {
-      query: vi.fn(async (sql: string, values: readonly unknown[] = []) => {
-        if (sql.startsWith("SELECT")) {
-          selectCount += 1;
-          if (selectCount === 1) return { rows: [{ envelope: {}, expires_at: expiredAt }] };
-          return { rows: [{ envelope: refreshedEnvelope, expires_at: new Date(Date.now() + 60_000) }] };
-        }
-        if (sql.startsWith("DELETE")) {
-          deleteValues = values;
-          // Simulate a concurrent refresh: the conditional delete finds no
-          // row because expires_at has changed since the SELECT.
-          return { rows: [], rowCount: 0 };
-        }
-        return { rows: [], rowCount: 0 };
+      query: vi.fn(async (sql: string) => {
+        expect(sql).toContain("SELECT envelope, expires_at");
+        selectCount += 1;
+        if (selectCount === 1) return { rows: [{ envelope: {}, expires_at: expiredAt }] };
+        return { rows: [{ envelope: refreshedEnvelope, expires_at: new Date(Date.now() + 60_000) }] };
       })
     };
     const store = new PostgresEncryptedMemoryStore(db, cipher);
     await expect(store.read({ namespace: "tenant-a/n", key: "k" }))
       .resolves.toBe('{"classification":"internal","value":"refreshed"}');
-    expect(deleteValues?.slice(0, 4)).toEqual(["tenant-a", "tenant-a/n", "k", expiredAt]);
-    expect(JSON.parse(String(deleteValues?.[4]))).toEqual({});
-    expect(db.query).toHaveBeenNthCalledWith(2,
-      expect.stringContaining("AND expires_at = $4"), deleteValues);
-    expect(db.query).toHaveBeenNthCalledWith(3,
-      expect.stringContaining("SELECT envelope, expires_at"), ["tenant-a", "tenant-a/n", "k"]);
+    expect(db.query).toHaveBeenCalledTimes(2);
+    expect(vi.mocked(db.query).mock.calls.every(([sql]) => String(sql).startsWith("SELECT"))).toBe(true);
   });
 
   it("requires an explicit tenant prefix for classified persistent values", async () => {
