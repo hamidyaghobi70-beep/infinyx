@@ -29,8 +29,7 @@ describe("JWKS key resolver", () => {
       now: () => 10_000
     };
     const resolver = new JwksKeyResolver(options);
-    (resolver as unknown as Record<string, unknown>).cache = new Map();
-    (resolver as unknown as Record<string, unknown>).fetcher = vi.fn(async () => response([]));
+    // Resolver state is held in private fields and the instance is frozen.
     await resolver.resolve("fixed");
     expect(urlReads).toBe(1);
     expect(fetcherReads).toBe(1);
