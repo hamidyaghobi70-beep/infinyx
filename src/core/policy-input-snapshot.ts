@@ -53,15 +53,30 @@ export function snapshotBoundedPolicyData<T>(input: T): T | undefined {
     ancestors.add(value);
     try {
       if (array) {
+        // Read length from its own data descriptor rather than invoking a Proxy get trap.
+        // Descriptor inspection can still invoke a Proxy getOwnPropertyDescriptor trap.
+        const lengthDescriptor = Object.getOwnPropertyDescriptor(value, "length");
+        if (!lengthDescriptor || !("value" in lengthDescriptor) ||
+            typeof lengthDescriptor.value !== "number" ||
+            !Number.isSafeInteger(lengthDescriptor.value)) {
+          throw new TypeError("Policy array length is invalid.");
+        }
+        const length = lengthDescriptor.value;
         const keys = Reflect.ownKeys(value);
-        if (keys.some((key) => typeof key === "symbol" || (key !== "length" && !/^(0|[1-9][0-9]*)$/.test(key)))) {
+        // Check the returned key count before scanning it. ownKeys itself may
+        // already have allocated the list or executed arbitrary Proxy code.
+        if (length > MAX_CONTAINER_ENTRIES || keys.length > MAX_CONTAINER_ENTRIES + 1) {
+          throw new TypeError("Policy input exceeds resource limits.");
+        }
+        if (keys.some((key) => typeof key === "symbol" ||
+            (key !== "length" && !/^(0|[1-9][0-9]*)$/.test(key)))) {
           throw new TypeError("Policy arrays contain unsupported properties.");
         }
-        if (value.length > MAX_CONTAINER_ENTRIES || keys.length !== value.length + 1) {
-          throw new TypeError("Policy input exceeds resource limits or contains sparse arrays.");
+        if (keys.length !== length + 1) {
+          throw new TypeError("Policy input contains sparse arrays.");
         }
         const result: unknown[] = [];
-        for (let index = 0; index < value.length; index += 1) {
+        for (let index = 0; index < length; index += 1) {
           const descriptor = Object.getOwnPropertyDescriptor(value, String(index));
           if (!descriptor || !("value" in descriptor) || !descriptor.enumerable) {
             throw new TypeError("Policy input accessors are not supported.");

@@ -37,6 +37,14 @@ describe("snapshotBoundedPolicyData", () => {
     expect(snapshotBoundedPolicyData({ values: Array.from({ length: 17 }, () => "c".repeat(16_000)) })).toBeUndefined();
   });
 
+  it("accepts the exact aggregate UTF-8 byte limit and rejects one byte over", () => {
+    const atLimit = Array.from({ length: 16 }, () => "x".repeat(16_384));
+    const overLimit = [...atLimit, "y"];
+
+    expect(snapshotBoundedPolicyData(atLimit)).toBeDefined();
+    expect(snapshotBoundedPolicyData(overLimit)).toBeUndefined();
+  });
+
   it("rejects cycles, accessors, sparse arrays, and non-finite numbers", () => {
     const cyclic: Record<string, unknown> = {};
     cyclic.self = cyclic;
@@ -58,7 +66,7 @@ describe("snapshotBoundedPolicyData", () => {
     expect(Object.isFrozen(snapshot?.nested.values)).toBe(true);
   });
 
-  it("documents that Proxy traps execute during same-process inspection", () => {
+  it("documents that Proxy ownKeys traps run before returned-key limits can be checked", () => {
     const observed: string[] = [];
     const keys = Array.from({ length: 1_001 }, (_, index) => `k${index}`);
     const input = new Proxy({}, {
@@ -76,18 +84,22 @@ describe("snapshotBoundedPolicyData", () => {
     expect(observed).toEqual(["getPrototypeOf", "ownKeys"]);
   });
 
-  it("documents that array length access also executes a Proxy get trap", () => {
+  it("reads array length from its descriptor without invoking the Proxy get trap", () => {
     const observed: string[] = [];
     const input = new Proxy([1], {
       get(target, key, receiver) {
         if (key === "length") observed.push("get:length");
         return Reflect.get(target, key, receiver);
+      },
+      getOwnPropertyDescriptor(target, key) {
+        if (key === "length") observed.push("descriptor:length");
+        return Reflect.getOwnPropertyDescriptor(target, key);
       }
     });
 
     expect(snapshotBoundedPolicyData(input)).toEqual([1]);
-    expect(observed).toContain("get:length");
-    expect(observed.every((trap) => trap === "get:length")).toBe(true);
+    expect(observed).toContain("descriptor:length");
+    expect(observed).not.toContain("get:length");
   });
 
   it("documents that property-descriptor reflection also executes Proxy traps", () => {
