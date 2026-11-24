@@ -281,5 +281,5 @@ function tenantFromScopedNamespace(namespace: string): string {
 
 /** The exact same canonical identity is supplied on writes, reads, and key rotation. */
 function encryptionContext(address: MemoryAddress, tenantId: string): MemoryEncryptionContext {
-  return Object.freeze({ tenantId, namespace: target.namespace, key: target.key });
+  return Object.freeze({ tenantId, namespace: address.namespace, key: address.key });
 }
