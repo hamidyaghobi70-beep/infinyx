@@ -91,9 +91,9 @@ export class PostgresEncryptedMemoryStore implements MemoryPort {
         throw new Error("Persistent memory record has an invalid expiry timestamp.");
       }
       if (currentExpiresAt <= this.#now().getTime()) return null;
-      return this.cipher.decrypt(current.envelope, encryptionContext(address, tenantId));
+      return this.cipher.decrypt(current.envelope, encryptionContext(target, tenantId));
     }
-    return this.cipher.decrypt(row.envelope, encryptionContext(address, tenantId));
+    return this.cipher.decrypt(row.envelope, encryptionContext(target, tenantId));
   }
 
   async write(address: MemoryAddress, value: unknown): Promise<void> {
@@ -110,7 +110,7 @@ export class PostgresEncryptedMemoryStore implements MemoryPort {
       throw new TypeError("Persistent memory classification is missing, unsupported, or restricted.");
     }
     const tenantId = tenantFromScopedNamespace(target.namespace);
-    const encrypted = await this.cipher.encrypt(value, encryptionContext(address, tenantId));
+    const encrypted = await this.cipher.encrypt(value, encryptionContext(target, tenantId));
     const now = this.#now();
     const expiresAt = new Date(now.getTime() + this.#retentionDays * 24 * 60 * 60 * 1000);
     const envelope: StoredMemoryEnvelope = Object.freeze({
