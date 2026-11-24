@@ -221,7 +221,7 @@ export class CoreEngine {
     if (this.closingRequested || this.lifecycle !== expected) {
       throw new CoreError(
         "INVALID_LIFECYCLE_TRANSITION",
-        'Cannot ' + operation + ' Core Engine while it is "' + this.lifecycle + '".'
+        'Cannot ' + operation + ' Core Engine while it is "' + this.state + '".'
       );
     }
   }

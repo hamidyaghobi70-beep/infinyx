@@ -73,12 +73,19 @@ describe("OS child-process signal handling", () => {
           child.once("exit", (code, exitSignal) => resolveExit({ code, signal: exitSignal }));
         });
         expect(child.kill(signal)).toBe(true);
-        const result = await Promise.race([
-          exited,
-          new Promise<never>((_resolve, reject) => {
-            setTimeout(() => reject(new Error("Child process shutdown timed out.")), 10_000);
-          })
-        ]);
+        const result = await new Promise<{ code: number | null; signal: NodeJS.Signals | null }>((resolveExit, reject) => {
+          const timeout = setTimeout(() => reject(new Error("Child process shutdown timed out.")), 10_000);
+          exited.then(
+            (value) => {
+              clearTimeout(timeout);
+              resolveExit(value);
+            },
+            (error: unknown) => {
+              clearTimeout(timeout);
+              reject(error);
+            }
+          );
+        });
 
         expect(result.code).toBe(0);
         expect(result.signal).toBeNull();
