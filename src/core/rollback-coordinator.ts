@@ -8,9 +8,9 @@
 export class RollbackCoordinator {
   private inFlight: Promise<unknown> | undefined;
 
-  run<T>(operation: () => Promise<T>): Promise<T> {
+  run(operation: () => Promise<void>): Promise<void> {
     if (this.inFlight) {
-      return this.inFlight as Promise<T>;
+      return this.inFlight as Promise<void>;
     }
 
     const attempt = Promise.resolve().then(operation);
