@@ -95,11 +95,25 @@ class ShutdownController {
       this.options.logger.error({ err: error }, "HTTP server drain failed");
     }
 
+    // CoreEngine's RollbackCoordinator clears a rejected attempt after it settles.
+    // Retry once so transient cleanup failures can recover without allowing an
+    // unbounded shutdown loop. A second failure remains a fail-safe non-zero exit.
     try {
       await this.options.core.stop();
-    } catch (error) {
-      this.finalExitCode = 1;
-      this.options.logger.error({ err: error }, "Core Engine shutdown failed");
+    } catch (firstError) {
+      this.options.logger.error(
+        { err: firstError, attempt: 1, maxAttempts: 2 },
+        "Core Engine shutdown failed; retrying once"
+      );
+      try {
+        await this.options.core.stop();
+      } catch (retryError) {
+        this.finalExitCode = 1;
+        this.options.logger.error(
+          { err: retryError, firstError, attempt: 2, maxAttempts: 2 },
+          "Core Engine shutdown failed after retry"
+        );
+      }
     }
 
     await this.exitOnce();
