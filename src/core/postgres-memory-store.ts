@@ -39,6 +39,9 @@ export class PostgresEncryptedMemoryStore implements MemoryPort {
     private readonly cipher: MemoryValueCipher,
     options: PostgresMemoryStoreOptions = {}
   ) {
+    if (options.tableName !== undefined && options.tableName !== "infinyx_memory.memory_entries") {
+      throw new TypeError("Unsupported persistent memory table.");
+    }
     this.#table = options.tableName ?? "infinyx_memory.memory_entries";
     this.#retentionDays = options.retentionDays ?? 90;
     this.#now = options.now ?? (() => new Date());
