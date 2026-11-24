@@ -102,6 +102,34 @@ describe("MemoryDeletionCoordinator", () => {
     await expect(coordinator.replayAfterRestore()).rejects.toThrow("repeated a cursor");
   });
 
+  it("rejects a cursor repeated across pages before applying the repeated page", async () => {
+    const store = new FakeStore();
+    const first = { id: "cursor-z", namespace: "tenant-a", key: "a", deletedAt: "2026-11-23T12:00:00.000Z", reason: "user_request" as const };
+    const ledger: MemoryDeletionLedgerPort = {
+      append: vi.fn(async () => "cursor-z"),
+      listAfter: vi.fn()
+        .mockResolvedValueOnce([first])
+        .mockResolvedValueOnce([first])
+    };
+    const coordinator = new MemoryDeletionCoordinator(store, ledger, { batchSize: 1 });
+    await expect(coordinator.replayAfterRestore()).rejects.toThrow("repeated a cursor");
+    expect(store.deleted).toEqual([{ namespace: "tenant-a", key: "a" }]);
+  });
+
+  it("validates an entire page before applying any deletion", async () => {
+    const store = new FakeStore();
+    const ledger: MemoryDeletionLedgerPort = {
+      append: vi.fn(async () => "cursor-2"),
+      listAfter: vi.fn(async () => [
+        { id: "cursor-1", namespace: "tenant-a", key: "a", deletedAt: "2026-11-23T12:00:00.000Z", reason: "user_request" },
+        { id: "cursor-2", namespace: "tenant-b", key: "b", deletedAt: "invalid-date", reason: "policy" }
+      ])
+    };
+    const coordinator = new MemoryDeletionCoordinator(store, ledger, { batchSize: 2 });
+    await expect(coordinator.replayAfterRestore()).rejects.toThrow("malformed tombstone");
+    expect(store.deleted).toHaveLength(0);
+  });
+
   it("rejects malformed ledger pages", async () => {
     const store = new FakeStore();
     const ledger = new FakeLedger();
