@@ -114,8 +114,8 @@ export class CoreEngine {
       const failedModule = [...this.moduleStates.entries()]
         .find(([, state]) => state === "starting")?.[0];
       this.lifecycle = "failed";
-      const cleanupErrors = await this.cleanupInitializedModules(
-        failedModule ? new Set([failedModule]) : new Set()
+      const cleanupErrors = await this.rollbackCoordinator.run(() =>
+        this.cleanupInitializedModules(failedModule ? new Set([failedModule]) : new Set())
       );
       const failure = new CoreError(
         "MODULE_START_FAILED",
