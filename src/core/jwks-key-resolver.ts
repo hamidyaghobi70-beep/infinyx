@@ -49,7 +49,7 @@ export class JwksKeyResolver {
     if (!kid || kid.length > 256) throw new TypeError("A valid JWT key id is required.");
     const cached = this.cache.get(kid);
     if (cached && cached.expiresAt > this.now()) return cached.key;
-    await this.refresh(!cached);
+    await this.refresh(!cached || cached.expiresAt <= this.now());
     const refreshed = this.cache.get(kid);
     if (!refreshed || refreshed.expiresAt <= this.now()) throw new Error("No trusted RS256 signing key matches this key id.");
     return refreshed.key;
