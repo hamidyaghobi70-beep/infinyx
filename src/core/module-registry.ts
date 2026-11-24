@@ -74,7 +74,7 @@ function snapshotDependencies(value: unknown): string[] {
 export class ModuleRegistry {
   private readonly modules = new Map<string, CoreModule>();
 
-  register(module: CoreModule): void {
+  register(module: CoreModule): string {
     let id: unknown;
     let version: unknown;
     let dependencies: string[];
@@ -128,6 +128,7 @@ export class ModuleRegistry {
     };
 
     this.modules.set(id, Object.freeze(registered));
+    return id;
   }
 
   get(id: string): CoreModule | undefined {
