@@ -71,4 +71,28 @@ describe("JWKS key resolver", () => {
     const resolver = new JwksKeyResolver({ jwksUrl: "https://id.example.test/jwks", fetcher: async () => response([], 503) });
     await expect(resolver.resolve("key")).rejects.toThrow();
   });
+
+  it("throttles repeated unknown-kid refreshes", async () => {
+    let now = 10_000;
+    const fetcher = vi.fn(async () => response([{ ...jwk, kid: "known", use: "sig", alg: "RS256" }]));
+    const resolver = new JwksKeyResolver({ jwksUrl: "https://id.example.test/jwks", fetcher, now: () => now, refreshCooldownMs: 1_000 });
+    await resolver.resolve("known");
+    await expect(resolver.resolve("attacker-kid-1")).rejects.toThrow();
+    await expect(resolver.resolve("attacker-kid-2")).rejects.toThrow();
+    expect(fetcher).toHaveBeenCalledTimes(1);
+    now += 1_001;
+    await expect(resolver.resolve("attacker-kid-3")).rejects.toThrow();
+    expect(fetcher).toHaveBeenCalledTimes(2);
+  });
+
+  it("refreshes an expired cached key even inside the unknown-kid cooldown", async () => {
+    let now = 20_000;
+    const fetcher = vi.fn(async () => response([{ ...jwk, kid: "known", use: "sig", alg: "RS256" }]));
+    const resolver = new JwksKeyResolver({ jwksUrl: "https://id.example.test/jwks", fetcher, now: () => now, cacheTtlMs: 1_000, refreshCooldownMs: 60_000 });
+    await resolver.resolve("known");
+    now += 1_001;
+    await resolver.resolve("known");
+    expect(fetcher).toHaveBeenCalledTimes(2);
+  });
+
 });
