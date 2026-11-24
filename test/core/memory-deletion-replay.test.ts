@@ -213,6 +213,24 @@ describe("MemoryDeletionCoordinator", () => {
     expect(store.deleted).toHaveLength(0);
   });
 
+  it("does not invoke a ledger page's overridden map method", async () => {
+    const store = new FakeStore();
+    const entry = { id: "cursor-1", namespace: "tenant-a", key: "k",
+      deletedAt: "2026-11-23T12:00:00.000Z", reason: "user_request" as const };
+    const page = [entry] as MemoryDeletionTombstone[];
+    Object.defineProperty(page, "map", {
+      configurable: true,
+      get() { throw new Error("untrusted page map getter invoked"); }
+    });
+    const ledger: MemoryDeletionLedgerPort = {
+      append: vi.fn(async () => "cursor-1"),
+      listAfter: vi.fn(async () => page)
+    };
+    const coordinator = new MemoryDeletionCoordinator(store, ledger);
+    await coordinator.replayAfterRestore();
+    expect(store.deleted).toEqual([{ namespace: "tenant-a", key: "k" }]);
+  });
+
   it("rejects malformed ledger pages", async () => {
     const store = new FakeStore();
     const ledger = new FakeLedger();
