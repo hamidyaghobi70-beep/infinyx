@@ -59,6 +59,7 @@ class ShutdownController {
 
   shutdown(reason = "manual", fatal = false, error?: unknown): Promise<void> {
     this.shutdownRequested = true;
+    this.options.core.requestClose?.();
     if (fatal) {
       this.finalExitCode = 1;
       this.options.logger.error(
