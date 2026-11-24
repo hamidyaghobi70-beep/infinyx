@@ -4,6 +4,7 @@ export interface JwksKeyResolverOptions {
   readonly jwksUrl: string;
   readonly fetcher?: typeof fetch;
   readonly cacheTtlMs?: number;
+  readonly refreshCooldownMs?: number;
   readonly now?: () => number;
 }
 
@@ -21,7 +22,9 @@ export class JwksKeyResolver {
   private readonly url: URL;
   private readonly fetcher: typeof fetch;
   private readonly ttl: number;
+  private readonly refreshCooldownMs: number;
   private readonly now: () => number;
+  private lastRefreshAt = Number.NEGATIVE_INFINITY;
   private cache = new Map<string, CachedKey>();
   private refreshInFlight: Promise<void> | undefined;
 
@@ -33,9 +36,12 @@ export class JwksKeyResolver {
     }
     const ttl = options.cacheTtlMs ?? DEFAULT_CACHE_TTL_MS;
     if (!Number.isInteger(ttl) || ttl < 1_000 || ttl > 15 * 60_000) throw new TypeError("Invalid JWKS cache TTL.");
+    const refreshCooldownMs = options.refreshCooldownMs ?? 1_000;
+    if (!Number.isInteger(refreshCooldownMs) || refreshCooldownMs < 0 || refreshCooldownMs > 60_000) throw new TypeError("Invalid JWKS refresh cooldown.");
     this.url = url;
     this.fetcher = options.fetcher ?? fetch;
     this.ttl = ttl;
+    this.refreshCooldownMs = refreshCooldownMs;
     this.now = options.now ?? Date.now;
   }
 
@@ -43,13 +49,14 @@ export class JwksKeyResolver {
     if (!kid || kid.length > 256) throw new TypeError("A valid JWT key id is required.");
     const cached = this.cache.get(kid);
     if (cached && cached.expiresAt > this.now()) return cached.key;
-    await this.refresh();
+    await this.refresh(!cached);
     const refreshed = this.cache.get(kid);
     if (!refreshed || refreshed.expiresAt <= this.now()) throw new Error("No trusted RS256 signing key matches this key id.");
     return refreshed.key;
   }
 
-  private async refresh(): Promise<void> {
+  private async refresh(force: boolean): Promise<void> {
+    if (!force && this.now() - this.lastRefreshAt < this.refreshCooldownMs) return;
     if (!this.refreshInFlight) {
       this.refreshInFlight = this.load().finally(() => { this.refreshInFlight = undefined; });
     }
@@ -104,5 +111,6 @@ export class JwksKeyResolver {
     }
     if (next.size === 0) throw new Error("JWKS contains no acceptable RS256 signing keys.");
     this.cache = next;
+    this.lastRefreshAt = this.now();
   }
 }
