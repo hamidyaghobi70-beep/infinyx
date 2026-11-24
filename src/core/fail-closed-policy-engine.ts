@@ -10,6 +10,45 @@ import type {
 const DEFAULT_POLICY_TIMEOUT_MS = 5_000;
 const MAX_TIMER_DELAY_MS = 2_147_483_647;
 
+const MAX_POLICY_PROTOTYPE_DEPTH = 64;
+type CapturedPolicyMethod = (...args: never[]) => unknown;
+
+function capturePolicyMethod(
+  target: object,
+  name: "evaluate" | "shutdown",
+  required: boolean
+): CapturedPolicyMethod | undefined {
+  let current: object | null = target;
+  const visited = new Set<object>();
+  try {
+    while (current !== null) {
+      if (visited.has(current) || visited.size >= MAX_POLICY_PROTOTYPE_DEPTH) {
+        throw new TypeError("Invalid policy prototype chain.");
+      }
+      visited.add(current);
+      const descriptor = Object.getOwnPropertyDescriptor(current, name);
+      if (descriptor) {
+        if (!Object.prototype.hasOwnProperty.call(descriptor, "value")) {
+          throw new TypeError("Policy methods must be data properties.");
+        }
+        const method: unknown = descriptor.value;
+        if (method === undefined && !required) return undefined;
+        if (typeof method !== "function") {
+          throw new TypeError("Policy method must be a function.");
+        }
+        return Function.prototype.bind.call(method, target) as CapturedPolicyMethod;
+      }
+      current = Object.getPrototypeOf(current) as object | null;
+    }
+  } catch {
+    throw new TypeError("Policy delegate must expose stable data methods.");
+  }
+  if (required) throw new TypeError("Policy delegate must expose stable data methods.");
+  return undefined;
+}
+
+
+
 function deny(reason: string): PolicyDecision {
   return Object.freeze({ effect: "deny", reason });
 }
@@ -123,14 +162,18 @@ export class FailClosedPolicyEngine implements PolicyEngine {
   /** Tracks delegate settlement independently from the caller-facing fail-closed result. */
   private readonly activeEvaluations = new Set<Promise<unknown>>();
   private delegateShutdownPromise: Promise<void> | undefined;
+  private readonly evaluateDelegate: PolicyEngine["evaluate"];
+  private readonly shutdownDelegate: PolicyEngine["shutdown"];
 
   constructor(
-    private readonly delegate: PolicyEngine,
+    delegate: PolicyEngine,
     private readonly timeoutMs = DEFAULT_POLICY_TIMEOUT_MS
   ) {
     if (!Number.isSafeInteger(timeoutMs) || timeoutMs <= 0 || timeoutMs > MAX_TIMER_DELAY_MS) {
       throw new RangeError(`Policy evaluation timeout must be a positive safe integer no greater than ${MAX_TIMER_DELAY_MS}.`);
     }
+    this.evaluateDelegate = capturePolicyMethod(delegate, "evaluate", true) as PolicyEngine["evaluate"];
+    this.shutdownDelegate = capturePolicyMethod(delegate, "shutdown", false) as PolicyEngine["shutdown"];
   }
 
   async evaluate(
@@ -203,7 +246,7 @@ export class FailClosedPolicyEngine implements PolicyEngine {
       const evaluation = Promise.resolve()
         .then(() => {
           if (controller.signal.aborted) return undefined;
-          return this.delegate.evaluate(input, delegateOptions);
+          return this.evaluateDelegate(input, delegateOptions);
         })
         .then((result) => {
           if (candidateFrozen) return undefined;
@@ -243,7 +286,7 @@ export class FailClosedPolicyEngine implements PolicyEngine {
     // available until every evaluator has actually settled.
     await Promise.allSettled([...this.activeEvaluations]);
     if (!this.delegateShutdownPromise) {
-      const attempt = Promise.resolve().then(async () => { await this.delegate.shutdown?.(); });
+      const attempt = Promise.resolve().then(async () => { await this.shutdownDelegate?.(); });
       this.delegateShutdownPromise = attempt;
       // A rejected hook may be retried; an in-flight or successful hook is never duplicated.
       void attempt.catch(() => {

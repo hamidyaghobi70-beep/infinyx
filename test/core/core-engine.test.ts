@@ -457,3 +457,32 @@ describe("CoreEngine guarded memory composition", () => {
     expect(first).not.toBe(second);
   });
 });
+
+
+describe("CoreEngine injected Event Bus capability boundary", () => {
+  it("captures stable data methods and rejects cyclic prototype chains", async () => {
+    let originalPublishes = 0;
+    const events = {
+      subscribe: () => () => undefined,
+      publish: async () => { originalPublishes += 1; }
+    } as unknown as import("../../src/core/contracts.js").EventBusPort;
+    const engine = new CoreEngine({ events });
+
+    Object.defineProperty(events, "publish", {
+      configurable: true,
+      value: async () => { throw new Error("replacement Event Bus method invoked"); }
+    });
+    await engine.events.publish("test.event", {});
+    expect(originalPublishes).toBe(1);
+    expect(Object.isFrozen(engine.events)).toBe(true);
+
+    const target = {};
+    let cyclic!: import("../../src/core/contracts.js").EventBusPort;
+    cyclic = new Proxy(target, {
+      getPrototypeOf() {
+        return cyclic;
+      }
+    }) as import("../../src/core/contracts.js").EventBusPort;
+    expect(() => new CoreEngine({ events: cyclic })).toThrow(/event bus capability/i);
+  });
+});

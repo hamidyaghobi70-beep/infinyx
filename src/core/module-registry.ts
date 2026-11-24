@@ -1,6 +1,35 @@
 import type { CoreModule } from "./contracts.js";
 import { CoreError } from "./core-error.js";
 
+const MAX_LIFECYCLE_PROTOTYPE_DEPTH = 64;
+
+function readLifecycleHook(
+  target: object,
+  key: "initialize" | "start" | "stop"
+): unknown {
+  let current: object | null = target;
+  const visited = new Set<object>();
+  try {
+    while (current !== null) {
+      if (visited.has(current) || visited.size >= MAX_LIFECYCLE_PROTOTYPE_DEPTH) {
+        throw new TypeError("Invalid module lifecycle prototype chain.");
+      }
+      visited.add(current);
+      const descriptor = Object.getOwnPropertyDescriptor(current, key);
+      if (descriptor) {
+        if (!Object.prototype.hasOwnProperty.call(descriptor, "value")) {
+          throw new TypeError("Module lifecycle hooks must be data properties.");
+        }
+        return descriptor.value;
+      }
+      current = Object.getPrototypeOf(current) as object | null;
+    }
+    return undefined;
+  } catch {
+    throw new CoreError("INVALID_MODULE", "Module lifecycle hooks must be readable stable data methods.");
+  }
+}
+
 export class ModuleRegistry {
   private readonly modules = new Map<string, CoreModule>();
 
@@ -18,9 +47,9 @@ export class ModuleRegistry {
       id = module.id;
       version = module.version;
       rawDependencies = module.dependencies;
-      initialize = module.initialize;
-      start = module.start;
-      stop = module.stop;
+      initialize = readLifecycleHook(module, "initialize");
+      start = readLifecycleHook(module, "start");
+      stop = readLifecycleHook(module, "stop");
     } catch {
       throw new CoreError("INVALID_MODULE", "Module metadata and lifecycle hooks must be readable.");
     }

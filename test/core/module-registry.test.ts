@@ -97,3 +97,20 @@ describe("ModuleRegistry", () => {
     })).toThrowError(CoreError);
   });
 });
+
+
+describe("ModuleRegistry hostile prototype boundary", () => {
+  it("rejects a cyclic Proxy prototype chain while capturing lifecycle hooks", () => {
+    const registry = new ModuleRegistry();
+    const target = { id: "cyclic-prototype", version: "1.0.0" } as CoreModule;
+    let cyclic!: CoreModule;
+    cyclic = new Proxy(target, {
+      getPrototypeOf() {
+        return cyclic;
+      }
+    });
+
+    expect(() => registry.register(cyclic)).toThrowError(CoreError);
+    expect(registry.list()).toHaveLength(0);
+  });
+});
