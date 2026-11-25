@@ -135,6 +135,8 @@ export interface PolicyEvaluationOptions {
 
 export interface PolicyEngine {
   evaluate(request: PolicyRequest, options?: PolicyEvaluationOptions): Promise<PolicyDecision>;
+  /** Optional bounded JSON entry point for untrusted serialized policy requests. */
+  evaluateSerialized?(requestJson: string, options?: PolicyEvaluationOptions): Promise<PolicyDecision>;
   /** Stop accepting work and request termination of active policy evaluations. */
   shutdown?(): Promise<void>;
 }
@@ -173,6 +175,14 @@ export type ProtectedOperationResult<TOutput> =
 
 /** Execute-only capability supplied to modules; registration is not exposed. */
 export interface ProtectedOperationPort {
+  /** Bounded JSON context entry point for callers that cannot supply trusted object graphs. */
+  executeSerialized<TInput, TOutput>(
+    operation: ProtectedOperationHandle<TInput, TOutput>,
+    actorId: string,
+    contextJson: string | undefined,
+    input: TInput,
+    options?: PolicyEvaluationOptions
+  ): Promise<ProtectedOperationResult<TOutput>>;
   execute<TInput, TOutput>(
     operation: ProtectedOperationHandle<TInput, TOutput>,
     caller: ProtectedOperationCaller,
