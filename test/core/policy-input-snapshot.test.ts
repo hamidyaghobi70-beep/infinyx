@@ -59,6 +59,53 @@ describe("snapshotBoundedPolicyData", () => {
     expect(snapshotBoundedPolicyData(overLimit)).toBeUndefined();
   });
 
+  it("enforces per-key and aggregate UTF-8 key byte limits", () => {
+    const atPerKeyLimit = { ["k".repeat(16_384)]: true };
+    const overPerKeyLimit = { ["k".repeat(16_385)]: true };
+    expect(snapshotBoundedPolicyData(atPerKeyLimit)).toBeDefined();
+    expect(snapshotBoundedPolicyData(overPerKeyLimit)).toBeUndefined();
+
+    const exactAggregateKeys = [
+      ...Array.from({ length: 15 }, () => "a".repeat(16_384)),
+      "b".repeat(16_383),
+      "c"
+    ];
+    const atAggregateLimit = Object.fromEntries(exactAggregateKeys.map((key, index) => [key, index]));
+    const overAggregateLimit = { ...atAggregateLimit, d: 1 };
+    expect(snapshotBoundedPolicyData(atAggregateLimit)).toBeDefined();
+    expect(snapshotBoundedPolicyData(overAggregateLimit)).toBeUndefined();
+  });
+
+  it("counts object keys and numeric array index keys in the same aggregate UTF-8 budget", () => {
+    const makeInput = (lastValueBytes: number) => ({
+      array: Array.from({ length: 16 }, (_, index) =>
+        "v".repeat(index === 15 ? lastValueBytes : 16_384))
+    });
+
+    // 15 * 16,384 + 16,357 value bytes, plus "array" and index keys
+    // (5 + 22 bytes), totals exactly 256 KiB.
+    expect(snapshotBoundedPolicyData(makeInput(16_357))).toBeDefined();
+    expect(snapshotBoundedPolicyData(makeInput(16_358))).toBeUndefined();
+  });
+
+  it("rejects an oversized array before invoking a Proxy ownKeys trap", () => {
+    const observed: string[] = [];
+    const input = new Proxy(new Array(1_001), {
+      getOwnPropertyDescriptor(target, key) {
+        if (key === "length") observed.push("descriptor:length");
+        return Reflect.getOwnPropertyDescriptor(target, key);
+      },
+      ownKeys(target) {
+        observed.push("ownKeys");
+        return Reflect.ownKeys(target);
+      }
+    });
+
+    expect(snapshotBoundedPolicyData(input)).toBeUndefined();
+    expect(observed).toContain("descriptor:length");
+    expect(observed).not.toContain("ownKeys");
+  });
+
   it("rejects cycles, accessors, sparse arrays, and non-finite numbers", () => {
     const cyclic: Record<string, unknown> = {};
     cyclic.self = cyclic;

@@ -62,12 +62,16 @@ export function snapshotBoundedPolicyData<T>(input: T): T | undefined {
           throw new TypeError("Policy array length is invalid.");
         }
         const length = lengthDescriptor.value;
+        // Reject oversized arrays before own-key enumeration. The length
+        // descriptor lookup can still invoke a Proxy trap.
+        if (length > MAX_CONTAINER_ENTRIES) {
+          throw new TypeError("Policy input exceeds resource limits.");
+        }
         const keys = Reflect.ownKeys(value);
-        // Check the returned key count before scanning it. Reflect.ownKeys has
-        // already materialized the complete key list at this point, even for
-        // an ordinary object; this limit does not cap that allocation. For a
-        // Proxy, ownKeys may additionally execute arbitrary user code.
-        if (length > MAX_CONTAINER_ENTRIES || keys.length > MAX_CONTAINER_ENTRIES + 1) {
+        // Reflect.ownKeys has already materialized the complete key list at
+        // this point, even for an ordinary object; this count does not cap
+        // that allocation. For a Proxy, ownKeys may execute arbitrary code.
+        if (keys.length > MAX_CONTAINER_ENTRIES + 1) {
           throw new TypeError("Policy input exceeds resource limits.");
         }
         if (keys.some((key) => typeof key === "symbol" ||
@@ -79,6 +83,11 @@ export function snapshotBoundedPolicyData<T>(input: T): T | undefined {
         }
         const result: unknown[] = [];
         for (let index = 0; index < length; index += 1) {
+          // Numeric array index keys share the aggregate UTF-8 key budget.
+          // The structural "length" property is intentionally excluded.
+          if (!accountString(String(index))) {
+            throw new TypeError("Policy input exceeds resource limits.");
+          }
           const descriptor = Object.getOwnPropertyDescriptor(value, String(index));
           if (!descriptor || !("value" in descriptor) || !descriptor.enumerable) {
             throw new TypeError("Policy input accessors are not supported.");
