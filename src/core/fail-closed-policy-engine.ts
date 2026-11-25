@@ -1,4 +1,5 @@
 import { snapshotBoundedPolicyData } from "./policy-input-snapshot.js";
+import { parseBoundedPolicyJson } from "./policy-input-json-parser.js";
 
 import type {
   PolicyCancellationCause,
@@ -100,6 +101,14 @@ export class FailClosedPolicyEngine implements PolicyEngine {
     if (!Number.isFinite(timeoutMs) || timeoutMs <= 0) {
       throw new RangeError("Policy evaluation timeout must be a positive finite number.");
     }
+  }
+
+  async evaluateSerialized(requestJson: string, options?: PolicyEvaluationOptions): Promise<PolicyDecision> {
+    const parsed = parseBoundedPolicyJson(requestJson);
+    if (!parsed || !isValidPolicyRequest(parsed)) {
+      return deny("Serialized policy request is invalid or exceeds resource limits; access denied.");
+    }
+    return this.evaluate(parsed as PolicyRequest, options);
   }
 
   async evaluate(
