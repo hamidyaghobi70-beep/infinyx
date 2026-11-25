@@ -49,6 +49,29 @@ async function ensureStarted(engine: CoreEngine): Promise<void> {
 
 
 describe("ProtectedOperationExecutor", () => {
+  it("executes a protected operation with bounded serialized policy context", async () => {
+    let observed: PolicyRequest | undefined;
+    const { engine, operation } = makeEngine(async (request) => { observed = request; return allow; });
+    await ensureStarted(engine);
+    const result = await engine.serializedProtectedOperations.executeSerialized(
+      operation, "serialized-caller", '{"attributes":{"scope":"read"}}', { value: "ok" }
+    );
+    expect(result).toEqual({ status: "executed", value: "OK" });
+    expect(observed?.context?.attributes).toEqual({ scope: "read" });
+  });
+
+  it("fails closed on invalid serialized context before policy or handler", async () => {
+    const evaluator = vi.fn(async () => allow);
+    const { engine, operation, handler } = makeEngine(evaluator);
+    await ensureStarted(engine);
+    const result = await engine.serializedProtectedOperations.executeSerialized(
+      operation, "serialized-caller", '{"attributes":{"x":', { value: "ok" }
+    );
+    expect(result).toMatchObject({ status: "denied" });
+    expect(evaluator).not.toHaveBeenCalled();
+    expect(handler).not.toHaveBeenCalled();
+  });
+
   it("executes a handler only after a valid Allow decision", async () => {
     const { engine, operation, handler } = makeEngine();
     await ensureStarted(engine);
@@ -438,5 +461,20 @@ describe("ProtectedOperationExecutor", () => {
     expect(handler).not.toHaveBeenCalled();
   });
 
+
+
+  it("denies an oversized caller context before policy evaluation or handler admission", async () => {
+    const evaluator = vi.fn(async () => allow);
+    const { engine, operation, handler } = makeEngine(evaluator);
+    await ensureStarted(engine);
+    const result = await engine.protectedOperations.execute(
+      operation,
+      { actorId: "oversized", context: { attributes: { payload: "x".repeat(16_385) } } },
+      { value: "x" }
+    );
+    expect(result).toMatchObject({ status: "denied" });
+    expect(evaluator).not.toHaveBeenCalled();
+    expect(handler).not.toHaveBeenCalled();
+  });
 
 });

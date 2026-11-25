@@ -1,3 +1,6 @@
+import { snapshotBoundedPolicyData } from "./policy-input-snapshot.js";
+import { parseBoundedPolicyJson } from "./policy-input-json-parser.js";
+
 import type {
   PolicyEngine,
   PolicyEvaluationOptions,
@@ -7,7 +10,8 @@ import type {
   ProtectedOperationDefinition,
   ProtectedOperationHandle,
   ProtectedOperationPort,
-  ProtectedOperationResult
+  ProtectedOperationResult,
+  SerializedProtectedOperationPort
 } from "./contracts.js";
 import { isValidPolicyDecision, isValidPolicyRequest } from "./fail-closed-policy-engine.js";
 
@@ -25,62 +29,20 @@ interface RegisteredOperation<TInput = unknown, TOutput = unknown> {
   readonly handler: (input: TInput, context: ProtectedOperationContext) => TOutput | Promise<TOutput>;
 }
 
-function isPlainRecord(value: unknown): value is Record<string, unknown> {
-  if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
-  const prototype = Object.getPrototypeOf(value);
-  return prototype === Object.prototype || prototype === null;
-}
-
-/** Clone a policy context without invoking getters; reject cycles and exotic values. */
-function cloneContextValue(value: unknown, ancestors: WeakSet<object>): unknown {
-  if (value === null || typeof value === "string" || typeof value === "boolean") return value;
-  if (typeof value === "number" && Number.isFinite(value)) return value;
-  if (typeof value !== "object") throw new TypeError("Policy context contains a non-cloneable value.");
-  if (ancestors.has(value)) throw new TypeError("Policy context cycles are not supported.");
-  ancestors.add(value);
-  try {
-    if (Array.isArray(value)) {
-      const result = value.map((item) => cloneContextValue(item, ancestors));
-      return result;
-    }
-    if (!isPlainRecord(value)) throw new TypeError("Policy context must contain only plain records and arrays.");
-    if (Object.getOwnPropertySymbols(value).length) throw new TypeError("Policy context symbol keys are not supported.");
-    const result: Record<string, unknown> = Object.create(null) as Record<string, unknown>;
-    for (const key of Object.keys(value)) {
-      const descriptor = Object.getOwnPropertyDescriptor(value, key);
-      if (!descriptor || !("value" in descriptor) || !descriptor.enumerable) {
-        throw new TypeError("Policy context accessors and hidden properties are not supported.");
-      }
-      result[key] = cloneContextValue(descriptor.value, ancestors);
-    }
-    return result;
-  } finally {
-    ancestors.delete(value);
-  }
-}
-
-function deepFreeze<T>(value: T): T {
-  if (typeof value !== "object" || value === null || Object.isFrozen(value)) return value;
-  for (const key of Reflect.ownKeys(value)) {
-    const child = (value as Record<PropertyKey, unknown>)[key];
-    deepFreeze(child);
-  }
-  return Object.freeze(value);
-}
-
 function snapshotPolicyContext(value: unknown): PolicyRequest["context"] | undefined {
   if (value === undefined) return undefined;
-  if (!isPlainRecord(value)) throw new TypeError("Policy context must be a plain object.");
-  const cloned = cloneContextValue(value, new WeakSet<object>());
-  if (!isPlainRecord(cloned)) throw new TypeError("Policy context snapshot is invalid.");
-  return deepFreeze(cloned) as PolicyRequest["context"];
+  const cloned = snapshotBoundedPolicyData(value);
+  if (!cloned || typeof cloned !== "object" || Array.isArray(cloned)) {
+    throw new TypeError("Policy context is invalid or exceeds resource limits.");
+  }
+  return cloned as PolicyRequest["context"];
 }
 
 /**
  * Central authorization-and-execution boundary. The lifecycle predicate is
  * owned by CoreEngine; only a running Core may admit protected operations.
  */
-export class ProtectedOperationExecutor implements ProtectedOperationPort {
+export class ProtectedOperationExecutor implements ProtectedOperationPort, SerializedProtectedOperationPort {
   private readonly registrations = new WeakMap<object, RegisteredOperation>();
   private readonly operationIds = new Set<string>();
   // This is in-memory, per-process object-identity duplicate suppression only.
@@ -108,6 +70,25 @@ export class ProtectedOperationExecutor implements ProtectedOperationPort {
     this.registrations.set(handle, registration as RegisteredOperation);
     this.operationIds.add(definition.id);
     return handle;
+  }
+
+  async executeSerialized<TInput, TOutput>(
+    operation: ProtectedOperationHandle<TInput, TOutput>,
+    actorId: string,
+    contextJson: string | undefined,
+    input: TInput,
+    options?: PolicyEvaluationOptions
+  ): Promise<ProtectedOperationResult<TOutput>> {
+    let context: ProtectedOperationCaller["context"];
+    if (contextJson !== undefined) {
+      const parsed = parseBoundedPolicyJson(contextJson);
+      if (!parsed || typeof parsed !== "object" || Array.isArray(parsed) ||
+          (Object.getPrototypeOf(parsed) !== null && Object.getPrototypeOf(parsed) !== Object.prototype)) {
+        return this.denied("Serialized protected-operation context is invalid or exceeds resource limits.");
+      }
+      context = parsed as ProtectedOperationCaller["context"];
+    }
+    return this.execute(operation, { actorId, ...(context === undefined ? {} : { context }) }, input, options);
   }
 
   async execute<TInput, TOutput>(

@@ -11,7 +11,8 @@ import type {
   ProtectedOperationCaller,
   ProtectedOperationDefinition,
   ProtectedOperationHandle,
-  ProtectedOperationPort
+  ProtectedOperationPort,
+  SerializedProtectedOperationPort
 } from "./contracts.js";
 import { DefaultDenyPolicyEngine } from "./default-policy-engine.js";
 import { FailClosedPolicyEngine } from "./fail-closed-policy-engine.js";
@@ -38,6 +39,7 @@ export class CoreEngine {
   readonly events: EventBusPort;
   readonly policy: PolicyEngine;
   readonly protectedOperations: ProtectedOperationPort;
+  readonly serializedProtectedOperations: SerializedProtectedOperationPort;
 
   private readonly protectedOperationExecutor: ProtectedOperationExecutor;
   private readonly moduleRegistry = new ModuleRegistry();
@@ -65,6 +67,15 @@ export class CoreEngine {
         input: TInput,
         options?: PolicyEvaluationOptions
       ) => this.protectedOperationExecutor.execute(operation, caller, input, options)
+    });
+    this.serializedProtectedOperations = Object.freeze({
+      executeSerialized: <TInput, TOutput>(
+        operation: ProtectedOperationHandle<TInput, TOutput>,
+        actorId: string,
+        contextJson: string | undefined,
+        input: TInput,
+        options?: PolicyEvaluationOptions
+      ) => this.protectedOperationExecutor.executeSerialized(operation, actorId, contextJson, input, options)
     });
   }
 
@@ -270,7 +281,8 @@ export class CoreEngine {
     const base = {
       moduleId,
       events: this.events,
-      protectedOperations: this.protectedOperations
+      protectedOperations: this.protectedOperations,
+      serializedProtectedOperations: this.serializedProtectedOperations
     };
     if (!this.options.memory) return Object.freeze(base);
 
