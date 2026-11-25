@@ -175,14 +175,6 @@ export type ProtectedOperationResult<TOutput> =
 
 /** Execute-only capability supplied to modules; registration is not exposed. */
 export interface ProtectedOperationPort {
-  /** Bounded JSON context entry point for callers that cannot supply trusted object graphs. */
-  executeSerialized<TInput, TOutput>(
-    operation: ProtectedOperationHandle<TInput, TOutput>,
-    actorId: string,
-    contextJson: string | undefined,
-    input: TInput,
-    options?: PolicyEvaluationOptions
-  ): Promise<ProtectedOperationResult<TOutput>>;
   execute<TInput, TOutput>(
     operation: ProtectedOperationHandle<TInput, TOutput>,
     caller: ProtectedOperationCaller,
@@ -191,11 +183,23 @@ export interface ProtectedOperationPort {
   ): Promise<ProtectedOperationResult<TOutput>>;
 }
 
+/** Optional bounded-JSON capability for untrusted serialized policy context. */
+export interface SerializedProtectedOperationPort {
+  executeSerialized<TInput, TOutput>(
+    operation: ProtectedOperationHandle<TInput, TOutput>,
+    actorId: string,
+    contextJson: string | undefined,
+    input: TInput,
+    options?: PolicyEvaluationOptions
+  ): Promise<ProtectedOperationResult<TOutput>>;
+}
 
 export interface ModuleContext {
   readonly moduleId: string;
   readonly events: EventBusPort;
   readonly protectedOperations: ProtectedOperationPort;
+  /** Absent on hosts that do not support bounded serialized ingress; callers must deny rather than fall back. */
+  readonly serializedProtectedOperations?: SerializedProtectedOperationPort;
   readonly memory?: MemoryPort;
 }
 

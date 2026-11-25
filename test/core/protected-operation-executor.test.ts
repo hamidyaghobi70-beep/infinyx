@@ -53,7 +53,7 @@ describe("ProtectedOperationExecutor", () => {
     let observed: PolicyRequest | undefined;
     const { engine, operation } = makeEngine(async (request) => { observed = request; return allow; });
     await ensureStarted(engine);
-    const result = await engine.protectedOperations.executeSerialized(
+    const result = await engine.serializedProtectedOperations.executeSerialized(
       operation, "serialized-caller", '{"attributes":{"scope":"read"}}', { value: "ok" }
     );
     expect(result).toEqual({ status: "executed", value: "OK" });
@@ -64,7 +64,7 @@ describe("ProtectedOperationExecutor", () => {
     const evaluator = vi.fn(async () => allow);
     const { engine, operation, handler } = makeEngine(evaluator);
     await ensureStarted(engine);
-    const result = await engine.protectedOperations.executeSerialized(
+    const result = await engine.serializedProtectedOperations.executeSerialized(
       operation, "serialized-caller", '{"attributes":{"x":', { value: "ok" }
     );
     expect(result).toMatchObject({ status: "denied" });

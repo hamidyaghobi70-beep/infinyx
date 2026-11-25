@@ -350,4 +350,18 @@ describe("CoreEngine guarded memory composition", () => {
     expect(second).toBeInstanceOf(GuardedMemoryPort);
     expect(first).not.toBe(second);
   });
+  it("provides serialized protected operations as a separate optional capability", async () => {
+    const engine = new CoreEngine();
+    let moduleContext: import("../../src/core/contracts.js").ModuleContext | undefined;
+    engine.register({
+      id: "serialized-capability",
+      version: "1.0.0",
+      initialize: (context) => { moduleContext = context; }
+    });
+    await engine.initialize();
+    expect(engine.protectedOperations).not.toHaveProperty("executeSerialized");
+    expect(engine.serializedProtectedOperations).toHaveProperty("executeSerialized");
+    expect(moduleContext?.protectedOperations).toBe(engine.protectedOperations);
+    expect(moduleContext?.serializedProtectedOperations).toBe(engine.serializedProtectedOperations);
+  });
 });

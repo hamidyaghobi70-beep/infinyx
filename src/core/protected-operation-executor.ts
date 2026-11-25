@@ -10,7 +10,8 @@ import type {
   ProtectedOperationDefinition,
   ProtectedOperationHandle,
   ProtectedOperationPort,
-  ProtectedOperationResult
+  ProtectedOperationResult,
+  SerializedProtectedOperationPort
 } from "./contracts.js";
 import { isValidPolicyDecision, isValidPolicyRequest } from "./fail-closed-policy-engine.js";
 
@@ -41,7 +42,7 @@ function snapshotPolicyContext(value: unknown): PolicyRequest["context"] | undef
  * Central authorization-and-execution boundary. The lifecycle predicate is
  * owned by CoreEngine; only a running Core may admit protected operations.
  */
-export class ProtectedOperationExecutor implements ProtectedOperationPort {
+export class ProtectedOperationExecutor implements ProtectedOperationPort, SerializedProtectedOperationPort {
   private readonly registrations = new WeakMap<object, RegisteredOperation>();
   private readonly operationIds = new Set<string>();
   // This is in-memory, per-process object-identity duplicate suppression only.
