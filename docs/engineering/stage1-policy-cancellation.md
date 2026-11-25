@@ -280,6 +280,7 @@ Additional rules:
 6. Liveness indicates only that the process can respond. It is not a readiness, dependency-health, business-work, or graceful-shutdown guarantee.
 7. A future implementation must define signal handling, repeated-signal behavior, grace-period configuration authority, and forced-exit policy before release.
 8. `GRACEFUL_DRAIN` MAY transition to `CLASSIFY_REMAINDERS` before the configured grace deadline when every tracked work item has already reached confirmed local quiescence and all required bounded cleanup has completed or been safely ceased. The coordinator MUST NOT wait idly for the unused remainder of the grace interval. The original absolute grace deadline remains unchanged for any work still outstanding; it MUST NOT be reset or extended by early classification, repeated signals, or newly observed events. If any work remains active or unresolved, the coordinator continues the bounded drain until that original deadline, then classifies the remainder.
+9. The process-level grace deadline and each work item's immutable stop-observation deadline are independent bounds. This specification does not define which bound controls process exit when the shutdown grace deadline occurs first. In particular, shutdown classification MUST NOT be interpreted as proof of local cessation, MUST NOT silently shorten the per-work-item observation deadline, and MUST NOT authorize a `TERMINAL` outcome. The interaction, including how an outstanding `STOP_REQUESTED` item is durably represented and observed or recovered if the process exits before its own deadline, is an explicit open design decision under section 15 and MUST be resolved before implementation or release.
 
 ## 11. Cleanup, failure handling, and reconciliation
 
@@ -385,8 +386,9 @@ The following remain explicit design decisions for a later authorized implementa
 8. Whether any future cross-process execution is justified; no distributed coordination is assumed in this stage.
 9. Per-work-item stop-observation and cleanup-cessation bound values, configuration authority, and adapter evidence contract.
 10. Adapter/domain-owned durable reconciliation-intent sink, restart discovery contract, and bounded unresolved-record retention/capacity policy.
+11. Interaction between the process-level shutdown grace deadline and per-work-item stop-observation deadlines, including durable representation, observation/recovery ownership, and permitted process-exit behavior when the shutdown deadline occurs first.
 
-These decisions must be resolved, reviewed, and approved before implementation. This specification is not evidence that any of these systems or controls currently exist. In addition, the stop-observation bound source/value, unresolved-record retention policy, and adapter-owned durable reconciliation-intent capability in section 17.12 must be approved before enabling any affected capability.
+These decisions must be resolved, reviewed, and approved before implementation. Decision 11 is specifically blocking: no implementation may infer that shutdown grace expiry confirms cessation, automatically advances a work item to `UNRESOLVED` before its immutable per-work-item deadline, or permits process exit without a reviewed contract for preserving and subsequently observing/recovering outstanding work. This specification is not evidence that any of these systems or controls currently exist. In addition, the stop-observation bound source/value, unresolved-record retention policy, and adapter-owned durable reconciliation-intent capability in section 17.12 must be approved before enabling any affected capability.
 
 ## 16. Related repository policy
 
@@ -402,7 +404,8 @@ More restrictive security controls, repository protections, and explicit approva
 ---
 
 **Document status: DOCUMENTATION REVISION — AWAITING FINAL INDEPENDENT REVIEW**  
-**Implementation authorization: NOT GRANTED**
+**Implementation authorization: NOT GRANTED**  
+**Open design decision:** shutdown-grace/per-work-item stop-observation interaction (section 15, decision 11)
 
 
 ## 17. Independent review resolution — normative clarifications
