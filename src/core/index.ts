@@ -48,6 +48,7 @@ export type {
   ProtectedOperationCaller,
   ProtectedOperationContext,
   ProtectedOperationDefinition,
+  DeepReadonly,
   ProtectedOperationHandle,
   ProtectedOperationPort,
   ProtectedOperationResult
