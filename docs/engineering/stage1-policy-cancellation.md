@@ -5,7 +5,7 @@
 **Stage:** Stage 1 — Policy Cancellation Hardening  
 **Applies to:** Core Platform lifecycle contracts and future policy-governed execution workflows  
 **Repository:** `hamidyaghobi70-beep/infinyx`  
-**Reviewed baseline:** `2db0777f9a9613b20169e5737b27aedc9fe78c7f`  
+**Review target:** the exact immutable commit recorded in issue #5; the document itself does not embed a self-referential commit hash.  
 **Original architecture baseline:** `2aab78817b50f48a4c8125b426e3b3d5bedaba44`
 
 ## 1. Purpose and normative language
@@ -362,7 +362,7 @@ Passing these tests does not itself authorize release, deployment, or merge; rep
 This stage records a contract only. No runtime behavior is asserted to have changed.
 
 - [x] Original documentation specification committed on the feature branch.
-- [x] Documentation-only revision prepared for second technical review.
+- [x] Documentation-only revisions prepared; latest review findings addressed; final qualified independent review — pending.
 - [x] Haniyeh-submitted review findings received and triaged; documentation corrections prepared; final qualified independent review — pending.
 - [ ] Implementation authorization — not granted.
 - [ ] Source-code or test changes — not authorized by this revision.
@@ -477,7 +477,7 @@ That entry point MUST synchronously return one receipt:
 A synchronous exception means `NOT_STARTED` only if the adapter contract
 guarantees it cannot throw after initiating an effect; otherwise it means
 `START_UNKNOWN`. Timeout, disconnect, lost response, or cancellation is
-never proof of `NOT_STARTED`. Stop serialized before step 3 invalidates
+never proof of `NOT_STARTED`. Stop serialized before the `START_COMMITTED` record in step 2 invalidates
 the reservation and the adapter MUST NOT be invoked. Stop after step 3
 blocks later admissions and signals the admitted operation under its
 adapter contract. This protocol serializes local initiation; it does not
