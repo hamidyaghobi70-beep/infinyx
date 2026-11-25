@@ -164,7 +164,7 @@ The following rules govern **Outcome Candidate Selection only**, while the candi
 5. **Completion:** Candidate `completed` may be selected only if all required work has completed and the completion event is serialized before any effective stop event and before candidate freeze.
 6. **Operational failure:** Candidate `failed` may be selected if the failure event is serialized before an effective stop event and before candidate freeze. A later cancellation cannot relabel a frozen failure candidate.
 7. **Simultaneous observations:** Events observed concurrently are not resolved by wall-clock guesswork. The coordinator's serialization order is authoritative and MUST be stable for that execution. Where a policy denial is already affirmatively known at an admission boundary, denial always blocks admission regardless of a concurrent caller cancellation.
-8. **Same-batch tie and stop precedence:** Events in one indivisible coordinator batch with no distinct sequence use the explicit tie-break in section 17.7. A qualifying denial takes precedence as specified there; absent denial, the deadline/cancellation tie-break applies.
+8. **Same-batch tie and stop precedence:** Events in one indivisible coordinator batch with no distinct sequence use the explicit normalization rule in section 17.9. A qualifying denial takes precedence as specified there; absent denial, the deadline/cancellation tie-break applies.
 9. **After Candidate Freeze:** No later event may select a replacement candidate. Late denial, revocation, deadline, cancellation, completion, failure, cleanup, or shutdown events may be retained as bounded diagnostics and may prevent or delay safe commitment, but MUST NOT alter the frozen candidate.
 10. **Terminal Commitment:** Candidate precedence does not satisfy commitment conditions. The frozen candidate may be published only through the separate `FINALIZING` → `TERMINAL` transition after every guard in section 17.1 and the applicable transition-matrix row in section 5.2 is satisfied. A candidate MUST NOT be exposed as a final outcome before that transition.
 
@@ -657,6 +657,40 @@ same-batch order is `timed_out` before `cancelled`. For separately accepted
 events, the first coordinator sequence wins. Candidate freeze remains
 immutable and Terminal Commitment remains a separate later transition.
 
+### 17.9.1 Outcome precedence: denied, timed_out, cancelled
+
+Every accepted arbitration event receives a strictly increasing
+coordinator sequence; wall-clock order is diagnostic only.
+
+1. **Pre-admission denial:** affirmative deny, missing/invalid/stale
+   decision, or failed mandatory authorization check selects `denied`.
+   Concurrent cancellation/deadline cannot convert unauthorized work to
+   `cancelled` or `timed_out`.
+2. **In-flight revocation:** affirmative policy revocation serialized while
+   business work is active and before candidate freeze selects `denied`,
+   closes business admission, and requests stop. It takes precedence over
+   caller cancellation/deadline observed but not yet frozen.
+3. **Deadline versus cancellation:** absent qualifying denial, whichever
+   event is serialized first selects `timed_out` or `cancelled`.
+   If both enter the same indivisible coordinator batch with no distinct
+   sequence, deterministic tie-break is `timed_out` before `cancelled`.
+4. **Completion/failure versus stop:** successful completion or operational
+   failure freezes `completed`/`failed` only if its transition to
+   `FINALIZING` is serialized before an effective stop. A later stop
+   cannot rewrite it.
+5. **Stop before completion/failure:** if stop is serialized first, later
+   results of already-admitted work are secondary operation results, not
+   replacements for the stop candidate. A qualifying policy revocation
+   still follows rule 2.
+6. **After candidate freeze:** no later event, including denial/deadline,
+   replaces the candidate; it may be recorded as late metadata.
+7. **Commitment:** delayed Terminal Commitment never reopens arbitration.
+
+Thus denial is the fail-closed result for authorization failure known before
+candidate freeze; otherwise deadline/cancellation follow coordinator
+sequence and the explicit same-batch tie-break. Candidate selection and
+terminal commitment remain separate.
+
 ### 17.10 Finding-to-section and verification traceability
 
 | Review finding | Clarified sections | Future verification scenarios |
@@ -701,41 +735,6 @@ immutable and Terminal Commitment remains a separate later transition.
 | V-48 | Local quiescence confirmed while external effect remains unknown | Local lifecycle may commit terminal with `unknown_requires_reconciliation`; it is not labeled `UNRESOLVED` solely due to remote uncertainty and makes no remote-stop claim. |
 | V-49 | External-effect status value validation | Only `none`, `not_started`, `completed`, `stopped_confirmed`, and `unknown_requires_reconciliation` are accepted; `stopped_confirmed` requires authoritative evidence. |
 | V-50 | Deadline and cancellation observed in one indivisible batch | Coordinator normalizes deadline before cancellation, then assigns unique increasing sequences; no two accepted events share a sequence. |
-
-### 17.9.1 Outcome precedence: denied, timed_out, cancelled
-
-Every accepted arbitration event receives a strictly increasing
-coordinator sequence; wall-clock order is diagnostic only.
-
-1. **Pre-admission denial:** affirmative deny, missing/invalid/stale
-   decision, or failed mandatory authorization check selects `denied`.
-   Concurrent cancellation/deadline cannot convert unauthorized work to
-   `cancelled` or `timed_out`.
-2. **In-flight revocation:** affirmative policy revocation serialized while
-   business work is active and before candidate freeze selects `denied`,
-   closes business admission, and requests stop. It takes precedence over
-   caller cancellation/deadline observed but not yet frozen.
-3. **Deadline versus cancellation:** absent qualifying denial, whichever
-   event is serialized first selects `timed_out` or `cancelled`.
-   If both enter the same indivisible coordinator batch with no distinct
-   sequence, deterministic tie-break is `timed_out` before `cancelled`.
-4. **Completion/failure versus stop:** successful completion or operational
-   failure freezes `completed`/`failed` only if its transition to
-   `FINALIZING` is serialized before an effective stop. A later stop
-   cannot rewrite it.
-5. **Stop before completion/failure:** if stop is serialized first, later
-   results of already-admitted work are secondary operation results, not
-   replacements for the stop candidate. A qualifying policy revocation
-   still follows rule 2.
-6. **After candidate freeze:** no later event, including denial/deadline,
-   replaces the candidate; it may be recorded as late metadata.
-7. **Commitment:** delayed Terminal Commitment never reopens arbitration.
-
-Thus denial is the fail-closed result for authorization failure known before
-candidate freeze; otherwise deadline/cancellation follow coordinator
-sequence and the explicit same-batch tie-break. Candidate selection and
-terminal commitment remain separate.
-
 
 ## 18. Final independent review handoff
 
