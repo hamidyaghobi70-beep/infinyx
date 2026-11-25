@@ -54,9 +54,9 @@ describe("snapshotBoundedPolicyData", () => {
     // The first 15 values use 16 KiB each. The final value leaves room for
     // the UTF-8 bytes of array index keys (0..15) in the shared budget.
     const atLimit = Array.from({ length: 16 }, (_, index) =>
-      "é".repeat(index === 15 ? 8_184 : 8_192));
+      "é".repeat(index === 15 ? 8_181 : 8_192));
     const overLimit = Array.from({ length: 16 }, (_, index) =>
-      index === 15 ? `${"é".repeat(8_184)}x` : "é".repeat(8_192));
+      index === 15 ? `${"é".repeat(8_181)}x` : "é".repeat(8_192));
 
     expect(snapshotBoundedPolicyData(atLimit)).toBeDefined();
     expect(snapshotBoundedPolicyData(overLimit)).toBeUndefined();
