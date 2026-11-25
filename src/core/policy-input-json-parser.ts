@@ -8,6 +8,7 @@ const MAX_CONTAINER_ENTRIES = 1_000;
 /** Parses untrusted JSON while enforcing limits before building each container. */
 export function parseBoundedPolicyJson(input: unknown): unknown | undefined {
   if (typeof input !== "string" || Buffer.byteLength(input, "utf8") > MAX_INPUT_BYTES) return undefined;
+  const json = input;
   let offset = 0;
   let nodes = 0;
   let totalStringBytes = 0;
@@ -18,17 +19,17 @@ export function parseBoundedPolicyJson(input: unknown): unknown | undefined {
     if (bytes > MAX_STRING_BYTES || totalStringBytes > MAX_TOTAL_BYTES) fail();
   };
   const whitespace = (): void => {
-    while (offset < input.length &&
-      (input[offset] === " " || input[offset] === "\n" || input[offset] === "\r" || input[offset] === "\t")) offset += 1;
+    while (offset < json.length &&
+      (json[offset] === " " || json[offset] === "\n" || json[offset] === "\r" || json[offset] === "\t")) offset += 1;
   };
   const parseString = (): string => {
-    if (input[offset] !== '"') fail();
+    if (json[offset] !== '"') fail();
     const start = offset++;
-    while (offset < input.length) {
-      const char = input[offset];
+    while (offset < json.length) {
+      const char = json[offset];
       if (char === '"') {
         offset += 1;
-        const value: unknown = JSON.parse(input.slice(start, offset));
+        const value: unknown = JSON.parse(json.slice(start, offset));
         if (typeof value !== "string") fail();
         accountString(value);
         return value;
@@ -41,7 +42,7 @@ export function parseBoundedPolicyJson(input: unknown): unknown | undefined {
     nodes += 1;
     if (nodes > MAX_NODES || depth > MAX_DEPTH) fail();
     whitespace();
-    const char = input[offset];
+    const char = json[offset];
     if (char === '"') return parseString();
     if (char === "{") {
       offset += 1;
@@ -49,7 +50,7 @@ export function parseBoundedPolicyJson(input: unknown): unknown | undefined {
       const result: Record<string, unknown> = Object.create(null) as Record<string, unknown>;
       const seen = new Set<string>();
       let entries = 0;
-      if (input[offset] === "}") { offset += 1; return Object.freeze(result); }
+      if (json[offset] === "}") { offset += 1; return Object.freeze(result); }
       while (true) {
         whitespace();
         const key = parseString();
@@ -57,13 +58,13 @@ export function parseBoundedPolicyJson(input: unknown): unknown | undefined {
         if (entries > MAX_CONTAINER_ENTRIES || seen.has(key)) fail();
         seen.add(key);
         whitespace();
-        if (input[offset] !== ":") fail();
+        if (json[offset] !== ":") fail();
         offset += 1;
         const value = parseValue(depth + 1);
         Object.defineProperty(result, key, { value, enumerable: true, configurable: false, writable: false });
         whitespace();
-        if (input[offset] === "}") { offset += 1; return Object.freeze(result); }
-        if (input[offset] !== ",") fail();
+        if (json[offset] === "}") { offset += 1; return Object.freeze(result); }
+        if (json[offset] !== ",") fail();
         offset += 1;
       }
     }
@@ -71,24 +72,24 @@ export function parseBoundedPolicyJson(input: unknown): unknown | undefined {
       offset += 1;
       whitespace();
       const result: unknown[] = [];
-      if (input[offset] === "]") { offset += 1; return Object.freeze(result); }
+      if (json[offset] === "]") { offset += 1; return Object.freeze(result); }
       while (true) {
         if (result.length >= MAX_CONTAINER_ENTRIES) fail();
         accountString(String(result.length));
         result.push(parseValue(depth + 1));
         whitespace();
-        if (input[offset] === "]") { offset += 1; return Object.freeze(result); }
-        if (input[offset] !== ",") fail();
+        if (json[offset] === "]") { offset += 1; return Object.freeze(result); }
+        if (json[offset] !== ",") fail();
         offset += 1;
       }
     }
-    if (char === "t" && input.slice(offset, offset + 4) === "true") { offset += 4; return true; }
-    if (char === "f" && input.slice(offset, offset + 5) === "false") { offset += 5; return false; }
-    if (char === "n" && input.slice(offset, offset + 4) === "null") { offset += 4; return null; }
+    if (char === "t" && json.slice(offset, offset + 4) === "true") { offset += 4; return true; }
+    if (char === "f" && json.slice(offset, offset + 5) === "false") { offset += 5; return false; }
+    if (char === "n" && json.slice(offset, offset + 4) === "null") { offset += 4; return null; }
     const start = offset;
-    while (offset < input.length && /[0-9eE+.-]/.test(input[offset] ?? "")) offset += 1;
+    while (offset < json.length && /[0-9eE+.-]/.test(json[offset] ?? "")) offset += 1;
     if (start === offset) return fail();
-    const token = input.slice(start, offset);
+    const token = json.slice(start, offset);
     if (!/^-?(?:0|[1-9][0-9]*)(?:\.[0-9]+)?(?:[eE][+-]?[0-9]+)?$/.test(token)) fail();
     const number = Number(token);
     if (!Number.isFinite(number)) fail();
@@ -98,7 +99,7 @@ export function parseBoundedPolicyJson(input: unknown): unknown | undefined {
     whitespace();
     const value = parseValue(0);
     whitespace();
-    return offset === input.length ? value : undefined;
+    return offset === json.length ? value : undefined;
   } catch {
     return undefined;
   }
