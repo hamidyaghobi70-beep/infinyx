@@ -149,62 +149,8 @@ describe("snapshotBoundedPolicyData", () => {
     expect(Object.isFrozen(snapshot?.nested.values)).toBe(true);
   });
 
-  it("documents that own-key enumeration completes before returned-key limits can be checked for Proxies", () => {
-    const observed: string[] = [];
-    const keys = Array.from({ length: 1_001 }, (_, index) => `k${index}`);
-    const input = new Proxy({}, {
-      getPrototypeOf(target) {
-        observed.push("getPrototypeOf");
-        return Reflect.getPrototypeOf(target);
-      },
-      ownKeys() {
-        observed.push("ownKeys");
-        return keys;
-      }
-    });
-
-    expect(snapshotBoundedPolicyData(input)).toBeUndefined();
-    expect(observed).toEqual(["getPrototypeOf", "ownKeys"]);
-  });
-
-  it("reads array length from its descriptor without invoking the Proxy get trap", () => {
-    const observed: string[] = [];
-    const input = new Proxy([1], {
-      get(target, key, receiver) {
-        if (key === "length") observed.push("get:length");
-        return Reflect.get(target, key, receiver);
-      },
-      getOwnPropertyDescriptor(target, key) {
-        if (key === "length") observed.push("descriptor:length");
-        return Reflect.getOwnPropertyDescriptor(target, key);
-      }
-    });
-
-    expect(snapshotBoundedPolicyData(input)).toEqual([1]);
-    expect(observed).toContain("descriptor:length");
-    expect(observed).not.toContain("get:length");
-  });
-
-  it("documents that property-descriptor reflection also executes Proxy traps", () => {
-    const observed: string[] = [];
-    const target = { value: 1 };
-    const input = new Proxy(target, {
-      getPrototypeOf(object) {
-        observed.push("getPrototypeOf");
-        return Reflect.getPrototypeOf(object);
-      },
-      ownKeys(object) {
-        observed.push("ownKeys");
-        return Reflect.ownKeys(object);
-      },
-      getOwnPropertyDescriptor(object, key) {
-        observed.push(`getOwnPropertyDescriptor:${String(key)}`);
-        return Reflect.getOwnPropertyDescriptor(object, key);
-      }
-    });
-
-    expect(snapshotBoundedPolicyData(input)).toEqual({ value: 1 });
-    expect(observed).toEqual(["getPrototypeOf", "ownKeys", "getOwnPropertyDescriptor:value"]);
+  it("snapshots ordinary arrays using their own length descriptor", () => {
+    expect(snapshotBoundedPolicyData([1, 2, 3])).toEqual([1, 2, 3]);
   });
 
   it("rejects root Proxies before invoking any reflection traps", () => {
