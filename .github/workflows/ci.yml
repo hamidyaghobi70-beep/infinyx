@@ -12,6 +12,7 @@ on:
       - integration/infinyx-core-runtime-v1
   pull_request:
     branches:
+      - fix/policy-input-resource-limits
       - fix/policy-deadline-validation
       - integration/infinyx-core-runtime-v1
       - foundation/repository-foundation
