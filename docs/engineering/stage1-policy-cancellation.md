@@ -425,12 +425,16 @@ A **Terminal Commitment** is the later, single, irreversible coordinator
 transition that records the frozen candidate as the terminal outcome. It is
 permitted only after: (a) business and callback-start admission are closed; (b) every locally
 executing operation and every active callback capable of issuing governed
-work has completed or confirmed local cessation; (c) every registered child is locally quiescent; (d) `cleanup_status` is
-`not_required`, or cleanup has completed, or its deadline expired and
-cleanup cessation is confirmed; and (e) cleanup and external-effect status
-are recorded separately. If cleanup
-may still execute, commitment is withheld and the item transitions to
-`UNRESOLVED`.
+work has completed or confirmed local cessation; (c) every registered child is locally quiescent; (d) `cleanup_status` is `not_required`, or cleanup has completed, or its
+deadline expired and cleanup cessation is confirmed, or cleanup terminated
+with a recorded failure and its local cessation is confirmed; and (e)
+cleanup and external-effect status are recorded separately. A cleanup
+failure that is complete and locally quiescent MUST be recorded as
+`cleanup_status: failed` and does not, by itself, prevent Terminal
+Commitment or rewrite the frozen Outcome Candidate. If cleanup failed but
+may still execute, or its cessation is unconfirmed, commitment is withheld
+and the item transitions to `UNRESOLVED`. A cleanup exception/failed
+receipt alone is not proof of cessation.
 
 The candidate-selection linearization point is the serialized transition to
 `FINALIZING`; the terminal-commitment linearization point is the later
@@ -794,7 +798,9 @@ terminal commitment remain separate.
 | DeepSeek NEW-11: define affected capability scope | 17.8 | V-65 |
 | DeepSeek NEW-12: adapter-declared cleanup cessation observation bound | 9.3, 17.3, 17.12 | V-66 |
 | DeepSeek NEW-13: cross-reference outcome normalization rules | 6.2 | V-56–V-57 |
-| DeepSeek NEW-14: remove redundant coordinator recheck step | 17.2 | V-29
+| DeepSeek NEW-14: remove redundant coordinator recheck step | 17.2 | V-29 |
+| Haniyeh C-01: completed cleanup failure and Terminal Commitment | 4, 11, 17.1 | V-67 |
+| Haniyeh C-02: UNRESOLVED retention expiry, archive integrity, and resolution authority | 12, 17.8, 17.12 | V-68
 
 ### 17.11 Additional future verification scenarios
 
@@ -839,6 +845,8 @@ terminal commitment remain separate.
 | V-64 | Legacy prose uses stop-pending terminology | The normative lifecycle vocabulary consistently uses `STOP_REQUESTED`; no undocumented state is introduced. |
 | V-65 | Adapter cannot enumerate outstanding operations after restart | The exact adapter/capability scope is identified; all operations routed through that adapter are disabled where discovery guarantees are insufficient, unless a narrower independently enforced scope is proven. |
 | V-66 | Cleanup cessation observation bound is exercised | The bound is declared by the resource/adapter contract, frozen when cleanup starts, uses a monotonic clock, and expiry without cessation confirmation leads to `UNRESOLVED`. |
+| V-67 | Cleanup terminates with a recorded failure and cessation is confirmed | Preserve `cleanup_status: failed`; permit Terminal Commitment only after all other guards hold; retain the frozen primary candidate; an exception without cessation evidence remains `UNRESOLVED`. |
+| V-68 | UNRESOLVED retention threshold is reached | Do not resolve or delete on expiry; verify durable archive acceptance, integrity, identity/reconciliation linkage, accountable resolution authority, and fail-closed backpressure if transfer is unavailable. |
 
 ### 17.12 Immutable observation bounds, unresolved retention, and recovery capacity
 
@@ -870,21 +878,54 @@ cannot be reset by repeated cleanup signals. At expiry, the rules in
 section 17.3 apply. The process-level shutdown grace interval in section
 10 is independent and does not replace either per-work-item bound.
 
-**Unresolved retention and bounded capacity.** A capability MUST declare
-a bounded retention policy for `UNRESOLVED` work-item records, including
-maximum record size, maximum retained count/bytes, retention duration,
-owner, escalation destination, and the approved disposition after the
-retention threshold. The policy MUST NOT silently delete or relabel an
-unresolved record. If local actors may still execute, resources they may
-use remain open unless a reviewed resource contract explicitly permits
-safe forced closure; reaching a retention threshold is not cessation
-evidence. When the configured capacity is reached, the coordinator MUST
-apply admission backpressure and reject new affected work fail-closed
-until capacity is safely recovered. It MUST NOT evict unresolved records
-to make room. If a durable retention/recovery sink is required but
-unavailable, affected new admissions remain disabled. Any compaction or
-transfer must preserve the work identity, unresolved reason, local
-quiescence status, external-effect uncertainty, and reconciliation link.
+**Unresolved retention, archival disposition, and bounded capacity.** A
+capability MUST declare a bounded retention policy for `UNRESOLVED`
+work-item records, including maximum record size, maximum retained
+count/bytes, retention duration, accountable owner, escalation destination,
+and the approved disposition after the retention threshold. Expiry of the
+retention duration MUST NOT itself resolve the operation, authorize record
+deletion, or constitute evidence of local or remote cessation.
+
+Before the active retention threshold is reached, the accountable owner
+MUST ensure that the record is either retained in its approved durable
+recovery sink or transferred to an already-approved durable archive/evidence
+store. This specification does not authorize a new database, journal,
+broker, archive service, or other infrastructure. The transfer MUST be
+verifiable and preserve, at minimum, the immutable work-item and operation
+identities, adapter/capability identity, original creation and event
+metadata, unresolved reason, `local_quiescence`, `external_effect_status`,
+the durable reconciliation-intent identity and locator, the evidence/
+provenance references, and the responsible owner. The transfer MUST preserve
+integrity and access controls and provide a durable reference from the
+active recovery record to the archived evidence, and vice versa where the
+archive supports backlinks. A transfer is not complete until the destination
+acknowledges durable acceptance and the required fields/integrity checks
+succeed.
+
+Only the designated accountable domain/adapter owner, acting under the
+repository's applicable approval and audit controls and supported by
+authoritative cessation/status evidence or a separately approved recovery
+decision, may record a resolution disposition. Retention expiry, archive
+transfer, capacity pressure, process shutdown, or an operator's inability
+to query the external system MUST NOT be treated as resolution. The record
+MUST retain its unresolved history and reconciliation linkage after a
+resolution disposition; archival is not deletion and does not erase audit
+evidence. Any later deletion, if legally and operationally permitted, must
+follow a separately approved retention/destruction policy and MUST NOT
+destroy evidence still subject to reconciliation, audit, legal hold, or
+security investigation.
+
+If local actors may still execute, resources they may use remain open unless
+a reviewed resource contract explicitly permits safe forced closure;
+reaching a retention threshold is not cessation evidence. When the configured
+capacity is reached, the coordinator MUST apply admission backpressure and
+reject new affected work fail-closed until capacity is safely recovered. It
+MUST NOT evict unresolved records to make room. If a durable retention/
+recovery sink or approved archive destination is required but unavailable,
+or transfer cannot be verified, affected new admissions remain disabled
+and the source record MUST be retained. Any compaction or transfer must
+preserve the work identity, unresolved reason, local quiescence status,
+external-effect uncertainty, and reconciliation link.
 
 **Affected capability scope.** In section 17.8, “affected capability” means
 the narrowest capability boundary that is independently enforced and can
@@ -926,14 +967,14 @@ architecture decision.
 | Candidate freeze and terminal commitment are distinct | 5.2, 6.1–6.2, 17.1, 17.9.1 | V-30–V-31, V-40–V-41, V-44, V-61 |
 | No child/callback detachment or post-stop start | 3, 5.3, 9.1, 17.5–17.6 | V-08–V-09, V-36–V-37, V-45–V-46 |
 | Local quiescence is distinct from remote effect status | 4, 5.1, 17.7–17.8 | V-15, V-38–V-39, V-47–V-49, V-60 |
-| Cleanup is bounded and cannot bypass authorization | 8.3, 9.2–9.3, 11, 17.3–17.4, 17.12 | V-14, V-16, V-22, V-32–V-35, V-66 |
-| Shutdown/resource safety and bounded retention | 10, 12, 17.8, 17.12 | V-17–V-20, V-47, V-62 |
+| Cleanup is bounded and cannot bypass authorization | 8.3, 9.2–9.3, 11, 17.1, 17.3–17.4, 17.12 | V-14, V-16, V-22, V-32–V-35, V-66–V-67 |
+| Shutdown/resource safety and bounded retention | 10, 12, 17.8, 17.12 | V-17–V-20, V-47, V-62, V-68 |
 | Terminal state is immutable and auditable | 3, 5.2–5.3, 6.1–6.2, 12, 17.1, 17.9 | V-10–V-12, V-21, V-23, V-30–V-31, V-55–V-57 |
 | No unapproved infrastructure or deferred capability activation | 2, 14–16, 17.8, 17.12 | V-26, V-47, V-60, V-65 |
 
 ## 18. Final independent review handoff
 
-The earlier specification review clarifications and the five findings actually issued in the Haniyeh-submitted report have been incorporated as proposed contract text and mapped to future verification scenarios. The Haniyeh report contained no F-06 finding; §17.10 records that fact explicitly rather than inventing or silently omitting a finding. The DeepSeek findings NEW-01 through NEW-14 are addressed in this revision and mapped to future verification scenarios; all V-01 through V-66 entries remain future acceptance criteria, not tests claimed as executed. The report's `RETURN FOR REVISION` disposition is preserved in the review record. Because prior architecture discussions were disclosed and public identity/qualification evidence was not supplied, the report is not treated as satisfying the issue's final independent-review requirement. This is not runtime validation, implementation approval, or a comprehensive audit. The transition and traceability tables are normative documentation aids, not executable tests or proof of implementation conformance. Implementation-specific decisions in section 15 remain open and require explicit design and review before implementation.
+The earlier specification review clarifications and the five findings actually issued in the Haniyeh-submitted report have been incorporated as proposed contract text and mapped to future verification scenarios. The Haniyeh report contained no F-06 finding; §17.10 records that fact explicitly rather than inventing or silently omitting a finding. The DeepSeek findings NEW-01 through NEW-14 are addressed in this revision and mapped to future verification scenarios; all V-01 through V-68 entries remain future acceptance criteria, not tests claimed as executed. The report's `RETURN FOR REVISION` disposition is preserved in the review record. Because prior architecture discussions were disclosed and public identity/qualification evidence was not supplied, the report is not treated as satisfying the issue's final independent-review requirement. This is not runtime validation, implementation approval, or a comprehensive audit. The transition and traceability tables are normative documentation aids, not executable tests or proof of implementation conformance. Implementation-specific decisions in section 15 remain open and require explicit design and review before implementation.
 
 **Document status: DOCUMENTATION REVISION — AWAITING FINAL INDEPENDENT REVIEW**  
 **Implementation authorization: NOT GRANTED**
