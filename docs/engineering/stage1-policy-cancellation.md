@@ -159,7 +159,7 @@ No caller, adapter, domain module, or cleanup handler may select, freeze, rewrit
 The following rules govern **Outcome Candidate Selection only**, while the candidate is still unfrozen. They do not authorize Terminal Commitment. The coordinator applies the rules to its serialized event sequence and freezes the selected candidate only when the lifecycle enters `FINALIZING`, in accordance with sections 5.2 and 17.1.
 
 1. **Before admission:** Any deny, missing/indeterminate decision, invalid/stale decision, or failed required revalidation selects candidate `denied`. The item enters `FINALIZING` without business execution; it MUST NOT transition directly to `TERMINAL`.
-2. **Policy revocation before candidate freeze:** If a required revalidation affirmatively denies/revokes after admission and before candidate freeze—including while the item is `RUNNING` or `STOP_REQUESTED`, and including when no business operation is currently active but cleanup/finalization is pending—the coordinator blocks all new business admissions and selects `denied` as the primary classification. This is an intentional fail-closed exception to ordinary stop precedence: qualifying authorization denial/revocation may supersede a provisional stop candidate only before the transition into `FINALIZING`. Already admitted operations are handled under section 8; revocation does not imply rollback. The item enters or remains `STOP_REQUESTED` until required local cessation, then enters `FINALIZING` and freezes `denied`.
+2. **Policy revocation before candidate freeze:** If a required revalidation affirmatively denies/revokes after admission and before candidate freeze—including while the item is `RUNNING` or `STOP_REQUESTED`, and including when no business operation is currently active but registered callbacks or child work are still being brought to quiescence before the transition into `FINALIZING`—the coordinator blocks all new business admissions and selects `denied` as the primary classification. This is an intentional fail-closed exception to ordinary stop precedence: qualifying authorization denial/revocation may supersede a provisional stop candidate only before the transition into `FINALIZING`. Already admitted operations are handled under section 8; revocation does not imply rollback. The item enters or remains `STOP_REQUESTED` until required local cessation, then enters `FINALIZING` and freezes `denied`.
 3. **Deadline:** If the deadline event is serialized before completion or another eligible stop event and before candidate freeze, it blocks new admissions and selects candidate `timed_out`. This candidate remains provisional until frozen; local cessation and all Terminal Commitment guards are still required before a terminal result may be published.
 4. **Caller or shutdown cancellation:** If accepted before completion/failure and before candidate freeze, it blocks new admissions and selects candidate `cancelled`. This candidate remains provisional until frozen; local cessation and all Terminal Commitment guards are still required before a terminal result may be published.
 5. **Completion:** Candidate `completed` may be selected only if all required work has completed and the completion event is serialized before any effective stop event and before candidate freeze.
@@ -407,10 +407,15 @@ More restrictive security controls, repository protections, and explicit approva
 
 ## 17. Independent review resolution — normative clarifications
 
-This section resolves all eight findings from the independent review of
-`071a1e77dd0725cd71e19721ea81c0487b1a69b6`. It is normative and controls wherever earlier wording in
-sections 4–13 could be read inconsistently. It defines future contracts only;
-it is not implementation evidence.
+This section records the seven numbered prior-specification review traceability
+entries currently identified as PSR-01 through PSR-07. The available Issue #5
+review record does not substantiate a separate PSR-08; accordingly, this
+specification does not claim that it has resolved “all eight” historical
+findings. Any additional historical finding must be produced from its source
+review record and mapped explicitly before completeness can be claimed. This
+section is normative and controls wherever earlier wording in sections 4–13
+could be read inconsistently. It defines future contracts only; it is not
+implementation evidence.
 
 ### 17.1 Outcome Candidate versus Terminal Commitment
 
@@ -651,9 +656,9 @@ MUST already be provided by an approved adapter/domain-owned system or
 other separately approved mechanism; this specification does not authorize
 creating a new persistence service.
 
-Before an operation is admitted, the coordinator MUST verify that the
-adapter has reserved this durable intent and can preserve it through the
-operation's uncertain-outcome path. If no such durable sink/reservation is
+Before an operation from such a capability is admitted, the coordinator
+MUST verify that the adapter has reserved this durable intent and can
+preserve it through that operation's uncertain-outcome path. If no such durable sink/reservation is
 available, or the reservation cannot be confirmed, the admission MUST fail
 closed and the affected sensitive capability MUST remain disabled. On an
 uncertain outcome, the adapter MUST mark the reserved intent as pending
@@ -731,8 +736,10 @@ coordinator sequence; wall-clock order is diagnostic only.
    revocation serialized after admission and before candidate freeze
    selects `denied`, closes business admission, and requests/continues stop.
    This applies while `RUNNING` and while `STOP_REQUESTED`, including when
-   no business operation is currently active but callbacks, children, or
-   cleanup are still being brought to quiescence. It takes precedence over
+   no business operation is currently active but callbacks or child work are
+   still being brought to quiescence before the transition into `FINALIZING`.
+   Cleanup occurs only during `FINALIZING`; it is not part of the pre-`FINALIZING`
+   revocation window and cannot reopen candidate selection. It takes precedence over
    a provisional caller-cancellation/deadline/failure/completion candidate
    only before the transition into `FINALIZING`.
 3. **Deadline versus cancellation:** absent qualifying denial, whichever
@@ -764,6 +771,15 @@ terminal commitment remain separate.
 
 ### 17.10 Finding-to-section and verification traceability
 
+Finding identifiers are source-scoped, not one global sequence. The submitted
+Haniyeh report recorded in Issue #5 contains F-01 through F-05; it explicitly
+contains no F-06. The DeepSeek review record in Issue #5 uses F-10 through
+F-14 and NEW-01 through NEW-14. No DeepSeek F-01 through F-09 source findings
+are present in the recorded review material; those identifiers are therefore
+not inferred, renumbered, or represented as omitted findings here. The PSR
+series below is a separate seven-entry traceability set; its completeness is
+limited to the source material actually identified above.
+
 | Review finding | Clarified sections | Future verification scenarios |
 |---|---|---|
 | PSR-01 — Prior specification review: START_COMMITTED and adapter guarantees | 8.1, 9.3, 17.2 | V-28–V-29 |
@@ -779,7 +795,7 @@ terminal commitment remain separate.
 | Haniyeh review F-04: canonical external-effect enum | 4, 17.7 | V-49 |
 | Haniyeh review F-05: unique event sequence and batch normalization | 6.2, 17.9 | V-50 |
 | Haniyeh review F-06: no F-06 finding was present in the submitted Haniyeh report; explicitly recorded as not issued, not silently omitted | Review record / this traceability table | N/A — no finding was issued |
-| Haniyeh review F-07: terminal commitment and finalization guard coverage | 5.2, 17.1 | V-44 |
+| Unattributed historical reference F-07: provenance not established; not attributed to the submitted Haniyeh report or counted as an issued Haniyeh finding | 5.2, 17.1 | V-44 (contract scenario only; not evidence of an issued finding) |
 | DeepSeek review F-10: FINALIZING cleanup cessation transition | 5.2, 17.1, 17.3 | V-33, V-52 |
 | DeepSeek review F-11: distinguish definitive external failure from uncertainty | 4, 17.7 | V-53 |
 | DeepSeek review F-12: canonical local quiescence terminology | 4, 12, 17.7 | V-48, V-54 |
@@ -854,7 +870,11 @@ terminal commitment remain separate.
 strictly positive maximum local-stop observation duration and the evidence
 that constitutes authoritative local cessation. A separately reviewed
 platform configuration selects the effective duration; this specification
-does not invent a universal numeric value. The selected duration and its
+does not invent a universal numeric value. The effective duration MUST be
+strictly positive and MUST NOT exceed the adapter-declared maximum. If the
+selected platform configuration exceeds that maximum, the configuration is
+a contract violation and work-item creation/admission MUST fail closed before
+protected work can begin. The effective duration and its
 configuration/version reference MUST be captured immutably when the work
 item is created. The absolute stop-observation deadline is calculated once
 from the monotonic time at which `STOP_REQUESTED` is accepted. Repeated
@@ -865,8 +885,9 @@ cessation remains unconfirmed, it MUST transition to `UNRESOLVED` at the
 deadline, subject only to an earlier authoritative determination that the
 adapter cannot provide the declared guarantee. A child stop-observation deadline is the earlier of the parent's absolute
 deadline and the monotonic timestamp at child stop acceptance plus the
-child capability's declared duration; the child cannot extend the parent's
-absolute deadline. If a capability
+effective duration selected for the child capability. The child's effective
+duration MUST be strictly positive and MUST NOT exceed that child capability's
+declared maximum; the child cannot extend the parent's absolute deadline. If a capability
 cannot declare and satisfy this contract, it MUST NOT be enabled for
 governed asynchronous work.
 
@@ -969,12 +990,15 @@ architecture decision.
 | Local quiescence is distinct from remote effect status | 4, 5.1, 17.7–17.8 | V-15, V-38–V-39, V-47–V-49, V-60 |
 | Cleanup is bounded and cannot bypass authorization | 8.3, 9.2–9.3, 11, 17.1, 17.3–17.4, 17.12 | V-14, V-16, V-22, V-32–V-35, V-66–V-67 |
 | Shutdown/resource safety and bounded retention | 10, 12, 17.8, 17.12 | V-17–V-20, V-47, V-62, V-68 |
+| Explicit ownership of lifecycle, policy, domain work, and cleanup | 3, 7, 16 | V-25, V-27 |
+| No implicit rollback or retry; retries require explicit idempotency and fresh authorization | 8.3, 11, 17.4 | V-16, V-22, V-35 |
+| No relaxation of human approval, least privilege, tenant isolation, or secret controls | 3, 7, 16 | V-27 |
 | Terminal state is immutable and auditable | 3, 5.2–5.3, 6.1–6.2, 12, 17.1, 17.9 | V-10–V-12, V-21, V-23, V-30–V-31, V-55–V-57 |
 | No unapproved infrastructure or deferred capability activation | 2, 14–16, 17.8, 17.12 | V-26, V-47, V-60, V-65 |
 
 ## 18. Final independent review handoff
 
-The earlier specification review clarifications and the five findings actually issued in the Haniyeh-submitted report have been incorporated as proposed contract text and mapped to future verification scenarios. The Haniyeh report contained no F-06 finding; §17.10 records that fact explicitly rather than inventing or silently omitting a finding. The DeepSeek findings NEW-01 through NEW-14 are addressed in this revision and mapped to future verification scenarios; all V-01 through V-68 entries remain future acceptance criteria, not tests claimed as executed. The report's `RETURN FOR REVISION` disposition is preserved in the review record. Because prior architecture discussions were disclosed and public identity/qualification evidence was not supplied, the report is not treated as satisfying the issue's final independent-review requirement. This is not runtime validation, implementation approval, or a comprehensive audit. The transition and traceability tables are normative documentation aids, not executable tests or proof of implementation conformance. Implementation-specific decisions in section 15 remain open and require explicit design and review before implementation.
+The earlier specification-review clarifications represented by PSR-01 through PSR-07 and the five findings actually issued in the Haniyeh-submitted report (F-01 through F-05) have been incorporated as proposed contract text and mapped to future verification scenarios. The submitted Haniyeh report contained no F-06 finding; §17.10 records that fact explicitly. A separate F-07 reference remains in the traceability table only as an unattributed historical reference: its source and issuance status have not been established, it is not attributed to the Haniyeh report, and V-44 is retained solely as a future contract scenario. The recorded DeepSeek review findings F-10 through F-14 and NEW-01 through NEW-14 are addressed and mapped; no DeepSeek F-01 through F-09 findings are asserted because none are present in the Issue #5 review record examined for this revision. All V-01 through V-68 entries remain future acceptance criteria, not tests claimed as executed. The report's `RETURN FOR REVISION` disposition is preserved in the review record. Because prior architecture discussions were disclosed and public identity/qualification evidence was not supplied, the report is not treated as satisfying the issue's final independent-review requirement. This is not runtime validation, implementation approval, or a comprehensive audit. The transition and traceability tables are normative documentation aids, not executable tests or proof of implementation conformance. Implementation-specific decisions in section 15 remain open and require explicit design and review before implementation.
 
 **Document status: DOCUMENTATION REVISION — AWAITING FINAL INDEPENDENT REVIEW**  
 **Implementation authorization: NOT GRANTED**
