@@ -667,7 +667,7 @@ immutable and Terminal Commitment remains a separate later transition.
 | Prior specification review: Cleanup side-effect boundary | 8.2–8.3, 11, 17.4 | V-34–V-35 |
 | Prior specification review: Parent cancellation versus child creation | 5.2–5.3, 9.1, 17.5 | V-36–V-37 |
 | Prior specification review: Local cessation versus unknown external effect | 4, 6.3, 8.3, 17.7 | V-38–V-39 |
-| Prior specification review: denied/cancelled/timed_out precedence | 4, 6.2, 17.9 | V-40–V-41 |
+| Prior specification review: denied/cancelled/timed_out precedence | 4, 6.2, 17.9.1 | V-40–V-41 |
 | Haniyeh review F-01: callback registration/start/cessation | 5.2, 6.1, 17.6 | V-45–V-46 |
 | Haniyeh review F-02: restart discovery and no unintended retry | 8.3, 15, 17.8 | V-47 |
 | Haniyeh review F-03: local UNRESOLVED versus external uncertainty | 4, 5.1, 17.7–17.8 | V-48 |
@@ -702,21 +702,7 @@ immutable and Terminal Commitment remains a separate later transition.
 | V-49 | External-effect status value validation | Only `none`, `not_started`, `completed`, `stopped_confirmed`, and `unknown_requires_reconciliation` are accepted; `stopped_confirmed` requires authoritative evidence. |
 | V-50 | Deadline and cancellation observed in one indivisible batch | Coordinator normalizes deadline before cancellation, then assigns unique increasing sequences; no two accepted events share a sequence. |
 
-## 18. Final independent review handoff
-
-The prior specification review clarifications and the five findings from the
-Haniyeh-submitted review report have been incorporated as documentation
-changes and mapped to future verification scenarios. The Haniyeh report's
-primary disposition was `RETURN FOR REVISION`. The report disclosed prior
-architecture discussions and did not provide the public identity or
-qualification evidence requested by this issue; therefore it is recorded as
-useful technical review input, but it is not being represented as the final
-independent review required by this issue. This revision is not runtime
-validation, implementation approval, or a comprehensive audit of the
-repository. Implementation-specific decisions in section 15 remain open
-and require explicit design and review before implementation.
-
-### 17.7 Complete precedence: denied, timed_out, cancelled
+### 17.9.1 Outcome precedence: denied, timed_out, cancelled
 
 Every accepted arbitration event receives a strictly increasing
 coordinator sequence; wall-clock order is diagnostic only.
@@ -750,43 +736,6 @@ candidate freeze; otherwise deadline/cancellation follow coordinator
 sequence and the explicit same-batch tie-break. Candidate selection and
 terminal commitment remain separate.
 
-### 17.8 Finding-to-section and verification traceability
-
-| Independent finding | Clarified sections | Future verification scenarios |
-|---|---|---|
-| 1. START_COMMITTED and adapter guarantees | 8.1, 9.3, 17.2 | V-28–V-29 |
-| 2. Outcome Candidate versus Terminal Commitment | 5.2, 6.1, 17.1 | V-30–V-31 |
-| 3. Active cleanup after deadline | 11, 17.3 | V-32–V-33 |
-| 4. Cleanup side-effect boundary | 8.2–8.3, 11, 17.4 | V-34–V-35 |
-| 5. Parent cancellation versus child creation | 5.2–5.3, 9.1, 17.5 | V-36–V-37 |
-| 6. Local cessation versus unknown external effect | 4, 6.3, 8.3, 17.6 | V-38–V-39 |
-| 7. denied/cancelled/timed_out precedence | 4, 6.2, 17.7 | V-40–V-41 |
-| 8. Acceptance matrix coverage | 13, 17.8–17.9 | V-28–V-44 |
-| 9. State-matrix alignment and no direct denial-to-terminal path | 5.2, 17.1, 17.7 | V-44 |
-| 10. At-most-once scope across crash/restart | 17.2 | V-42–V-43 |
-| 11. START_COMMITTED crash window | 17.2 | V-42–V-43 |
-
-### 17.9 Additional future verification scenarios
-
-| ID | Scenario | Required assertion |
-|---|---|---|
-| V-28 | Stop after reservation but before START_COMMITTED | Reservation invalidated; adapter is never invoked. |
-| V-29 | START_COMMITTED and adapter receipts | Synchronous handoff is enforced; receipts are classified exactly; possibly post-effect exception is unknown, never assumed not-started. |
-| V-42 | Process crashes between START_COMMITTED record and adapter invocation | Restart does not infer not-started from volatile state; operation is classified unknown unless authoritative evidence proves otherwise; no automatic replay. |
-| V-43 | Process crashes during/after adapter call before result recording | External status is unknown pending reconciliation by stable operation identity; no exactly-once or at-most-once-across-restart claim. |
-| V-44 | Denial/revocation finalization path | Denial enters FINALIZING or STOP_REQUESTED then FINALIZING; TERMINAL is reachable only after all Terminal Commitment guards are met. |
-| V-30 | Candidate frozen while cleanup is pending | Candidate remains provisional; no `TERMINAL` or final result is exposed. |
-| V-31 | Late stop/denial after candidate freeze | Candidate remains immutable; late event cannot rewrite it. |
-| V-32 | Cleanup deadline expires and cessation is confirmed | Cleanup admission closes; status is timed_out; frozen candidate may be committed. |
-| V-33 | Cleanup deadline expires while cleanup may still execute | Item remains UNRESOLVED; no commitment; potentially used resources remain open absent reviewed safe-force-close. |
-| V-34 | Cleanup attempts remote mutation after business cancellation | Default denial; no inherited business authorization or implicit bypass. |
-| V-35 | Predeclared protected cleanup action has fresh authorization/approval | Only exact scoped action passes separate gate; denial/expiry blocks start; no replay. |
-| V-36 | Parent stop precedes child registration | Registration rejected atomically; child code/adapter never starts. |
-| V-37 | Registration wins, then parent stop races with child start | Child registered before schedulable; later start blocked or active child stopped; parent awaits local cessation. |
-| V-38 | Local adapter ends but remote result is unknown | Local quiescence may be confirmed; external status remains unknown_requires_reconciliation; no remote-stop claim. |
-| V-39 | Remote result known but local callback/cleanup remains active | Local quiescence unconfirmed; no Terminal Commitment. |
-| V-40 | Denial/revocation races with cancellation/deadline before freeze | Qualifying denial selects denied; unauthorized work never starts. |
-| V-41 | Deadline/cancellation same-batch and separate-sequence races | Same-batch tie is timed_out; otherwise first coordinator sequence wins; frozen candidate is immutable. |
 
 ## 18. Final independent review handoff
 
@@ -794,3 +743,4 @@ The earlier specification review clarifications and the five findings in the Han
 
 **Document status: DOCUMENTATION REVISION — AWAITING FINAL INDEPENDENT REVIEW**  
 **Implementation authorization: NOT GRANTED**
+
