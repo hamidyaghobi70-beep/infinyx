@@ -73,12 +73,11 @@ The minimum terminal outcomes are:
 | `failed` | An operational failure won arbitration and was not superseded by a previously serialized policy denial or stop condition. |
 
 A terminal outcome MUST be accompanied by separate execution/cleanup metadata where applicable. At minimum distinguish:
-- `termination_status`: `confirmed` for a terminal work item; `unconfirmed` is reserved for a non-terminal `UNRESOLVED` record;
 - `cleanup_status`: `not_required`, `pending`, `succeeded`, `failed`, or `timed_out`;
 - `local_quiescence`: `confirmed` or `unconfirmed`; this is the canonical local-cessation field. `termination_status` is deprecated terminology and MUST NOT be emitted as an independent or competing status. During a documented compatibility migration only, any legacy `termination_status` field MUST be a direct, lossless alias of `local_quiescence` and MUST NOT describe remote cessation.
 - `external_effect_status`: `none`, `not_started`, `completed`, `failed`, `stopped_confirmed`, or `unknown_requires_reconciliation`. These are the only canonical values. `failed` means authoritative external evidence reports a terminal failure; it does not, by itself, prove that no partial external effect occurred. Any partial-effect uncertainty MUST be represented as `unknown_requires_reconciliation`. `stopped_confirmed` means authoritative evidence confirms the remote operation ceased, not merely that the local adapter stopped.
 
-An attempt MUST NOT be marked `cancelled` or `timed_out` merely because a signal was sent or a grace period elapsed. If governed local work may still be executing, its lifecycle remains stop-pending or `UNRESOLVED`, it has no terminal outcome, and its local termination status remains unconfirmed. A terminal work item requires confirmed local quiescence, including cessation of every registered callback that can issue governed work. Uncertainty about a remote side effect is represented separately as `external_effect_status: unknown_requires_reconciliation`; that uncertainty alone does not prevent local terminal commitment once all local commitment guards are satisfied. The system MUST NOT claim that the remote operation stopped unless `stopped_confirmed` is supported by authoritative evidence.
+An attempt MUST NOT be marked `cancelled` or `timed_out` merely because a signal was sent or a grace period elapsed. If governed local work may still be executing, its lifecycle remains stop-pending or `UNRESOLVED`, it has no terminal outcome, and `local_quiescence` remains `unconfirmed`. A terminal work item requires confirmed local quiescence, including cessation of every registered callback that can issue governed work. Uncertainty about a remote side effect is represented separately as `external_effect_status: unknown_requires_reconciliation`; that uncertainty alone does not prevent local terminal commitment once all local commitment guards are satisfied. The system MUST NOT claim that the remote operation stopped unless `stopped_confirmed` is supported by authoritative evidence.
 
 Reason codes and diagnostics MUST be bounded and non-sensitive. They MUST NOT contain credentials, tokens, policy secrets, or sensitive payloads.
 
@@ -595,8 +594,8 @@ its result is unknown. In that case local quiescence can be confirmed and
 Terminal Commitment may occur, with external status explicitly unknown;
 this MUST NOT be described as remote termination. Conversely, a known
 remote completion does not permit commitment while a local callback or
-cleanup remains active. Earlier uses of `termination_status` mean local
-termination only, never remote cancellation confirmation. Reconciliation
+cleanup remains active. Any legacy `termination_status` occurrence is deprecated and means local
+cessation only; it MUST NOT be interpreted as remote cancellation confirmation. Reconciliation
 is a separate authorized action. `stopped_confirmed` MUST NOT be inferred
 from local quiescence, socket closure, timeout, lost response, or a stop
 signal alone.
@@ -706,10 +705,11 @@ terminal commitment remain separate.
 | Prior specification review: Local cessation versus unknown external effect | 4, 6.3, 8.3, 17.7 | V-38–V-39 |
 | Prior specification review: denied/cancelled/timed_out precedence | 4, 6.2, 17.9.1 | V-40–V-41 |
 | Haniyeh review F-01: callback registration/start/cessation | 5.2, 6.1, 17.6 | V-45–V-46 |
-| Haniyeh review F-02: restart discovery and no unintended retry | 8.3, 15, 17.8 | V-47 |
+| Haniyeh review F-02: restart discovery and no unintended retry | 8.3, 15, 17.8 | V-42–V-43, V-47 |
 | Haniyeh review F-03: local UNRESOLVED versus external uncertainty | 4, 5.1, 17.7–17.8 | V-48 |
 | Haniyeh review F-04: canonical external-effect enum | 4, 17.7 | V-49 |
 | Haniyeh review F-05: unique event sequence and batch normalization | 6.2, 17.9 | V-50 |
+| Haniyeh review F-07: terminal commitment and finalization guard coverage | 5.2, 17.1 | V-44 |
 | DeepSeek review F-10: FINALIZING cleanup cessation transition | 5.2, 17.1, 17.3 | V-33, V-52 |
 | DeepSeek review F-11: distinguish definitive external failure from uncertainty | 4, 17.7 | V-53 |
 | DeepSeek review F-12: canonical local quiescence terminology | 4, 12, 17.7 | V-48, V-54 |
