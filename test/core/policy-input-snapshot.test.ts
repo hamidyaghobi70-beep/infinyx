@@ -50,8 +50,9 @@ describe("snapshotBoundedPolicyData", () => {
     expect(snapshotBoundedPolicyData(overLimit)).toBeUndefined();
   });
 
-  it("accepts the exact aggregate UTF-8 byte limit and rejects one byte over", () => {
-    const atLimit = Array.from({ length: 16 }, () => "x".repeat(16_384));
+  it("accepts the exact aggregate UTF-8 byte limit with multibyte strings and rejects one byte over", () => {
+    // Each string is exactly 16 KiB in UTF-8 (8,192 two-byte characters).
+    const atLimit = Array.from({ length: 16 }, () => "é".repeat(8_192));
     const overLimit = [...atLimit, "y"];
 
     expect(snapshotBoundedPolicyData(atLimit)).toBeDefined();
