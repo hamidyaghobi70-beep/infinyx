@@ -22,7 +22,17 @@ This function is a bounded data snapshot, not a sandbox or a hostile-object isol
 
 JavaScript reflection on a Proxy can execute user-defined traps. Prototype inspection, own-key enumeration, and property-descriptor inspection may invoke `getPrototypeOf`, `ownKeys`, and `getOwnPropertyDescriptor` traps. For arrays, the implementation reads `length` from its own-property descriptor instead of performing an ordinary property get; a Proxy can still run a `getOwnPropertyDescriptor` trap. An array whose descriptor-reported length exceeds 1,000 is rejected before `Reflect.ownKeys` is called, so its `ownKeys` trap is not invoked by that path. For arrays within the length limit, an `ownKeys` trap can still execute and construct a key list before the returned-key count is checked. Numeric array index keys are included in the shared aggregate UTF-8 key budget; the structural `length` property is excluded.
 
-The routine checks the returned key count before scanning the keys, but this only bounds work after `Reflect.ownKeys` returns. **This limitation also applies to ordinary, non-Proxy objects:** `Reflect.ownKeys` first materializes the complete array of own keys, and only then can the routine compare its length with the 1,000-entry limit. Consequently, the entry limit is a post-enumeration traversal bound, not a pre-allocation memory bound; a very large ordinary object may already incur substantial key-list allocation before rejection. For Proxies, an `ownKeys` trap may additionally execute arbitrary user code or construct the returned list itself. The function catches thrown errors and fails closed, but catching an exception does not undo side effects or prevent work already performed by reflection. There is no reliable in-process test that can distinguish every Proxy from an ordinary object without invoking reflective behavior that may itself trigger traps.
+## Object Key Traversal and Memory Allocation Limitations
+
+The maximum container-entry limit is a **traversal and validation boundary**, not a guaranteed memory-allocation boundary.
+
+For ordinary objects, JavaScript's `Reflect.ownKeys()` materializes the object's complete own-key list before the implementation can inspect its size. The implementation can therefore enforce the 1,000-entry limit only after that list has been allocated. An object with an unusually large number of own properties may cause substantial memory allocation before rejection.
+
+This is an inherent limitation of the available JavaScript reflection mechanism. The entry limit bounds subsequent key scanning, validation, and traversal; it does not guarantee protection against memory allocation required to enumerate an unusually large object.
+
+For Proxies, the `ownKeys` trap may additionally execute user-defined code or construct the returned key list. Reflection on Proxies can also invoke other traps, including `getPrototypeOf` and `getOwnPropertyDescriptor`. Catching a thrown exception does not undo side effects or prevent work already performed by a trap.
+
+Accordingly, this module is not a sandbox or a hostile-object isolation boundary. Callers should pass trusted plain data objects and use a separately controlled parsing boundary, process isolation, and OS-level resource limits where hostile input or hard memory isolation is in scope.
 
 **Caller requirement:** accept only trusted plain data objects at this boundary. Do not pass attacker-controlled live objects or Proxies directly. Convert untrusted serialized input at a separately controlled parsing boundary, and use process/OS isolation and resource limits where hostile computation or hard memory isolation is required.
 
