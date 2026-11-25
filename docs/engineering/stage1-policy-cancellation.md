@@ -77,7 +77,7 @@ A terminal outcome MUST be accompanied by separate execution/cleanup metadata wh
 - `local_quiescence`: `confirmed` or `unconfirmed`; this is the canonical local-cessation field. `termination_status` is deprecated terminology and MUST NOT be emitted as an independent or competing status. During a documented compatibility migration only, any legacy `termination_status` field MUST be a direct, lossless alias of `local_quiescence` and MUST NOT describe remote cessation.
 - `external_effect_status`: `none`, `not_started`, `completed`, `failed`, `stopped_confirmed`, or `unknown_requires_reconciliation`. These are the only canonical values. `failed` means authoritative external evidence reports a terminal failure; it does not, by itself, prove that no partial external effect occurred. Any partial-effect uncertainty MUST be represented as `unknown_requires_reconciliation`. `stopped_confirmed` means authoritative evidence confirms the remote operation ceased, not merely that the local adapter stopped.
 
-An attempt MUST NOT be marked `cancelled` or `timed_out` merely because a signal was sent or a grace period elapsed. If governed local work may still be executing, its lifecycle remains stop-pending or `UNRESOLVED`, it has no terminal outcome, and `local_quiescence` remains `unconfirmed`. A terminal work item requires confirmed local quiescence, including cessation of every registered callback that can issue governed work. Uncertainty about a remote side effect is represented separately as `external_effect_status: unknown_requires_reconciliation`; that uncertainty alone does not prevent local terminal commitment once all local commitment guards are satisfied. The system MUST NOT claim that the remote operation stopped unless `stopped_confirmed` is supported by authoritative evidence.
+An attempt MUST NOT be marked `cancelled` or `timed_out` merely because a signal was sent or a grace period elapsed. If governed local work may still be executing, its lifecycle remains `STOP_REQUESTED` or `UNRESOLVED`, it has no terminal outcome, and `local_quiescence` remains `unconfirmed`. A terminal work item requires confirmed local quiescence, including cessation of every registered callback that can issue governed work. Uncertainty about a remote side effect is represented separately as `external_effect_status: unknown_requires_reconciliation`; that uncertainty alone does not prevent local terminal commitment once all local commitment guards are satisfied. The system MUST NOT claim that the remote operation stopped unless `stopped_confirmed` is supported by authoritative evidence.
 
 Reason codes and diagnostics MUST be bounded and non-sensitive. They MUST NOT contain credentials, tokens, policy secrets, or sensitive payloads.
 
@@ -116,7 +116,7 @@ A stop request is represented as a state transition plus source/reason metadata,
 | `RUNNING` | All work succeeds and completion wins arbitration | `FINALIZING` | No further work; perform required bounded finalization. |
 | `RUNNING` | Operational failure wins arbitration | `FINALIZING` | Stop sibling work as required; retain failure as primary result. |
 | `STOP_REQUESTED` | No operation was admitted/in flight and no governed child is active, or all active work and children are confirmed quiescent | `FINALIZING` | Begin bounded finalization; signal acknowledgement alone is insufficient unless the adapter contract guarantees cessation. |
-| `STOP_REQUESTED` | Stop cannot be confirmed before observation/grace bound | `UNRESOLVED` | Record unconfirmed local work; do not freeze a terminal result, claim clean cancellation, or close resources it may still use. |
+| `STOP_REQUESTED` | The immutable per-work-item stop-observation deadline expires without authoritative local-cessation confirmation | `UNRESOLVED` | Record unconfirmed local work; do not freeze a terminal result, claim clean cancellation, or close resources it may still use. The deadline and its configuration source are governed by section 17.12. |
 | `FINALIZING` | All registered children, local operations, callbacks, and cleanup are complete or confirmed locally quiescent; all required status fields are recorded | `TERMINAL` | Perform the single Terminal Commitment using the frozen Outcome Candidate; record cleanup and external-effect status independently. |
 | `FINALIZING` | Cleanup bound expires; cleanup cessation is confirmed; all other Terminal Commitment guards hold | `TERMINAL` | Commit the frozen candidate; mark cleanup `timed_out` (or the independently established cleanup result). |
 | `FINALIZING` | Cleanup bound expires; cleanup cessation is not confirmed or cleanup may still execute | `UNRESOLVED` | Withhold Terminal Commitment; preserve `local_quiescence: unconfirmed`; keep resources the cleanup may use open unless a reviewed resource contract explicitly permits safe forced closure. |
@@ -149,7 +149,7 @@ The **linearization point** is the coordinator's atomic acceptance of an event a
 Arbitration has three distinct stages; they MUST NOT be collapsed into a single “terminal transition”:
 
 1. **Outcome Candidate Selection:** Before candidate freeze, the coordinator evaluates eligible authorization, stop, completion, and failure events under section 6.2. The winning event determines a provisional candidate; selection alone does not change the item to `TERMINAL` and MUST NOT be exposed as a final result.
-2. **Candidate Freeze:** The serialized transition into `FINALIZING` freezes exactly one Outcome Candidate. This transition is the candidate-selection linearization point. Once frozen, the candidate is immutable: no later event, including denial, revocation, deadline, cancellation, completion, failure, cleanup, or shutdown, may replace or relabel it. Later events may be recorded only as bounded late-event metadata and may affect whether commitment is safe, but not which candidate was frozen. If a stop condition first wins while active work is still running, the item enters `STOP_REQUESTED`; the candidate is frozen only when it subsequently enters `FINALIZING` after the required local quiescence conditions.
+2. **Candidate Freeze:** The serialized transition into `FINALIZING` freezes exactly one Outcome Candidate. This transition is the candidate-selection linearization point. Once frozen, the candidate is immutable: no later event, including denial, revocation, deadline, cancellation, completion, failure, cleanup, or shutdown, may replace or relabel it. For avoidance of doubt, candidate freeze occurs only on the serialized transition into `FINALIZING`, not when `STOP_REQUESTED` is entered; a qualifying denial/revocation serialized during `STOP_REQUESTED` and before that transition retains the fail-closed precedence in sections 6.2 and 17.9.1. Later events may be recorded only as bounded late-event metadata and may affect whether commitment is safe, but not which candidate was frozen. If a stop condition first wins while active work is still running, the item enters `STOP_REQUESTED`; the candidate is frozen only when it subsequently enters `FINALIZING` after the required local quiescence conditions.
 3. **Terminal Commitment:** The coordinator may later transition `FINALIZING` to `TERMINAL` and publish the frozen candidate only after every guard in section 17.1 is satisfied. This is a separate, irreversible linearization point. If any guard is false or unknown—including local quiescence, registered-child cessation, callback cessation, cleanup cessation, or required status recording—commitment MUST be withheld and the item remains `FINALIZING` or becomes `UNRESOLVED` as specified by section 5.2. No event may force or bypass commitment guards.
 
 No caller, adapter, domain module, or cleanup handler may select, freeze, rewrite, or commit an outcome outside the coordinator contract.
@@ -159,7 +159,7 @@ No caller, adapter, domain module, or cleanup handler may select, freeze, rewrit
 The following rules govern **Outcome Candidate Selection only**, while the candidate is still unfrozen. They do not authorize Terminal Commitment. The coordinator applies the rules to its serialized event sequence and freezes the selected candidate only when the lifecycle enters `FINALIZING`, in accordance with sections 5.2 and 17.1.
 
 1. **Before admission:** Any deny, missing/indeterminate decision, invalid/stale decision, or failed required revalidation selects candidate `denied`. The item enters `FINALIZING` without business execution; it MUST NOT transition directly to `TERMINAL`.
-2. **Active policy revocation:** If a required revalidation affirmatively denies/revokes while running and before candidate freeze, the coordinator blocks new admissions and selects `denied` as the primary stop classification. Already admitted operations are handled under section 8; revocation does not imply rollback. The item first enters `STOP_REQUESTED`, then enters `FINALIZING` and freezes `denied` after required local quiescence.
+2. **Policy revocation before candidate freeze:** If a required revalidation affirmatively denies/revokes after admission and before candidate freeze—including while the item is `RUNNING` or `STOP_REQUESTED`, and including when no business operation is currently active but cleanup/finalization is pending—the coordinator blocks all new business admissions and selects `denied` as the primary classification. This is an intentional fail-closed exception to ordinary stop precedence: qualifying authorization denial/revocation may supersede a provisional stop candidate only before the transition into `FINALIZING`. Already admitted operations are handled under section 8; revocation does not imply rollback. The item enters or remains `STOP_REQUESTED` until required local cessation, then enters `FINALIZING` and freezes `denied`.
 3. **Deadline:** If the deadline event is serialized before completion or another eligible stop event and before candidate freeze, it blocks new admissions and selects candidate `timed_out`. This candidate remains provisional until frozen; local cessation and all Terminal Commitment guards are still required before a terminal result may be published.
 4. **Caller or shutdown cancellation:** If accepted before completion/failure and before candidate freeze, it blocks new admissions and selects candidate `cancelled`. This candidate remains provisional until frozen; local cessation and all Terminal Commitment guards are still required before a terminal result may be published.
 5. **Completion:** Candidate `completed` may be selected only if all required work has completed and the completion event is serialized before any effective stop event and before candidate freeze.
@@ -274,7 +274,7 @@ Additional rules:
 
 1. The transition out of `OPEN` is one-way. Repeated shutdown signals are idempotent and cannot reopen admission or restart the grace timer.
 2. Work admitted before closure remains tracked and receives the stop request. Work whose admission races with closure is ordered by the same admission gate: exactly one wins.
-3. The shutdown coordinator owns the configured grace interval; this specification defines no numeric default or maximum.
+3. The shutdown coordinator owns the configured grace interval; this specification defines no numeric default or maximum. This process-level grace interval is distinct from each work item's stop-observation deadline in section 17.12.
 4. Each resource owner declares dependencies and a safe close condition. Teardown order is deterministic and must respect those dependencies.
 5. An unresolved operation must not be hidden by closing its owner resource and recording success. If process policy requires forced exit, preserve the best available unresolved status before exit; do not claim clean termination.
 6. Liveness indicates only that the process can respond. It is not a readiness, dependency-health, business-work, or graceful-shutdown guarantee.
@@ -305,6 +305,7 @@ When observability is implemented, structured lifecycle events should support re
 - Deadline classification, elapsed duration, and whether the operation was admitted.
 - Adapter termination guarantee and canonical `local_quiescence` (`confirmed`/`unconfirmed`); any legacy `termination_status` alias must be explicitly marked deprecated and derived from that same local-only value.
 - Cleanup status and external-effect/reconciliation status.
+- Callback-registry counts by state (`REGISTERED`, `RUNNING`, `CANCEL_REQUESTED`, `QUIESCENT`), plus the count of work-capable callbacks still eligible to start; callback identifiers in routine logs SHOULD be bounded or pseudonymous.
 
 Logs must follow the repository security baseline and Pino redaction requirements. Do not log tokens, credentials, secrets, sensitive request bodies, or unnecessary personal data. Durable audit storage, retention, access control, and tamper resistance are not assumed to exist; ordinary logs must not be represented as a durable audit system. The future design must define how event ordering is preserved if logs are asynchronous or unavailable.
 
@@ -383,7 +384,7 @@ The following remain explicit design decisions for a later authorized implementa
 7. Audit storage, retention, access control, integrity, and behavior when audit facilities are unavailable.
 8. Whether any future cross-process execution is justified; no distributed coordination is assumed in this stage.
 
-These decisions must be resolved, reviewed, and approved before implementation. This specification is not evidence that any of these systems or controls currently exist.
+These decisions must be resolved, reviewed, and approved before implementation. This specification is not evidence that any of these systems or controls currently exist. In addition, the stop-observation bound source/value, unresolved-record retention policy, and adapter-owned durable reconciliation-intent capability in section 17.12 must be approved before enabling any affected capability.
 
 ## 16. Related repository policy
 
@@ -422,9 +423,10 @@ A **Terminal Commitment** is the later, single, irreversible coordinator
 transition that records the frozen candidate as the terminal outcome. It is
 permitted only after: (a) business and callback-start admission are closed; (b) every locally
 executing operation and every active callback capable of issuing governed
-work has completed or confirmed local cessation; (c) every registered child is locally quiescent; (d) cleanup has
-completed or its deadline expired and cleanup cessation is confirmed; and
-(e) cleanup and external-effect status are recorded separately. If cleanup
+work has completed or confirmed local cessation; (c) every registered child is locally quiescent; (d) `cleanup_status` is
+`not_required`, or cleanup has completed, or its deadline expired and
+cleanup cessation is confirmed; and (e) cleanup and external-effect status
+are recorded separately. If cleanup
 may still execute, commitment is withheld and the item transitions to
 `UNRESOLVED`.
 
@@ -446,16 +448,22 @@ not guarantee that an external system applies an effect at most once.
 
 Under one serialized, non-yielding in-process critical section (or reviewed
 equivalent explicit adapter handshake), the Core Platform coordinator MUST:
-1. Verify parent state is `RUNNING`, shutdown admission is open, the
-   reservation is live, and Security Layer authorization affirmatively
-   covers this exact action/resource/context.
-2. Recheck that no stop, deadline, denial, or admission-closure event won.
-3. Record `START_COMMITTED` with a unique operation ID and coordinator
+1. In the same serialized critical section, verify parent state is
+   `RUNNING`, shutdown admission is open, the reservation is live, the
+   immutable effective business deadline has not elapsed, no stop/denial/
+   admission-closure event has already won, and Security Layer authorization
+   affirmatively covers this exact action/resource/context.
+2. Record `START_COMMITTED` with a unique operation ID and coordinator
    sequence.
-4. Immediately invoke the adapter's synchronous `begin/start` entry point
+3. Immediately invoke the adapter's synchronous `begin/start` entry point
    before releasing the critical section and before yielding or awaiting.
    The adapter MUST NOT defer the decision to initiate work until a later
    task/microtask.
+
+The state, deadline, and authorization checks above are one atomic gate
+against the coordinator's accepted event sequence; there is no second
+check separated by a yield. This avoids implying that a non-serialized
+check-then-check protocol is sufficient.
 
 That entry point MUST synchronously return one receipt:
 - `NOT_STARTED`: adapter guarantees no external request/effect was initiated.
@@ -628,6 +636,32 @@ The adapter/domain contract MUST classify recovery discovery as follows:
    until an authoritative external owner or separately approved recovery
    mechanism resolves the uncertainty.
 
+A capability that can initiate an external effect and can end with
+`unknown_requires_reconciliation` MUST reserve a durable reconciliation
+intent before `START_COMMITTED`. The intent MUST contain a stable operation
+identity, owning capability/adapter identity, bounded creation metadata,
+and a state that is discoverable after process restart. The durable sink
+MUST already be provided by an approved adapter/domain-owned system or
+other separately approved mechanism; this specification does not authorize
+creating a new persistence service.
+
+Before an operation is admitted, the coordinator MUST verify that the
+adapter has reserved this durable intent and can preserve it through the
+operation's uncertain-outcome path. If no such durable sink/reservation is
+available, or the reservation cannot be confirmed, the admission MUST fail
+closed and the affected sensitive capability MUST remain disabled. On an
+uncertain outcome, the adapter MUST mark the reserved intent as pending
+reconciliation. The pre-existing durable intent itself MUST remain
+sufficient for restart discovery if the post-effect status update is lost;
+a missing final update is interpreted as unresolved, never as not-started.
+
+If the authoritative external query is temporarily unavailable after
+restart, the pending intent MUST remain discoverable and unresolved; the
+capability MUST remain disabled for new sensitive work until an
+authoritative owner resolves the record or a separately approved recovery
+mechanism does so. Temporary query unavailability MUST NOT cause the intent
+to be deleted, treated as resolved, or silently skipped.
+
 A volatile in-memory coordinator record is not restart-discoverable evidence.
 A missing record after restart does not prove that no external request was
 sent. If an adapter cannot meet a declared discovery/reconciliation
@@ -635,7 +669,9 @@ requirement, that limitation must be explicit in its capability contract
 and the capability must not be enabled for sensitive external effects.
 These requirements specify a contract and do not authorize adding storage,
 a journal, a broker, or any other infrastructure in this documentation
-stage.
+stage. A capability without an approved adapter/domain-owned durable intent
+sink is not eligible for sensitive external-effect admission under this
+contract.
 
 ### 17.9 Coordinator event sequence and same-batch ordering
 
@@ -646,19 +682,33 @@ The sequence is assigned at coordinator ingestion; wall-clock order is
 diagnostic only.
 
 If multiple observations arrive in one indivisible batch without a
-pre-existing order, the coordinator MUST normalize them using the
-specified deterministic precedence before assigning individual sequence
-numbers: qualifying authorization denial/revocation first; absent such a
-denial, deadline before caller cancellation; remaining events follow the
-coordinator's documented stable event-class ordering. The coordinator then
-assigns each accepted event its own increasing sequence in that normalized
-order. The same-batch tie-break is therefore an ingestion-order rule, not
-an exception to unique sequencing.
+pre-existing order, the coordinator MUST normalize them using this complete
+deterministic event-class precedence before assigning individual sequence
+numbers:
 
-For deadline versus cancellation, absent qualifying denial, the normalized
-same-batch order is `timed_out` before `cancelled`. For separately accepted
-events, the first coordinator sequence wins. Candidate freeze remains
-immutable and Terminal Commitment remains a separate later transition.
+1. Qualifying authorization denial/revocation;
+2. Deadline expiry;
+3. Authorized caller or shutdown cancellation;
+4. Operational failure;
+5. Successful completion.
+
+Within one event class, use a stable, documented secondary key derived only
+from immutable coordinator-assigned observation metadata; if no such key
+exists, use the coordinator's deterministic batch-ingestion ordinal. The
+same implementation MUST produce the same normalized order for the same
+input batch. The coordinator then assigns each accepted event its own
+increasing sequence in that normalized order. This same-batch precedence is
+an explicit contract, not a deployment-specific implementation choice.
+A qualifying denial/revocation is considered only while the candidate is
+unfrozen; no event can rewrite a frozen candidate.
+
+For same-batch events, the complete order above applies, including
+`timed_out` before `cancelled`, either stop class before operational
+failure, and operational failure before completion. For separately accepted
+events, the first coordinator sequence wins, subject to the qualifying
+pre-freeze denial/revocation rule in section 17.9.1. Candidate freeze
+remains immutable and Terminal Commitment remains a separate later
+transition.
 
 ### 17.9.1 Outcome precedence: denied, timed_out, cancelled
 
@@ -669,10 +719,14 @@ coordinator sequence; wall-clock order is diagnostic only.
    decision, or failed mandatory authorization check selects `denied`.
    Concurrent cancellation/deadline cannot convert unauthorized work to
    `cancelled` or `timed_out`.
-2. **In-flight revocation:** affirmative policy revocation serialized while
-   business work is active and before candidate freeze selects `denied`,
-   closes business admission, and requests stop. It takes precedence over
-   caller cancellation/deadline observed but not yet frozen.
+2. **Post-admission revocation before freeze:** affirmative policy
+   revocation serialized after admission and before candidate freeze
+   selects `denied`, closes business admission, and requests/continues stop.
+   This applies while `RUNNING` and while `STOP_REQUESTED`, including when
+   no business operation is currently active but callbacks, children, or
+   cleanup are still being brought to quiescence. It takes precedence over
+   a provisional caller-cancellation/deadline/failure/completion candidate
+   only before the transition into `FINALIZING`.
 3. **Deadline versus cancellation:** absent qualifying denial, whichever
    event is serialized first selects `timed_out` or `cancelled`.
    If both enter the same indivisible coordinator batch with no distinct
@@ -683,10 +737,16 @@ coordinator sequence; wall-clock order is diagnostic only.
    cannot rewrite it.
 5. **Stop before completion/failure:** if stop is serialized first, later
    results of already-admitted work are secondary operation results, not
-   replacements for the stop candidate. A qualifying policy revocation
-   still follows rule 2.
+   replacements for the provisional stop candidate. A qualifying policy
+   revocation still follows rule 2 until candidate freeze. This asymmetry is
+   intentional: denial is the fail-closed authorization result and may
+   supersede a provisional stop classification before freeze; completion
+   and operational failure are ordinary post-admission outcomes and do not
+   have that privilege.
 6. **After candidate freeze:** no later event, including denial/deadline,
-   replaces the candidate; it may be recorded as late metadata.
+   replaces the candidate; it may be recorded as late metadata. Freeze
+   occurs only on entry to `FINALIZING`, never merely on entry to
+   `STOP_REQUESTED`.
 7. **Commitment:** delayed Terminal Commitment never reopens arbitration.
 
 Thus denial is the fail-closed result for authorization failure known before
@@ -710,12 +770,27 @@ terminal commitment remain separate.
 | Haniyeh review F-03: local UNRESOLVED versus external uncertainty | 4, 5.1, 17.7–17.8 | V-48 |
 | Haniyeh review F-04: canonical external-effect enum | 4, 17.7 | V-49 |
 | Haniyeh review F-05: unique event sequence and batch normalization | 6.2, 17.9 | V-50 |
+| Haniyeh review F-06: no F-06 finding was present in the submitted Haniyeh report; explicitly recorded as not issued, not silently omitted | Review record / this traceability table | N/A — no finding was issued |
 | Haniyeh review F-07: terminal commitment and finalization guard coverage | 5.2, 17.1 | V-44 |
 | DeepSeek review F-10: FINALIZING cleanup cessation transition | 5.2, 17.1, 17.3 | V-33, V-52 |
 | DeepSeek review F-11: distinguish definitive external failure from uncertainty | 4, 17.7 | V-53 |
 | DeepSeek review F-12: canonical local quiescence terminology | 4, 12, 17.7 | V-48, V-54 |
 | DeepSeek review F-13: ordered verification scenarios and complete finding traceability | 17.10–17.11 | V-42–V-44, V-47, V-52–V-55 |
-| DeepSeek review F-14: early graceful-drain completion | 10 | V-51
+| DeepSeek review F-14: early graceful-drain completion | 10 | V-51 |
+| DeepSeek NEW-01: per-work-item stop-observation bound | 5.2, 9.2, 15, 17.12 | V-58 |
+| DeepSeek NEW-02: complete same-batch event-class precedence | 6.2, 17.9, 17.9.1 | V-56–V-57 |
+| DeepSeek NEW-03: restart-durable reconciliation intent | 8.1, 8.3, 17.2, 17.8, 17.12 | V-60 |
+| DeepSeek NEW-04: `cleanup_status: not_required` terminal guard | 4, 17.1 | V-59 |
+| DeepSeek NEW-05: complete review-finding traceability; F-06 explicitly not issued | 17.10 | V-55 |
+| DeepSeek NEW-06: bounded unresolved-record retention and admission backpressure | 5.2, 10, 12, 17.12 | V-62 |
+| DeepSeek NEW-07: candidate-freeze/revocation asymmetry | 6.1, 6.2, 17.9.1 | V-61 |
+| DeepSeek NEW-08: revocation during STOP_REQUESTED without active business work | 6.2, 17.9.1 | V-61 |
+| DeepSeek NEW-09: callback-state observability | 12, 17.6 | V-63 |
+| DeepSeek NEW-10: use canonical STOP_REQUESTED terminology | 4, 5.2 | V-64 |
+| DeepSeek NEW-11: define affected capability scope | 17.8 | V-65 |
+| DeepSeek NEW-12: adapter-declared cleanup cessation observation bound | 9.3, 17.3, 17.12 | V-66 |
+| DeepSeek NEW-13: cross-reference outcome normalization rules | 6.2 | V-56–V-57 |
+| DeepSeek NEW-14: remove redundant coordinator recheck step | 17.2 | V-29
 
 ### 17.11 Additional future verification scenarios
 
@@ -748,11 +823,112 @@ terminal commitment remain separate.
 | V-52 | FINALIZING cleanup bound expires with cessation unconfirmed | Transition to UNRESOLVED; withhold Terminal Commitment; retain resources absent reviewed safe forced closure. |
 | V-53 | External system authoritatively reports terminal failure | `external_effect_status: failed` is distinct from unknown; partial-effect uncertainty remains unknown and is not silently treated as no effect. |
 | V-54 | Local quiescence metadata is emitted | `local_quiescence` is canonical; deprecated `termination_status`, if temporarily emitted, is a lossless local-only alias and never remote status. |
-| V-55 | Traceability and verification inventory are reviewed | Every listed review finding maps to clarifying sections and future scenarios; scenario identifiers are strictly ascending and unique. |
+| V-55 | Traceability and verification inventory are reviewed | Every issued review finding maps to clarifying sections and future scenarios; F-06 is explicitly marked not issued in the source report; scenario identifiers are strictly ascending and unique. |
+| V-56 | Completion and deadline arrive in one indivisible coordinator batch | The documented same-batch order selects `timed_out` before `completed`; the result is stable and repeatable. |
+| V-57 | Failure and cancellation arrive in one indivisible coordinator batch | The documented same-batch order selects `cancelled` before `failed`; the result is stable and repeatable. |
+| V-58 | Stop is acknowledged but local cessation is never confirmed | The item remains `STOP_REQUESTED` until its immutable configured observation deadline, then becomes `UNRESOLVED` at or before that deadline; it never becomes unresolved early solely by policy guesswork. |
+| V-59 | Work item reaches `FINALIZING` with `cleanup_status: not_required` | Terminal Commitment does not wait for a nonexistent cleanup deadline; all other guards still apply. |
+| V-60 | External operation becomes uncertain and process restarts | A pre-reserved durable intent remains discoverable; if status query is unavailable, it remains pending and the affected capability stays disabled; without a durable sink, admission was rejected before start. |
+| V-61 | Qualifying revocation arrives during `STOP_REQUESTED` before candidate freeze, with no active business operation | Revocation selects `denied`; after entry to `FINALIZING`, the candidate is frozen and later revocation cannot rewrite it. |
+| V-62 | Unresolved work items accumulate or reach configured retention capacity | Records are not silently evicted; bounded retention/backpressure is applied, new affected admissions fail closed, and resources are not released while local actors may still use them. |
+| V-63 | Callback registry is observed during and after stop | Structured observability reports bounded counts for each callback state and active work-capable callbacks; no sensitive callback payload is logged. |
+| V-64 | Legacy prose uses stop-pending terminology | The normative lifecycle vocabulary consistently uses `STOP_REQUESTED`; no undocumented state is introduced. |
+| V-65 | Adapter cannot enumerate outstanding operations after restart | The exact adapter/capability scope is identified; all operations routed through that adapter are disabled where discovery guarantees are insufficient, unless a narrower independently enforced scope is proven. |
+| V-66 | Cleanup cessation observation bound is exercised | The bound is declared by the resource/adapter contract, frozen when cleanup starts, uses a monotonic clock, and expiry without cessation confirmation leads to `UNRESOLVED`. |
+
+### 17.12 Immutable observation bounds, unresolved retention, and recovery capacity
+
+**Per-work-item stop observation.** Each adapter capability MUST declare a
+strictly positive maximum local-stop observation duration and the evidence
+that constitutes authoritative local cessation. A separately reviewed
+platform configuration selects the effective duration; this specification
+does not invent a universal numeric value. The selected duration and its
+configuration/version reference MUST be captured immutably when the work
+item is created. The absolute stop-observation deadline is calculated once
+from the monotonic time at which `STOP_REQUESTED` is accepted. Repeated
+signals, duplicate events, child activity, or scheduling delays MUST NOT
+reset or extend it. The coordinator MUST NOT transition to `UNRESOLVED`
+before this deadline solely because confirmation has not yet arrived; if
+cessation remains unconfirmed, it MUST transition to `UNRESOLVED` at the
+deadline, subject only to an earlier authoritative determination that the
+adapter cannot provide the declared guarantee. A child inherits the
+earlier of its parent's absolute stop-observation deadline and its own
+capability bound; it cannot extend the parent's bound. If a capability
+cannot declare and satisfy this contract, it MUST NOT be enabled for
+governed asynchronous work.
+
+**Cleanup cessation observation.** The resource/adapter contract MUST
+declare a strictly positive cleanup-cessation observation duration and
+authoritative cessation evidence. The effective value is captured when
+cleanup begins and converted once to an absolute monotonic deadline. It
+cannot be reset by repeated cleanup signals. At expiry, the rules in
+section 17.3 apply. The process-level shutdown grace interval in section
+10 is independent and does not replace either per-work-item bound.
+
+**Unresolved retention and bounded capacity.** A capability MUST declare
+a bounded retention policy for `UNRESOLVED` work-item records, including
+maximum record size, maximum retained count/bytes, retention duration,
+owner, escalation destination, and the approved disposition after the
+retention threshold. The policy MUST NOT silently delete or relabel an
+unresolved record. If local actors may still execute, resources they may
+use remain open unless a reviewed resource contract explicitly permits
+safe forced closure; reaching a retention threshold is not cessation
+evidence. When the configured capacity is reached, the coordinator MUST
+apply admission backpressure and reject new affected work fail-closed
+until capacity is safely recovered. It MUST NOT evict unresolved records
+to make room. If a durable retention/recovery sink is required but
+unavailable, affected new admissions remain disabled. Any compaction or
+transfer must preserve the work identity, unresolved reason, local
+quiescence status, external-effect uncertainty, and reconciliation link.
+
+**Affected capability scope.** In section 17.8, “affected capability” means
+the narrowest capability boundary that is independently enforced and can
+be disabled without leaving an alternate route to the same sensitive
+operation. By default this is the adapter capability and all operations
+routed through that adapter. A narrower operation-type scope is permitted
+only when routing, authorization, and admission controls can prove that
+the unaffected operations cannot invoke or bypass the unresolved path.
+The owner MUST identify the scope in the adapter contract; ambiguous scope
+defaults to disabling all sensitive operations routed through that adapter.
+
+**Reconciliation intent reservation.** For every external-effect capability
+covered by section 17.8, the adapter/domain owner MUST reserve the
+restart-discoverable intent before `START_COMMITTED`. The intent sink must
+be an already-approved durable owner system; a volatile coordinator map,
+ordinary log, or best-effort telemetry stream is not sufficient. If no such
+sink exists, or its reservation cannot be acknowledged before admission,
+the protected operation MUST NOT start. The durable intent is the recovery
+anchor if the post-effect status update is lost. Temporary unavailability
+of external enumeration/query after restart leaves the record pending and
+the affected capability disabled; it does not erase the obligation.
+
+**Coordinator same-batch event order.** The normative order is the complete
+five-class precedence in section 17.9: denial/revocation, deadline,
+caller/shutdown cancellation, operational failure, then completion.
+Implementations may use different internal scheduling primitives, but
+they MUST produce this same outcome for an equivalent indivisible event
+batch. This contract applies to in-process implementations; a future
+multi-process coordinator remains out of scope and requires a separate
+architecture decision.
+
+### 17.13 Invariant-to-contract traceability
+
+| Invariant | Normative sections | Future scenarios |
+|---|---|---|
+| Default deny / no protected work without affirmative authorization | 3, 6.2, 8.1–8.2 | V-01–V-05, V-22, V-27 |
+| Stop request is not termination evidence | 3, 4, 5.1–5.3, 6.3, 17.3, 17.7, 17.12 | V-06, V-15, V-18, V-33, V-38, V-52, V-58, V-66 |
+| Admission and stop are coordinator-serialized | 3, 6.1–6.2, 8.1, 17.2, 17.5–17.6 | V-05, V-28–V-29, V-36–V-37, V-45 |
+| Candidate freeze and terminal commitment are distinct | 5.2, 6.1–6.2, 17.1, 17.9.1 | V-30–V-31, V-40–V-41, V-44, V-61 |
+| No child/callback detachment or post-stop start | 3, 5.3, 9.1, 17.5–17.6 | V-08–V-09, V-36–V-37, V-45–V-46 |
+| Local quiescence is distinct from remote effect status | 4, 5.1, 17.7–17.8 | V-15, V-38–V-39, V-47–V-49, V-60 |
+| Cleanup is bounded and cannot bypass authorization | 8.3, 9.2–9.3, 11, 17.3–17.4, 17.12 | V-14, V-16, V-22, V-32–V-35, V-66 |
+| Shutdown/resource safety and bounded retention | 10, 12, 17.8, 17.12 | V-17–V-20, V-47, V-62 |
+| Terminal state is immutable and auditable | 3, 5.2–5.3, 6.1–6.2, 12, 17.1, 17.9 | V-10–V-12, V-21, V-23, V-30–V-31, V-55–V-57 |
+| No unapproved infrastructure or deferred capability activation | 2, 14–16, 17.8, 17.12 | V-26, V-47, V-60, V-65 |
 
 ## 18. Final independent review handoff
 
-The earlier specification review clarifications and the five findings in the Haniyeh-submitted report have been incorporated as proposed contract text and mapped to future verification scenarios. The report's `RETURN FOR REVISION` disposition is preserved in the review record. Because prior architecture discussions were disclosed and public identity/qualification evidence was not supplied, the report is not treated as satisfying the issue's final independent-review requirement. This is not runtime validation, implementation approval, or a comprehensive audit. Implementation-specific decisions in section 15 remain open and require explicit design and review before implementation.
+The earlier specification review clarifications and the five findings actually issued in the Haniyeh-submitted report have been incorporated as proposed contract text and mapped to future verification scenarios. The Haniyeh report contained no F-06 finding; §17.10 records that fact explicitly rather than inventing or silently omitting a finding. The DeepSeek findings NEW-01 through NEW-14 are addressed in this revision and mapped to future verification scenarios; all V-01 through V-66 entries remain future acceptance criteria, not tests claimed as executed. The report's `RETURN FOR REVISION` disposition is preserved in the review record. Because prior architecture discussions were disclosed and public identity/qualification evidence was not supplied, the report is not treated as satisfying the issue's final independent-review requirement. This is not runtime validation, implementation approval, or a comprehensive audit. The transition and traceability tables are normative documentation aids, not executable tests or proof of implementation conformance. Implementation-specific decisions in section 15 remain open and require explicit design and review before implementation.
 
 **Document status: DOCUMENTATION REVISION — AWAITING FINAL INDEPENDENT REVIEW**  
 **Implementation authorization: NOT GRANTED**
