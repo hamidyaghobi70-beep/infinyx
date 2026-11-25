@@ -22,7 +22,7 @@ This function is a bounded data snapshot, not a sandbox or a hostile-object isol
 
 The implementation uses Node.js `util.types.isProxy` to reject each object Proxy before prototype inspection, own-key enumeration, or property-descriptor inspection. The check is applied recursively, so a Proxy nested inside an otherwise ordinary record or array is rejected before reflection on that nested Proxy. This also rejects revoked Proxies. For a Proxy that reaches this check, its `getPrototypeOf`, `ownKeys`, and `getOwnPropertyDescriptor` traps are not invoked by the snapshot routine.
 
-This rejection does not make arbitrary same-process objects generally side-effect-free: ordinary objects can still have unusual runtime behavior through mechanisms outside the supported plain-data contract, and callers must not treat the snapshot as a sandbox. For arrays, the implementation reads `length` from its own-property descriptor instead of performing an ordinary property get; a Proxy can still run a `getOwnPropertyDescriptor` trap. An array whose descriptor-reported length exceeds 1,000 is rejected before `Reflect.ownKeys` is called, so its `ownKeys` trap is not invoked by that path. For arrays within the length limit, an `ownKeys` trap can still execute and construct a key list before the returned-key count is checked. Numeric array index keys are included in the shared aggregate UTF-8 key budget; the structural `length` property is excluded.
+This rejection does not make arbitrary same-process objects generally side-effect-free: ordinary objects can still have unusual runtime behavior through mechanisms outside the supported plain-data contract, and callers must not treat the snapshot as a sandbox. For ordinary arrays, the implementation reads `length` from its own-property descriptor instead of performing an ordinary property get. Numeric array index keys are included in the shared aggregate UTF-8 key budget; the structural `length` property is excluded.
 
 ## Object Key Traversal and Memory Allocation Limitations
 
@@ -32,7 +32,7 @@ For ordinary objects, JavaScript's `Reflect.ownKeys()` materializes the object's
 
 This is an inherent limitation of the available JavaScript reflection mechanism. The entry limit bounds subsequent key scanning, validation, and traversal; it does not guarantee protection against memory allocation required to enumerate an unusually large object.
 
-For Proxies, the `ownKeys` trap may additionally execute user-defined code or construct the returned key list. Reflection on Proxies can also invoke other traps, including `getPrototypeOf` and `getOwnPropertyDescriptor`. Catching a thrown exception does not undo side effects or prevent work already performed by a trap.
+Proxy reflection traps are not invoked for Proxy values rejected by the `util.types.isProxy` check. This does not bound the key-list allocation for ordinary objects, because `Reflect.ownKeys` still materializes their complete own-key list.
 
 Accordingly, this module is not a sandbox or a hostile-object isolation boundary. Proxy rejection is a defense-in-depth input-type check, not a substitute for a separately controlled parsing boundary, process isolation, or OS-level resource limits where hostile input or hard memory isolation is in scope.
 
