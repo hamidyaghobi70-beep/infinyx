@@ -96,7 +96,7 @@ describe("snapshotBoundedPolicyData", () => {
     expect(snapshotBoundedPolicyData(makeInput(16_358))).toBeUndefined();
   });
 
-  it("rejects an oversized array before invoking a Proxy ownKeys trap", () => {
+  it("rejects an oversized array Proxy before invoking any reflection trap", () => {
     const observed: string[] = [];
     const input = new Proxy(new Array(1_001), {
       getOwnPropertyDescriptor(target, key) {
@@ -110,8 +110,7 @@ describe("snapshotBoundedPolicyData", () => {
     });
 
     expect(snapshotBoundedPolicyData(input)).toBeUndefined();
-    expect(observed).toContain("descriptor:length");
-    expect(observed).not.toContain("ownKeys");
+    expect(observed).toEqual([]);
   });
 
   it("rejects cycles, accessors, sparse arrays, and non-finite numbers", () => {
