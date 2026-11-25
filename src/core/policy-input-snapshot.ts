@@ -14,10 +14,9 @@ function byteLength(value: string): number {
 /**
  * Bounded, getter-free snapshot for ordinary data objects.
  *
- * This is not a sandbox for hostile Proxy instances: JavaScript reflection
- * invokes Proxy traps (including getPrototypeOf, ownKeys, and descriptor
- * traps) in this process. Callers must pass trusted plain data structures;
- * this routine cannot make arbitrary same-process objects side-effect-free.
+ * Proxy values are rejected before reflective inspection, including when
+ * nested. This is not a sandbox for arbitrary same-process objects; callers
+ * must still pass trusted plain data structures.
  */
 export function snapshotBoundedPolicyData<T>(input: T): T | undefined {
   let nodes = 0;
@@ -60,8 +59,7 @@ export function snapshotBoundedPolicyData<T>(input: T): T | undefined {
     ancestors.add(value);
     try {
       if (array) {
-        // Read length from its own data descriptor rather than invoking a Proxy get trap.
-        // Descriptor inspection can still invoke a Proxy getOwnPropertyDescriptor trap.
+        // Read length from its own data descriptor rather than performing a property get.
         const lengthDescriptor = Object.getOwnPropertyDescriptor(value, "length");
         if (!lengthDescriptor || !("value" in lengthDescriptor) ||
             typeof lengthDescriptor.value !== "number" ||
@@ -69,15 +67,14 @@ export function snapshotBoundedPolicyData<T>(input: T): T | undefined {
           throw new TypeError("Policy array length is invalid.");
         }
         const length = lengthDescriptor.value;
-        // Reject oversized arrays before own-key enumeration. The length
-        // descriptor lookup can still invoke a Proxy trap.
+        // Reject oversized ordinary arrays before own-key enumeration.
         if (length > MAX_CONTAINER_ENTRIES) {
           throw new TypeError("Policy input exceeds resource limits.");
         }
         const keys = Reflect.ownKeys(value);
         // Reflect.ownKeys has already materialized the complete key list at
-        // this point, even for an ordinary object; this count does not cap
-        // that allocation. For a Proxy, ownKeys may execute arbitrary code.
+        // this point; this count does not cap that allocation. Proxy inputs
+        // are rejected before reaching this reflection operation.
         if (keys.length > MAX_CONTAINER_ENTRIES + 1) {
           throw new TypeError("Policy input exceeds resource limits.");
         }
