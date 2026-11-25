@@ -14,6 +14,22 @@ afterEach(() => {
 });
 
 describe("FailClosedPolicyEngine", () => {
+  it("evaluates valid bounded serialized policy requests", async () => {
+    const evaluator = vi.fn(async () => ({ effect: "allow" as const, reason: "serialized grant" }));
+    const policy = new FailClosedPolicyEngine({ evaluate: evaluator });
+    await expect(policy.evaluateSerialized('{"actorId":"a","action":"read","resource":"r"}'))
+      .resolves.toEqual({ effect: "allow", reason: "serialized grant" });
+    expect(evaluator).toHaveBeenCalledTimes(1);
+  });
+
+  it("fails closed for malformed and oversized serialized requests", async () => {
+    const evaluator = vi.fn(async () => ({ effect: "allow" as const, reason: "must not run" }));
+    const policy = new FailClosedPolicyEngine({ evaluate: evaluator });
+    await expect(policy.evaluateSerialized('{"actorId":"a","action":')).resolves.toMatchObject({ effect: "deny" });
+    await expect(policy.evaluateSerialized('{"actorId":"' + "x".repeat(524_300) + '"}')).resolves.toMatchObject({ effect: "deny" });
+    expect(evaluator).not.toHaveBeenCalled();
+  });
+
   it("preserves an explicit allow decision from the evaluator", async () => {
     const policy = new FailClosedPolicyEngine({
       evaluate: async () => ({ effect: "allow", reason: "Explicit test grant." })
