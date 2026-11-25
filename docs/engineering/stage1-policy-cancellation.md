@@ -165,7 +165,7 @@ The following rules govern **Outcome Candidate Selection only**, while the candi
 5. **Completion:** Candidate `completed` may be selected only if all required work has completed and the completion event is serialized before any effective stop event and before candidate freeze.
 6. **Operational failure:** Candidate `failed` may be selected if the failure event is serialized before an effective stop event and before candidate freeze. A later cancellation cannot relabel a frozen failure candidate.
 7. **Simultaneous observations:** Events observed concurrently are not resolved by wall-clock guesswork. The coordinator's serialization order is authoritative and MUST be stable for that execution. Where a policy denial is already affirmatively known at an admission boundary, denial always blocks admission regardless of a concurrent caller cancellation.
-8. **Same-batch tie and stop precedence:** Events in one indivisible coordinator batch with no distinct sequence use the explicit normalization rule in section 17.9. A qualifying denial takes precedence as specified there; absent denial, the deadline/cancellation tie-break applies.
+8. **Same-batch tie and stop precedence:** Events in one indivisible coordinator batch with no distinct sequence use the explicit normalization rules in sections 17.9 and 17.9.1. A qualifying denial takes precedence as specified there; absent denial, the complete deadline/cancellation/failure/completion order applies.
 9. **After Candidate Freeze:** No later event may select a replacement candidate. Late denial, revocation, deadline, cancellation, completion, failure, cleanup, or shutdown events may be retained as bounded diagnostics and may prevent or delay safe commitment, but MUST NOT alter the frozen candidate.
 10. **Terminal Commitment:** Candidate precedence does not satisfy commitment conditions. The frozen candidate may be published only through the separate `FINALIZING` → `TERMINAL` transition after every guard in section 17.1 and the applicable transition-matrix row in section 5.2 is satisfied. A candidate MUST NOT be exposed as a final outcome before that transition.
 
@@ -383,6 +383,8 @@ The following remain explicit design decisions for a later authorized implementa
 6. Resource dependency graph and safe-close/forced-close policy.
 7. Audit storage, retention, access control, integrity, and behavior when audit facilities are unavailable.
 8. Whether any future cross-process execution is justified; no distributed coordination is assumed in this stage.
+9. Per-work-item stop-observation and cleanup-cessation bound values, configuration authority, and adapter evidence contract.
+10. Adapter/domain-owned durable reconciliation-intent sink, restart discovery contract, and bounded unresolved-record retention/capacity policy.
 
 These decisions must be resolved, reviewed, and approved before implementation. This specification is not evidence that any of these systems or controls currently exist. In addition, the stop-observation bound source/value, unresolved-record retention policy, and adapter-owned durable reconciliation-intent capability in section 17.12 must be approved before enabling any affected capability.
 
@@ -692,11 +694,13 @@ numbers:
 4. Operational failure;
 5. Successful completion.
 
-Within one event class, use a stable, documented secondary key derived only
-from immutable coordinator-assigned observation metadata; if no such key
-exists, use the coordinator's deterministic batch-ingestion ordinal. The
-same implementation MUST produce the same normalized order for the same
-input batch. The coordinator then assigns each accepted event its own
+Within one event class, a stable secondary key SHOULD be used for
+repeatable diagnostic ordering when one exists. If no stable key exists,
+the coordinator MAY use its batch-ingestion ordinal for assigning unique
+sequence numbers; this within-class order is diagnostic only and MUST NOT
+change the selected outcome class. Events within the same class have the
+same precedence, so implementations MUST NOT derive different primary
+outcomes from their internal ordering of same-class events. The coordinator then assigns each accepted event its own
 increasing sequence in that normalized order. This same-batch precedence is
 an explicit contract, not a deployment-specific implementation choice.
 A qualifying denial/revocation is considered only while the candidate is
@@ -758,13 +762,13 @@ terminal commitment remain separate.
 
 | Review finding | Clarified sections | Future verification scenarios |
 |---|---|---|
-| Prior specification review: START_COMMITTED and adapter guarantees | 8.1, 9.3, 17.2 | V-28–V-29 |
-| Prior specification review: Outcome Candidate versus Terminal Commitment | 5.2, 6.1, 17.1 | V-30–V-31 |
-| Prior specification review: Active cleanup after deadline | 11, 17.3 | V-32–V-33 |
-| Prior specification review: Cleanup side-effect boundary | 8.2–8.3, 11, 17.4 | V-34–V-35 |
-| Prior specification review: Parent cancellation versus child creation | 5.2–5.3, 9.1, 17.5 | V-36–V-37 |
-| Prior specification review: Local cessation versus unknown external effect | 4, 6.3, 8.3, 17.7 | V-38–V-39 |
-| Prior specification review: denied/cancelled/timed_out precedence | 4, 6.2, 17.9.1 | V-40–V-41 |
+| PSR-01 — Prior specification review: START_COMMITTED and adapter guarantees | 8.1, 9.3, 17.2 | V-28–V-29 |
+| PSR-02 — Prior specification review: Outcome Candidate versus Terminal Commitment | 5.2, 6.1, 17.1 | V-30–V-31 |
+| PSR-03 — Prior specification review: Active cleanup after deadline | 11, 17.3 | V-32–V-33 |
+| PSR-04 — Prior specification review: Cleanup side-effect boundary | 8.2–8.3, 11, 17.4 | V-34–V-35 |
+| PSR-05 — Prior specification review: Parent cancellation versus child creation | 5.2–5.3, 9.1, 17.5 | V-36–V-37 |
+| PSR-06 — Prior specification review: Local cessation versus unknown external effect | 4, 6.3, 8.3, 17.7 | V-38–V-39 |
+| PSR-07 — Prior specification review: denied/cancelled/timed_out precedence | 4, 6.2, 17.9.1 | V-40–V-41 |
 | Haniyeh review F-01: callback registration/start/cessation | 5.2, 6.1, 17.6 | V-45–V-46 |
 | Haniyeh review F-02: restart discovery and no unintended retry | 8.3, 15, 17.8 | V-42–V-43, V-47 |
 | Haniyeh review F-03: local UNRESOLVED versus external uncertainty | 4, 5.1, 17.7–17.8 | V-48 |
@@ -851,9 +855,10 @@ reset or extend it. The coordinator MUST NOT transition to `UNRESOLVED`
 before this deadline solely because confirmation has not yet arrived; if
 cessation remains unconfirmed, it MUST transition to `UNRESOLVED` at the
 deadline, subject only to an earlier authoritative determination that the
-adapter cannot provide the declared guarantee. A child inherits the
-earlier of its parent's absolute stop-observation deadline and its own
-capability bound; it cannot extend the parent's bound. If a capability
+adapter cannot provide the declared guarantee. A child stop-observation deadline is the earlier of the parent's absolute
+deadline and the monotonic timestamp at child stop acceptance plus the
+child capability's declared duration; the child cannot extend the parent's
+absolute deadline. If a capability
 cannot declare and satisfy this contract, it MUST NOT be enabled for
 governed asynchronous work.
 
