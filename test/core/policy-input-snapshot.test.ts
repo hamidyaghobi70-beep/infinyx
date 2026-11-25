@@ -51,9 +51,12 @@ describe("snapshotBoundedPolicyData", () => {
   });
 
   it("accepts the exact aggregate UTF-8 byte limit with multibyte strings and rejects one byte over", () => {
-    // Each string is exactly 16 KiB in UTF-8 (8,192 two-byte characters).
-    const atLimit = Array.from({ length: 16 }, () => "é".repeat(8_192));
-    const overLimit = [...atLimit, "y"];
+    // The first 15 values use 16 KiB each. The final value leaves room for
+    // the UTF-8 bytes of array index keys (0..15) in the shared budget.
+    const atLimit = Array.from({ length: 16 }, (_, index) =>
+      "é".repeat(index === 15 ? 8_184 : 8_192));
+    const overLimit = Array.from({ length: 16 }, (_, index) =>
+      index === 15 ? `${"é".repeat(8_184)}x` : "é".repeat(8_192));
 
     expect(snapshotBoundedPolicyData(atLimit)).toBeDefined();
     expect(snapshotBoundedPolicyData(overLimit)).toBeUndefined();
@@ -65,13 +68,18 @@ describe("snapshotBoundedPolicyData", () => {
     expect(snapshotBoundedPolicyData(atPerKeyLimit)).toBeDefined();
     expect(snapshotBoundedPolicyData(overPerKeyLimit)).toBeUndefined();
 
-    const exactAggregateKeys = [
-      ...Array.from({ length: 15 }, () => "a".repeat(16_384)),
-      "b".repeat(16_383),
-      "c"
-    ];
+    // Use distinct keys: Object.fromEntries would otherwise collapse
+    // duplicate strings and fail to exercise the aggregate key budget.
+    const exactAggregateKeys = Array.from({ length: 16 }, (_, index) => {
+      const prefix = `key${index}:`;
+      return prefix + "a".repeat(16_384 - prefix.length);
+    });
     const atAggregateLimit = Object.fromEntries(exactAggregateKeys.map((key, index) => [key, index]));
-    const overAggregateLimit = { ...atAggregateLimit, d: 1 };
+    const overAggregateLimit = Object.fromEntries([
+      ...exactAggregateKeys.map((key, index) => [key, index] as const),
+      ["z", true] as const
+    ]);
+    expect(new Set(exactAggregateKeys).size).toBe(16);
     expect(snapshotBoundedPolicyData(atAggregateLimit)).toBeDefined();
     expect(snapshotBoundedPolicyData(overAggregateLimit)).toBeUndefined();
   });
