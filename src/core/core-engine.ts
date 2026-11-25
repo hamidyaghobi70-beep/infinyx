@@ -59,6 +59,13 @@ export class CoreEngine {
       () => this.lifecycle === "running"
     );
     this.protectedOperations = Object.freeze({
+      executeSerialized: <TInput, TOutput>(
+        operation: ProtectedOperationHandle<TInput, TOutput>,
+        actorId: string,
+        contextJson: string | undefined,
+        input: TInput,
+        options?: PolicyEvaluationOptions
+      ) => this.protectedOperationExecutor.executeSerialized(operation, actorId, contextJson, input, options),
       execute: <TInput, TOutput>(
         operation: ProtectedOperationHandle<TInput, TOutput>,
         caller: ProtectedOperationCaller,
