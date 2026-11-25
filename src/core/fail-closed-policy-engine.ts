@@ -47,19 +47,22 @@ export function isValidPolicyRequest(value: unknown): value is PolicyRequest {
       Object.keys(attributes).every((key) => key.trim().length > 0));
 }
 
-export function isValidPolicyDecision(value: unknown): value is PolicyDecision {
+function isValidPolicyDecisionSnapshot(value: unknown): value is PolicyDecision {
   return isPlainRecord(value) &&
     (value.effect === "allow" || value.effect === "deny") &&
     isNonEmptyString(value.reason);
 }
 
+/** Returns a detached, bounded, deeply frozen decision without invoking getters. */
 export function snapshotPolicyDecision(value: unknown): PolicyDecision | undefined {
-  try {
-    if (!isValidPolicyDecision(value)) return undefined;
-    return Object.freeze({ effect: value.effect, reason: value.reason });
-  } catch {
-    return undefined;
-  }
+  const snapshot = snapshotBoundedPolicyData(value);
+  if (!isValidPolicyDecisionSnapshot(snapshot)) return undefined;
+  return Object.freeze({ effect: snapshot.effect, reason: snapshot.reason });
+}
+
+/** Validates only after a getter-free bounded snapshot has been created. */
+export function isValidPolicyDecision(value: unknown): value is PolicyDecision {
+  return snapshotPolicyDecision(value) !== undefined;
 }
 
 function cancellationMessage(reason: PolicyStopReason): string {
