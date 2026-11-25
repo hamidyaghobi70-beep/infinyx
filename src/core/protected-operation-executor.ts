@@ -1,4 +1,5 @@
 import { snapshotBoundedPolicyData } from "./policy-input-snapshot.js";
+import { parseBoundedPolicyJson } from "./policy-input-json-parser.js";
 
 import type {
   PolicyEngine,
@@ -68,6 +69,25 @@ export class ProtectedOperationExecutor implements ProtectedOperationPort {
     this.registrations.set(handle, registration as RegisteredOperation);
     this.operationIds.add(definition.id);
     return handle;
+  }
+
+  async executeSerialized<TInput, TOutput>(
+    operation: ProtectedOperationHandle<TInput, TOutput>,
+    actorId: string,
+    contextJson: string | undefined,
+    input: TInput,
+    options?: PolicyEvaluationOptions
+  ): Promise<ProtectedOperationResult<TOutput>> {
+    let context: ProtectedOperationCaller["context"];
+    if (contextJson !== undefined) {
+      const parsed = parseBoundedPolicyJson(contextJson);
+      if (!parsed || typeof parsed !== "object" || Array.isArray(parsed) ||
+          (Object.getPrototypeOf(parsed) !== null && Object.getPrototypeOf(parsed) !== Object.prototype)) {
+        return this.denied("Serialized protected-operation context is invalid or exceeds resource limits.");
+      }
+      context = parsed as ProtectedOperationCaller["context"];
+    }
+    return this.execute(operation, { actorId, ...(context === undefined ? {} : { context }) }, input, options);
   }
 
   async execute<TInput, TOutput>(
