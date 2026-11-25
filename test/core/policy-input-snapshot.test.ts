@@ -206,4 +206,77 @@ describe("snapshotBoundedPolicyData", () => {
     expect(snapshotBoundedPolicyData(input)).toEqual({ value: 1 });
     expect(observed).toEqual(["getPrototypeOf", "ownKeys", "getOwnPropertyDescriptor:value"]);
   });
+
+  it("rejects root Proxies before invoking any reflection traps", () => {
+    const observed: string[] = [];
+    const input = new Proxy({ value: 1 }, {
+      getPrototypeOf(target) {
+        observed.push("getPrototypeOf");
+        return Reflect.getPrototypeOf(target);
+      },
+      ownKeys(target) {
+        observed.push("ownKeys");
+        return Reflect.ownKeys(target);
+      },
+      getOwnPropertyDescriptor(target, key) {
+        observed.push(`getOwnPropertyDescriptor:${String(key)}`);
+        return Reflect.getOwnPropertyDescriptor(target, key);
+      }
+    });
+
+    expect(snapshotBoundedPolicyData(input)).toBeUndefined();
+    expect(observed).toEqual([]);
+  });
+
+  it("rejects nested Proxies before reflecting on the nested value", () => {
+    const observed: string[] = [];
+    const nested = new Proxy({ value: 1 }, {
+      getPrototypeOf(target) {
+        observed.push("getPrototypeOf");
+        return Reflect.getPrototypeOf(target);
+      },
+      ownKeys(target) {
+        observed.push("ownKeys");
+        return Reflect.ownKeys(target);
+      },
+      getOwnPropertyDescriptor(target, key) {
+        observed.push(`getOwnPropertyDescriptor:${String(key)}`);
+        return Reflect.getOwnPropertyDescriptor(target, key);
+      }
+    });
+
+    expect(snapshotBoundedPolicyData({ nested })).toBeUndefined();
+    expect(observed).toEqual([]);
+  });
+
+  it("rejects array Proxies before trusting a trap-reported length", () => {
+    const observed: string[] = [];
+    const input = new Proxy(new Array(1_001), {
+      getPrototypeOf(target) {
+        observed.push("getPrototypeOf");
+        return Reflect.getPrototypeOf(target);
+      },
+      getOwnPropertyDescriptor(target, key) {
+        observed.push(`getOwnPropertyDescriptor:${String(key)}`);
+        const descriptor = Reflect.getOwnPropertyDescriptor(target, key);
+        if (key === "length" && descriptor) return { ...descriptor, value: 1 };
+        return descriptor;
+      },
+      ownKeys(target) {
+        observed.push("ownKeys");
+        return Reflect.ownKeys(target);
+      }
+    });
+
+    expect(snapshotBoundedPolicyData(input)).toBeUndefined();
+    expect(observed).toEqual([]);
+  });
+
+  it("rejects revoked Proxies without invoking their traps", () => {
+    const revocable = Proxy.revocable({ value: 1 }, {});
+    revocable.revoke();
+
+    expect(snapshotBoundedPolicyData(revocable.proxy)).toBeUndefined();
+  });
+
 });
