@@ -12,7 +12,8 @@
     "typecheck": "tsc --noEmit -p tsconfig.json",
     "test": "vitest run",
     "test:process": "node --test test/integration/process-signals.test.mjs",
-    "start": "node dist/server.js"
+    "start": "node dist/server.js",
+    "typecheck:contracts": "tsc --noEmit -p tsconfig.contract-tests.json"
   },
   "dependencies": {
     "express": "^5.1.0",

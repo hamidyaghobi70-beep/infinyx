@@ -52,6 +52,8 @@ jobs:
         run: npm ci
       - name: Type check
         run: npm run typecheck
+      - name: Protected-operation contract type checks
+        run: npm run typecheck:contracts
       - name: Build
         run: npm run build
       - name: Unit and API tests

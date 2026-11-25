@@ -157,13 +157,23 @@ export interface ProtectedOperationContext {
   readonly signal: AbortSignal;
 }
 
+/**
+ * Recursively readonly view passed to protected-operation handlers.
+ * Runtime immutability is enforced by the bounded snapshot, not by this type alone.
+ */
+export type DeepReadonly<T> =
+  T extends (...args: any[]) => any ? T :
+  T extends readonly unknown[] ? { readonly [K in keyof T]: DeepReadonly<T[K]> } :
+  T extends object ? { readonly [K in keyof T]: DeepReadonly<T[K]> } :
+  T;
+
 export interface ProtectedOperationDefinition<TInput, TOutput> {
   readonly id: string;
   readonly action: string;
   readonly resource: string;
   readonly validateInput: (value: unknown) => value is TInput;
   readonly handler: (
-    input: TInput,
+    input: DeepReadonly<TInput>,
     context: ProtectedOperationContext
   ) => TOutput | Promise<TOutput>;
 }

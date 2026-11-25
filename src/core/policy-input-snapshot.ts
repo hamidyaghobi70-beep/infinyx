@@ -18,7 +18,17 @@ function byteLength(value: string): number {
  * nested. This is not a sandbox for arbitrary same-process objects; callers
  * must still pass trusted plain data structures.
  */
-export function snapshotBoundedPolicyData<T>(input: T): T | undefined {
+export type SnapshotResult<T> =
+  | { readonly ok: true; readonly value: T }
+  | { readonly ok: false };
+
+/**
+ * Bounded, getter-free snapshot for ordinary data objects.
+ *
+ * The result discriminant distinguishes an unsupported input from valid
+ * primitive values such as undefined, false, zero, and the empty string.
+ */
+export function snapshotBoundedPolicyData<T>(input: T): SnapshotResult<T> {
   let nodes = 0;
   let totalBytes = 0;
   const ancestors = new Set<object>();
@@ -123,8 +133,8 @@ export function snapshotBoundedPolicyData<T>(input: T): T | undefined {
   };
 
   try {
-    return clone(input, 0) as T;
+    return { ok: true, value: clone(input, 0) as T };
   } catch {
-    return undefined;
+    return { ok: false };
   }
 }

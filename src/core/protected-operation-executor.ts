@@ -8,6 +8,7 @@ import type {
   ProtectedOperationCaller,
   ProtectedOperationContext,
   ProtectedOperationDefinition,
+  DeepReadonly,
   ProtectedOperationHandle,
   ProtectedOperationPort,
   ProtectedOperationResult,
@@ -26,16 +27,16 @@ interface RegisteredOperation<TInput = unknown, TOutput = unknown> {
   readonly action: string;
   readonly resource: string;
   readonly validateInput: (value: unknown) => value is TInput;
-  readonly handler: (input: TInput, context: ProtectedOperationContext) => TOutput | Promise<TOutput>;
+  readonly handler: (input: DeepReadonly<TInput>, context: ProtectedOperationContext) => TOutput | Promise<TOutput>;
 }
 
 function snapshotPolicyContext(value: unknown): PolicyRequest["context"] | undefined {
   if (value === undefined) return undefined;
   const cloned = snapshotBoundedPolicyData(value);
-  if (!cloned || typeof cloned !== "object" || Array.isArray(cloned)) {
+  if (!cloned.ok || typeof cloned.value !== "object" || cloned.value === null || Array.isArray(cloned.value)) {
     throw new TypeError("Policy context is invalid or exceeds resource limits.");
   }
-  return cloned as PolicyRequest["context"];
+  return cloned.value as PolicyRequest["context"];
 }
 
 /**
@@ -125,8 +126,15 @@ export class ProtectedOperationExecutor implements ProtectedOperationPort, Seria
     };
     if (!isValidPolicyRequest(policyRequestCandidate)) return this.denied("Protected operation caller request is invalid.");
 
+    // Snapshot before application-defined validation: validators never observe the caller's
+    // mutable object, accessors, or Proxy values. The same frozen clone reaches the handler.
+    const inputSnapshot = snapshotBoundedPolicyData(input);
+    if (!inputSnapshot.ok) {
+      return this.denied("Protected operation input is invalid or exceeds resource limits.");
+    }
+    const safeInput = inputSnapshot.value;
     try {
-      if (!registration.validateInput(input)) return this.denied("Protected operation input is invalid.");
+      if (!registration.validateInput(safeInput)) return this.denied("Protected operation input is invalid.");
     } catch {
       return this.denied("Protected operation input validation failed.");
     }
@@ -180,7 +188,7 @@ export class ProtectedOperationExecutor implements ProtectedOperationPort, Seria
       if (safeDecision.effect !== "allow") return this.denied(safeDecision.reason);
       if (!this.isCoreReady()) return this.denied("Core Engine is stopping; protected operation denied.");
 
-      const value = await registration.handler(input, Object.freeze({
+      const value = await registration.handler(safeInput as DeepReadonly<TInput>, Object.freeze({
         operationId: registration.id, signal: operationController.signal
       }));
       return { status: "executed", value };

@@ -178,6 +178,110 @@ describe("ProtectedOperationExecutor", () => {
     expect(handler).not.toHaveBeenCalled();
   });
 
+  it("rejects oversized operation input before validator, policy, or handler", async () => {
+    const evaluator = vi.fn(async () => allow);
+    const validator = vi.fn(isRecordInput);
+    const handler = vi.fn(async (input: { readonly value: string }) => input.value);
+    const engine = new CoreEngine({ policy: { evaluate: evaluator } });
+    const operation = engine.registerProtectedOperation({
+      id: "records.oversized-input",
+      action: "record.read",
+      resource: "record:oversized",
+      validateInput: validator,
+      handler
+    });
+    await ensureStarted(engine);
+    const result = await engine.protectedOperations.execute(
+      operation, { actorId: "oversized-input" }, { value: "x".repeat(16_385) }
+    );
+    expect(result).toMatchObject({ status: "denied" });
+    expect(validator).not.toHaveBeenCalled();
+    expect(evaluator).not.toHaveBeenCalled();
+    expect(handler).not.toHaveBeenCalled();
+  });
+
+  it("rejects getter-bearing and Proxy operation inputs before application validation", async () => {
+    const evaluator = vi.fn(async () => allow);
+    const validator = vi.fn(isRecordInput);
+    const handler = vi.fn(async (input: { readonly value: string }) => input.value);
+    const engine = new CoreEngine({ policy: { evaluate: evaluator } });
+    const operation = engine.registerProtectedOperation({
+      id: "records.hostile-input",
+      action: "record.read",
+      resource: "record:hostile",
+      validateInput: validator,
+      handler
+    });
+    await ensureStarted(engine);
+    let getterCalls = 0;
+    const accessorInput = Object.defineProperty({}, "value", {
+      enumerable: true,
+      get() { getterCalls += 1; return "secret"; }
+    });
+    const observed: string[] = [];
+    const proxyInput = new Proxy({ value: "proxy" }, {
+      getPrototypeOf(target) { observed.push("getPrototypeOf"); return Reflect.getPrototypeOf(target); },
+      ownKeys(target) { observed.push("ownKeys"); return Reflect.ownKeys(target); },
+      getOwnPropertyDescriptor(target, key) {
+        observed.push(`descriptor:${String(key)}`);
+        return Reflect.getOwnPropertyDescriptor(target, key);
+      }
+    });
+    expect(await engine.protectedOperations.execute(operation, { actorId: "getter" }, accessorInput))
+      .toMatchObject({ status: "denied" });
+    expect(await engine.protectedOperations.execute(operation, { actorId: "proxy" }, proxyInput))
+      .toMatchObject({ status: "denied" });
+    expect(getterCalls).toBe(0);
+    expect(observed).toEqual([]);
+    expect(validator).not.toHaveBeenCalled();
+    expect(evaluator).not.toHaveBeenCalled();
+    expect(handler).not.toHaveBeenCalled();
+  });
+
+  it("passes the same detached deeply frozen input snapshot to validator and handler", async () => {
+    let release!: (decision: PolicyDecision) => void;
+    let validatedInput: unknown;
+    let handledInput: unknown;
+    const evaluator = vi.fn(() => new Promise<PolicyDecision>((resolve) => { release = resolve; }));
+    const validator = vi.fn((value: unknown): value is {
+      readonly value: string;
+      readonly nested: { readonly label: string };
+    } => {
+      validatedInput = value;
+      return typeof value === "object" && value !== null &&
+        "value" in value && typeof value.value === "string" &&
+        "nested" in value && typeof value.nested === "object" && value.nested !== null &&
+        "label" in value.nested && typeof value.nested.label === "string";
+    });
+    const handler = vi.fn(async (input: {
+      readonly value: string;
+      readonly nested: { readonly label: string };
+    }) => {
+      handledInput = input;
+      return input.nested.label;
+    });
+    const engine = new CoreEngine({ policy: { evaluate: evaluator } });
+    const operation = engine.registerProtectedOperation({
+      id: "records.input-snapshot",
+      action: "record.read",
+      resource: "record:snapshot",
+      validateInput: validator,
+      handler
+    });
+    await ensureStarted(engine);
+    const source = { value: "ok", nested: { label: "before" } };
+    const pending = engine.protectedOperations.execute(operation, { actorId: "snapshot" }, source);
+    await Promise.resolve();
+    source.nested.label = "after";
+    release(allow);
+    expect(await pending).toEqual({ status: "executed", value: "before" });
+    expect(validatedInput).toBe(handledInput);
+    expect(handledInput).toEqual({ value: "ok", nested: { label: "before" } });
+    expect(Object.isFrozen(handledInput)).toBe(true);
+    expect(Object.isFrozen((handledInput as { nested: object }).nested)).toBe(true);
+    expect(handler).toHaveBeenCalledTimes(1);
+  });
+
   it("binds the policy decision to the registered operation identity", async () => {
     let observed: PolicyRequest | undefined;
     const { engine, operation, handler } = makeEngine(async (request) => {

@@ -4,8 +4,31 @@ import type {
   ProtectedOperationCaller,
   ProtectedOperationHandle,
   ProtectedOperationPort,
-  ProtectedOperationResult
+  ProtectedOperationResult,
+  ProtectedOperationDefinition
 } from "../../src/core/contracts.js";
+
+// Compile-time assertions are checked by tsconfig.contract-tests.json in CI.
+const mutableInput: { value: string } = { value: "caller-owned" };
+const typedHandle: ProtectedOperationHandle<{ value: string }, string> = { id: "typed" };
+function publicExecuteStillAcceptsMutableInput(port: ProtectedOperationPort): void {
+  void port.execute(typedHandle, { actorId: "actor" }, mutableInput);
+}
+void publicExecuteStillAcceptsMutableInput;
+
+const readonlyHandlerContract: ProtectedOperationDefinition<{ nested: { label: string } }, string> = {
+  id: "readonly.type-check",
+  action: "test.read",
+  resource: "test:readonly",
+  validateInput: (value: unknown): value is { nested: { label: string } } =>
+    typeof value === "object" && value !== null && "nested" in value,
+  handler: (input) => {
+    // @ts-expect-error Handler input is deeply readonly.
+    input.nested.label = "mutated";
+    return input.nested.label;
+  }
+};
+void readonlyHandlerContract;
 
 // This intentionally models a pre-serialized-capability implementation.
 const legacyPort: ProtectedOperationPort = {

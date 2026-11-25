@@ -28,11 +28,8 @@ function isNonEmptyString(value: unknown): value is string {
 
 
 export function snapshotPolicyRequest(request: PolicyRequest): PolicyRequest | undefined {
-  try {
-    return snapshotBoundedPolicyData(request) as PolicyRequest | undefined;
-  } catch {
-    return undefined;
-  }
+  const snapshot = snapshotBoundedPolicyData(request);
+  return snapshot.ok ? snapshot.value as PolicyRequest : undefined;
 }
 
 export function isValidPolicyRequest(value: unknown): value is PolicyRequest {
@@ -55,9 +52,9 @@ function isValidPolicyDecisionSnapshot(value: unknown): value is PolicyDecision 
 
 /** Returns a detached, bounded, deeply frozen decision without invoking getters. */
 export function snapshotPolicyDecision(value: unknown): PolicyDecision | undefined {
-  const snapshot = snapshotBoundedPolicyData(value);
-  if (!isValidPolicyDecisionSnapshot(snapshot)) return undefined;
-  return Object.freeze({ effect: snapshot.effect, reason: snapshot.reason });
+  const result = snapshotBoundedPolicyData(value);
+  if (!result.ok || !isValidPolicyDecisionSnapshot(result.value)) return undefined;
+  return Object.freeze({ effect: result.value.effect, reason: result.value.reason });
 }
 
 /** Validates only after a getter-free bounded snapshot has been created. */
