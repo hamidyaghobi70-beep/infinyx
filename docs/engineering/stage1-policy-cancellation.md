@@ -579,13 +579,14 @@ Report two independent dimensions:
   this process has ceased work-item code, owned children, work-capable
   callbacks, and cleanup code that could issue another request.
 - `external_effect_status`: one of the canonical values `none`,
-  `not_started`, `completed`, `stopped_confirmed`, or
+  `not_started`, `completed`, `failed`, `stopped_confirmed`, or
   `unknown_requires_reconciliation`, describing the remote effect only.
 
 The values have these meanings:
 - `none`: no external effect is applicable to this operation.
 - `not_started`: authoritative adapter evidence establishes that no external request/effect was initiated.
 - `completed`: authoritative evidence establishes that the external operation completed.
+- `failed`: authoritative external evidence establishes a terminal failure outcome. This value does not establish that no partial effect occurred; if partial-effect presence or scope remains uncertain, use `unknown_requires_reconciliation` instead.
 - `stopped_confirmed`: authoritative external-system or adapter-contract evidence establishes that the remote operation ceased before completion.
 - `unknown_requires_reconciliation`: available evidence cannot establish whether the external operation started, completed, or stopped.
 
@@ -741,7 +742,7 @@ terminal commitment remain separate.
 | V-46 | Stop accepted while callbacks are pending or running | Pending work-capable callbacks are suppressed; active callbacks receive cancellation; no Terminal Commitment until all active callbacks cease. |
 | V-47 | Restart with no durable journal and no external enumeration | System reports discovery coverage unavailable; does not infer not-started, claim complete reconciliation, or automatically retry; affected sensitive capability remains disabled. |
 | V-48 | Local quiescence confirmed while external effect remains unknown | Local lifecycle may commit terminal with `unknown_requires_reconciliation`; it is not labeled `UNRESOLVED` solely due to remote uncertainty and makes no remote-stop claim. |
-| V-49 | External-effect status value validation | Only `none`, `not_started`, `completed`, `stopped_confirmed`, and `unknown_requires_reconciliation` are accepted; `stopped_confirmed` requires authoritative evidence. |
+| V-49 | External-effect status value validation | Only `none`, `not_started`, `completed`, `failed`, `stopped_confirmed`, and `unknown_requires_reconciliation` are accepted; `failed` requires authoritative terminal-failure evidence and does not imply absence of partial effects; `stopped_confirmed` requires authoritative cessation evidence. |
 | V-50 | Deadline and cancellation observed in one indivisible batch | Coordinator normalizes deadline before cancellation, then assigns unique increasing sequences; no two accepted events share a sequence. |
 | V-51 | All work reaches confirmed local quiescence before the GRACEFUL_DRAIN deadline | Shutdown MAY classify early; the original deadline is not reset or extended, and no unresolved/active work is omitted. |
 | V-52 | FINALIZING cleanup bound expires with cessation unconfirmed | Transition to UNRESOLVED; withhold Terminal Commitment; retain resources absent reviewed safe forced closure. |
