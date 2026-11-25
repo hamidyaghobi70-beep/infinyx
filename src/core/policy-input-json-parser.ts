@@ -30,9 +30,11 @@ export function parseBoundedPolicyJson(input: unknown): unknown | undefined {
       if (char === '"') {
         offset += 1;
         const value: unknown = JSON.parse(json.slice(start, offset));
-        if (typeof value !== "string") fail();
-        accountString(value);
-        return value;
+        if (typeof value === "string") {
+          accountString(value);
+          return value;
+        }
+        return fail();
       }
       offset += char === "\\" ? 2 : 1;
     }
