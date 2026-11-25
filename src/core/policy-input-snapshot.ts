@@ -1,3 +1,5 @@
+import { types as utilTypes } from "node:util";
+
 const MAX_DEPTH = 32;
 const MAX_NODES = 10_000;
 const MAX_STRING_BYTES = 16_384;
@@ -43,6 +45,11 @@ export function snapshotBoundedPolicyData<T>(input: T): T | undefined {
     }
     if (typeof value !== "object" || ancestors.has(value)) {
       throw new TypeError("Policy input contains an unsupported value or cycle.");
+    }
+    // Reject same-process Proxies before prototype, key, or descriptor reflection.
+    // util.types.isProxy is a Node.js type check and does not invoke Proxy traps.
+    if (utilTypes.isProxy(value)) {
+      throw new TypeError("Policy input must not contain Proxy objects.");
     }
 
     const array = Array.isArray(value);
