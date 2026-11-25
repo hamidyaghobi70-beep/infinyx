@@ -75,7 +75,8 @@ The minimum terminal outcomes are:
 A terminal outcome MUST be accompanied by separate execution/cleanup metadata where applicable. At minimum distinguish:
 - `termination_status`: `confirmed` for a terminal work item; `unconfirmed` is reserved for a non-terminal `UNRESOLVED` record;
 - `cleanup_status`: `not_required`, `pending`, `succeeded`, `failed`, or `timed_out`;
-- `external_effect_status`: `none`, `not_started`, `completed`, `stopped_confirmed`, or `unknown_requires_reconciliation`. These are the only canonical values; `stopped_confirmed` means authoritative evidence confirms the remote operation ceased, not merely that the local adapter stopped.
+- `local_quiescence`: `confirmed` or `unconfirmed`; this is the canonical local-cessation field. `termination_status` is deprecated terminology and MUST NOT be emitted as an independent or competing status. During a documented compatibility migration only, any legacy `termination_status` field MUST be a direct, lossless alias of `local_quiescence` and MUST NOT describe remote cessation.
+- `external_effect_status`: `none`, `not_started`, `completed`, `failed`, `stopped_confirmed`, or `unknown_requires_reconciliation`. These are the only canonical values. `failed` means authoritative external evidence reports a terminal failure; it does not, by itself, prove that no partial external effect occurred. Any partial-effect uncertainty MUST be represented as `unknown_requires_reconciliation`. `stopped_confirmed` means authoritative evidence confirms the remote operation ceased, not merely that the local adapter stopped.
 
 An attempt MUST NOT be marked `cancelled` or `timed_out` merely because a signal was sent or a grace period elapsed. If governed local work may still be executing, its lifecycle remains stop-pending or `UNRESOLVED`, it has no terminal outcome, and its local termination status remains unconfirmed. A terminal work item requires confirmed local quiescence, including cessation of every registered callback that can issue governed work. Uncertainty about a remote side effect is represented separately as `external_effect_status: unknown_requires_reconciliation`; that uncertainty alone does not prevent local terminal commitment once all local commitment guards are satisfied. The system MUST NOT claim that the remote operation stopped unless `stopped_confirmed` is supported by authoritative evidence.
 
@@ -118,7 +119,8 @@ A stop request is represented as a state transition plus source/reason metadata,
 | `STOP_REQUESTED` | No operation was admitted/in flight and no governed child is active, or all active work and children are confirmed quiescent | `FINALIZING` | Begin bounded finalization; signal acknowledgement alone is insufficient unless the adapter contract guarantees cessation. |
 | `STOP_REQUESTED` | Stop cannot be confirmed before observation/grace bound | `UNRESOLVED` | Record unconfirmed local work; do not freeze a terminal result, claim clean cancellation, or close resources it may still use. |
 | `FINALIZING` | All registered children, local operations, callbacks, and cleanup are complete or confirmed locally quiescent; all required status fields are recorded | `TERMINAL` | Perform the single Terminal Commitment using the frozen Outcome Candidate; record cleanup and external-effect status independently. |
-| `FINALIZING` | Cleanup bound expires and cleanup cessation is confirmed; all other Terminal Commitment guards hold | `TERMINAL` | Commit the frozen candidate; mark cleanup timed out/failed. If cleanup may still execute, transition to `UNRESOLVED`, not `TERMINAL`. |
+| `FINALIZING` | Cleanup bound expires; cleanup cessation is confirmed; all other Terminal Commitment guards hold | `TERMINAL` | Commit the frozen candidate; mark cleanup `timed_out` (or the independently established cleanup result). |
+| `FINALIZING` | Cleanup bound expires; cleanup cessation is not confirmed or cleanup may still execute | `UNRESOLVED` | Withhold Terminal Commitment; preserve `local_quiescence: unconfirmed`; keep resources the cleanup may use open unless a reviewed resource contract explicitly permits safe forced closure. |
 | `UNRESOLVED` | Later authoritative confirmation establishes quiescence | `FINALIZING` | Resume only bounded finalization/reconciliation, not business execution. |
 | `UNRESOLVED` | No confirmation available | `UNRESOLVED` | Preserve unresolved status; no false terminal claim. |
 | `TERMINAL` | Any late cancellation, shutdown, cleanup callback, or duplicate completion | `TERMINAL` | Reject state mutation; optionally append a safe late-event diagnostic. |
@@ -278,6 +280,7 @@ Additional rules:
 5. An unresolved operation must not be hidden by closing its owner resource and recording success. If process policy requires forced exit, preserve the best available unresolved status before exit; do not claim clean termination.
 6. Liveness indicates only that the process can respond. It is not a readiness, dependency-health, business-work, or graceful-shutdown guarantee.
 7. A future implementation must define signal handling, repeated-signal behavior, grace-period configuration authority, and forced-exit policy before release.
+8. `GRACEFUL_DRAIN` MAY transition to `CLASSIFY_REMAINDERS` before the configured grace deadline when every tracked work item has already reached confirmed local quiescence and all required bounded cleanup has completed or been safely ceased. The coordinator MUST NOT wait idly for the unused remainder of the grace interval. The original absolute grace deadline remains unchanged for any work still outstanding; it MUST NOT be reset or extended by early classification, repeated signals, or newly observed events. If any work remains active or unresolved, the coordinator continues the bounded drain until that original deadline, then classifies the remainder.
 
 ## 11. Cleanup, failure handling, and reconciliation
 
@@ -301,7 +304,7 @@ When observability is implemented, structured lifecycle events should support re
 - Cancellation source, bounded reason code, request-accepted/rejected status, and late-event marker.
 - Policy decision reference/version and validity result where available; never policy secrets.
 - Deadline classification, elapsed duration, and whether the operation was admitted.
-- Adapter termination guarantee and observed termination status.
+- Adapter termination guarantee and canonical `local_quiescence` (`confirmed`/`unconfirmed`); any legacy `termination_status` alias must be explicitly marked deprecated and derived from that same local-only value.
 - Cleanup status and external-effect/reconciliation status.
 
 Logs must follow the repository security baseline and Pino redaction requirements. Do not log tokens, credentials, secrets, sensitive request bodies, or unnecessary personal data. Durable audit storage, retention, access control, and tamper resistance are not assumed to exist; ordinary logs must not be represented as a durable audit system. The future design must define how event ordering is preserved if logs are asynchronous or unavailable.
@@ -423,7 +426,7 @@ executing operation and every active callback capable of issuing governed
 work has completed or confirmed local cessation; (c) every registered child is locally quiescent; (d) cleanup has
 completed or its deadline expired and cleanup cessation is confirmed; and
 (e) cleanup and external-effect status are recorded separately. If cleanup
-may still execute, commitment is withheld and the item remains
+may still execute, commitment is withheld and the item transitions to
 `UNRESOLVED`.
 
 The candidate-selection linearization point is the serialized transition to
@@ -707,6 +710,11 @@ terminal commitment remain separate.
 | Haniyeh review F-03: local UNRESOLVED versus external uncertainty | 4, 5.1, 17.7–17.8 | V-48 |
 | Haniyeh review F-04: canonical external-effect enum | 4, 17.7 | V-49 |
 | Haniyeh review F-05: unique event sequence and batch normalization | 6.2, 17.9 | V-50 |
+| DeepSeek review F-10: FINALIZING cleanup cessation transition | 5.2, 17.1, 17.3 | V-33, V-52 |
+| DeepSeek review F-11: distinguish definitive external failure from uncertainty | 4, 17.7 | V-53 |
+| DeepSeek review F-12: canonical local quiescence terminology | 4, 12, 17.7 | V-48, V-54 |
+| DeepSeek review F-13: ordered verification scenarios and complete finding traceability | 17.10–17.11 | V-42–V-44, V-47, V-52–V-55 |
+| DeepSeek review F-14: early graceful-drain completion | 10 | V-51
 
 ### 17.11 Additional future verification scenarios
 
@@ -714,9 +722,6 @@ terminal commitment remain separate.
 |---|---|---|
 | V-28 | Stop after reservation but before START_COMMITTED | Reservation invalidated; adapter is never invoked. |
 | V-29 | START_COMMITTED and adapter receipts | Synchronous handoff is enforced; receipts are classified exactly; possibly post-effect exception is unknown, never assumed not-started. |
-| V-42 | Process crashes between START_COMMITTED record and adapter invocation | Restart does not infer not-started from volatile state; operation is classified unknown unless authoritative evidence proves otherwise; no automatic replay. |
-| V-43 | Process crashes during/after adapter call before result recording | External status is unknown pending reconciliation by stable operation identity; no exactly-once or at-most-once-across-restart claim. |
-| V-44 | Denial/revocation finalization path | Denial enters FINALIZING or STOP_REQUESTED then FINALIZING; TERMINAL is reachable only after all Terminal Commitment guards are met. |
 | V-30 | Candidate frozen while cleanup is pending | Candidate remains provisional; no `TERMINAL` or final result is exposed. |
 | V-31 | Late stop/denial after candidate freeze | Candidate remains immutable; late event cannot rewrite it. |
 | V-32 | Cleanup deadline expires and cessation is confirmed | Cleanup admission closes; status is timed_out; frozen candidate may be committed. |
@@ -729,12 +734,20 @@ terminal commitment remain separate.
 | V-39 | Remote result known but local callback/cleanup remains active | Local quiescence unconfirmed; no Terminal Commitment. |
 | V-40 | Denial/revocation races with cancellation/deadline before freeze | Qualifying denial selects denied; unauthorized work never starts. |
 | V-41 | Deadline/cancellation same-batch and separate-sequence races | Same-batch tie is timed_out; otherwise first coordinator sequence wins; frozen candidate is immutable. |
+| V-42 | Process crashes between START_COMMITTED record and adapter invocation | Restart does not infer not-started from volatile state; operation is classified unknown unless authoritative evidence proves otherwise; no automatic replay. |
+| V-43 | Process crashes during/after adapter call before result recording | External status is unknown pending reconciliation by stable operation identity; no exactly-once or at-most-once-across-restart claim. |
+| V-44 | Denial/revocation finalization path | Denial enters FINALIZING or STOP_REQUESTED then FINALIZING; TERMINAL is reachable only after all Terminal Commitment guards are met. |
 | V-45 | Callback registration races with stop acceptance | Coordinator serialization yields one winner; if stop wins registration is rejected; if registration wins the callback is registered but cannot start after stop closure unless already running and tracked. |
 | V-46 | Stop accepted while callbacks are pending or running | Pending work-capable callbacks are suppressed; active callbacks receive cancellation; no Terminal Commitment until all active callbacks cease. |
 | V-47 | Restart with no durable journal and no external enumeration | System reports discovery coverage unavailable; does not infer not-started, claim complete reconciliation, or automatically retry; affected sensitive capability remains disabled. |
 | V-48 | Local quiescence confirmed while external effect remains unknown | Local lifecycle may commit terminal with `unknown_requires_reconciliation`; it is not labeled `UNRESOLVED` solely due to remote uncertainty and makes no remote-stop claim. |
 | V-49 | External-effect status value validation | Only `none`, `not_started`, `completed`, `stopped_confirmed`, and `unknown_requires_reconciliation` are accepted; `stopped_confirmed` requires authoritative evidence. |
 | V-50 | Deadline and cancellation observed in one indivisible batch | Coordinator normalizes deadline before cancellation, then assigns unique increasing sequences; no two accepted events share a sequence. |
+| V-51 | All work reaches confirmed local quiescence before the GRACEFUL_DRAIN deadline | Shutdown MAY classify early; the original deadline is not reset or extended, and no unresolved/active work is omitted. |
+| V-52 | FINALIZING cleanup bound expires with cessation unconfirmed | Transition to UNRESOLVED; withhold Terminal Commitment; retain resources absent reviewed safe forced closure. |
+| V-53 | External system authoritatively reports terminal failure | `external_effect_status: failed` is distinct from unknown; partial-effect uncertainty remains unknown and is not silently treated as no effect. |
+| V-54 | Local quiescence metadata is emitted | `local_quiescence` is canonical; deprecated `termination_status`, if temporarily emitted, is a lossless local-only alias and never remote status. |
+| V-55 | Traceability and verification inventory are reviewed | Every listed review finding maps to clarifying sections and future scenarios; scenario identifiers are strictly ascending and unique. |
 
 ## 18. Final independent review handoff
 
