@@ -237,6 +237,41 @@ mod tests {
     }
 
     #[test]
+    fn rejects_truncated_frame_header() {
+        let error = read_frame(&mut Cursor::new([0_u8, 0_u8, 0_u8])).unwrap_err();
+        assert_eq!(error.kind(), io::ErrorKind::UnexpectedEof);
+    }
+
+    #[test]
+    fn rejects_truncated_frame_payload_without_returning_partial_data() {
+        let mut frame = Vec::from(5_u32.to_be_bytes());
+        frame.extend_from_slice(b"ab");
+        let error = read_frame(&mut Cursor::new(frame)).unwrap_err();
+        assert_eq!(error.kind(), io::ErrorKind::UnexpectedEof);
+    }
+
+    #[test]
+    fn rejects_empty_overlong_and_non_ascii_identifiers() {
+        let base = Request {
+            version: PROTOCOL_VERSION,
+            request_id: "req-1".into(),
+            operation: Operation::LaunchTrustedRunner,
+        };
+
+        let mut bad = base.clone();
+        bad.request_id.clear();
+        assert_eq!(bad.validate().unwrap_err().code, "invalid_request_id");
+
+        let mut bad = base.clone();
+        bad.request_id = "x".repeat(MAX_ID_BYTES + 1);
+        assert_eq!(bad.validate().unwrap_err().code, "invalid_request_id");
+
+        let mut bad = base;
+        bad.request_id = "req-💡".into();
+        assert_eq!(bad.validate().unwrap_err().code, "invalid_request_id");
+    }
+
+    #[test]
     fn rejects_oversized_outbound_frame() {
         let payload = vec![b'x'; MAX_FRAME_BYTES + 1];
         assert!(write_frame(&mut Vec::new(), &payload).is_err());
