@@ -139,3 +139,37 @@ The dependency audit job reports success. The detailed artifact contents and adv
 - [Policy input snapshot](https://github.com/hamidyaghobi70-beep/infinyx/blob/75b85703a1392ae97f429b630d9b84281b790742/src/core/policy-input-snapshot.ts)
 - [Policy input JSON parser](https://github.com/hamidyaghobi70-beep/infinyx/blob/75b85703a1392ae97f429b630d9b84281b790742/src/core/policy-input-json-parser.ts)
 - [CI workflow](https://github.com/hamidyaghobi70-beep/infinyx/blob/75b85703a1392ae97f429b630d9b84281b790742/.github/workflows/ci.yml)
+
+
+## 8. Source re-verification addendum (2026-11-26)
+
+This addendum re-checks the material findings against the exact target SHA. It does not change the target PR or production source.
+
+### Exact source locations
+
+- **F-01 — P1, confirmed source-level gap:** `src/core/process-isolated-policy-engine.ts:221-227` creates the evaluator with Node `fork()`; `:293-299` schedules and invokes `child.kill()`; `:404-447` treats the direct ChildProcess `close` event as sufficient to emit `runtimeStatus: STOPPED` and `cleanupStatus: COMPLETED`; `:450-457` waits for those execution records during shutdown. The implementation has no descendant inventory or OS containment handle in this path. The evaluator runner at `src/core/policy-evaluator-child.ts:1-80` only implements parent/child IPC and cooperative AbortController cancellation. A direct-child close event does not prove that descendants have exited. **F-01 remains OPEN / HOLD.**
+- **F-02 — P2, confirmed limitation in the inspected runtime:** `src/core/process-isolated-policy-engine.ts:20-30` defines concurrency/heap options; `:221-227` passes `--max-old-space-size` to Node. No OS-level RSS, CPU, process-count, descriptor or network enforcement is present in the inspected evaluator launch/termination path. cgroup v2 and Windows Job Object containment are **NOT IMPLEMENTED / NOT VERIFIED** in this runtime.
+- **F-03 — P2, confirmed integration gap (not evidence of an exposed unauthenticated business route):** `src/core/contracts.ts:144` explicitly documents `ProtectedOperationCaller.actorId` as caller-supplied and not authenticated by Core. JWT verification/principal helpers exist in `src/core/authenticated-principal.ts:7-50`, but `src/server.ts:8` constructs `new CoreEngine()` without policy or authenticated memory-scope wiring. `src/api/app.ts:8-20` installs JSON parsing, rate limiting, `GET /health`, and a 404 handler; no bearer-auth middleware or business route is mounted. `src/core/core-engine.ts:57-58,287-301` provides default-deny policy behavior and module-specific guarded memory capability checks. End-to-end authentication and authenticated tenant identity propagation remain **NOT VERIFIED**.
+- **F-04 — P2, confirmed allocation-order limitation:** `src/core/guarded-memory-port.ts:210-212` serializes before authorization; `:261-283` calls `JSON.stringify(value)` at `:264` and only checks `Buffer.byteLength` at `:276`. Thus the stored-value cap is applied after full serialization and is not a pre-allocation or getter-free boundary for arbitrary same-process objects.
+- **Snapshot/parser constraints:** `src/core/policy-input-json-parser.ts:1-10,52-69` applies the 512 KiB raw UTF-8 cap and per-container limits while constructing parsed containers. `src/core/policy-input-snapshot.ts:60-62,107-110` rejects Proxy values before reflection but ordinary-object `Reflect.ownKeys` still materializes its complete key list before the entry count is checked. This limitation is documented and remains a traversal bound, not a pre-allocation memory bound.
+
+### Existing test coverage versus the missing F-01 proof
+
+- `test/core/process-isolated-policy-engine.test.ts:87-117` covers cooperative caller cancellation and hard termination of a non-cooperative evaluator process; `:179-194` covers a terminal-candidate race; `:228-236` covers shutdown cancellation; `:254-271` covers caller/parent cancellation ordering.
+- `test/integration/process-signals.test.mjs:1-179` exercises signals/IPC against a single spawned runtime process.
+- The inspected process test sources do not create an evaluator Child plus Grandchild, record all descendant PIDs, or assert their disappearance after timeout/cancellation/shutdown. They therefore do not prove process-tree containment, orphan cleanup, or zombie handling. Those F-01 scenarios remain **NOT VERIFIED**.
+- No local tests were executed in this audit session. GitHub CI is evidence only for the configured test suite, not for the missing descendant-containment scenarios.
+
+### CI evidence re-checked
+
+Workflow run `45693201850`, head SHA `75b85703a1392ae97f429b630d9b84281b790742`, completed successfully. Its four jobs were:
+- `verify (ubuntu-latest)`: SUCCESS
+- `verify (macos-latest)`: SUCCESS
+- `verify (windows-latest)`: SUCCESS
+- `Dependency Security Audit`: SUCCESS
+
+The three verify jobs report successful `npm ci`, typecheck, contract typecheck, build, unit/API tests, runtime health smoke test, and `npm run test:process`. The detailed dependency-audit artifact contents were not independently inspected and remain **NOT VERIFIED**.
+
+### Final disposition after re-verification
+
+**HOLD.** The source-level gaps F-01 through F-04 remain open. No architecture change, implementation remediation, merge, release, deployment, production authorization, Phase 0 grant, or agent activation was performed. F-01 remains exactly **OPEN / HOLD** pending an OS-enforced, reproducible process-tree test with independently verified descendant cleanup and a reviewable commit SHA.
