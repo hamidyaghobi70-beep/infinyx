@@ -1,6 +1,6 @@
 # Tenant Invitation and Acceptance — Implementation Design
 
-**Status:** Design approved; implementation not yet authorized  
+**Status:** Implementation in progress under founder approval; production integrations remain gated  
 **Decision:** ADR-0010  
 **Decision owner:** INFINYX founder  
 **Default invitation lifetime:** 72 hours  
@@ -8,9 +8,9 @@
 
 ## 1. Purpose and implementation boundary
 
-This document translates ADR-0010 into an implementation-ready design. It is not a claim that invitation functionality exists. The current branch has membership lifecycle persistence, but no invitation table, invitation repository, identity verification adapter, delivery adapter, API endpoint, or UI.
+This document translates ADR-0010 into an implementation-ready design. It is not a claim that invitation functionality exists. The branch now contains invitation persistence, tenant-scoped audit, encrypted delivery outbox storage, token/identity cryptographic primitives, and domain services for create, revoke, and acceptance. The identity-directory and identity-verifier contracts are provider-neutral and have no production provider implementation. No delivery worker/provider, HTTP endpoint, or UI exists.
 
-All future implementation must remain on `feat/adr-platform-foundation`. Keep `main` unchanged. A separate founder approval is required before code changes. No merge, release, or deployment is authorized.
+All future implementation must remain on `feat/adr-platform-foundation`. Keep `main` unchanged. The founder has approved the bounded implementation scope. Keep `main` unchanged. No merge, release, or deployment is authorized.
 
 ## 2. Existing foundations and constraints
 
@@ -25,7 +25,7 @@ The current repository provides:
 Important limitations:
 - The current tenant GUC is defense in depth, not cryptographically authenticated.
 - No production identity provider has been selected.
-- No verified email/phone assertion contract is currently implemented.
+- No production identity provider or trusted assertion implementation has been selected; acceptance fails closed without an injected verifier.
 - Branch tables and branch assignments are not implemented.
 - Current code is not production-ready and has not undergone independent security review.
 
@@ -41,8 +41,8 @@ Proposed columns:
 | `tenant_id` | text NOT NULL | Tenant boundary |
 | `identity_type` | text/enum NOT NULL | `email` or `phone` |
 | `normalized_identity` | text NOT NULL | Canonical target identity |
-| `identity_fingerprint` | bytea NOT NULL | Keyed fingerprint for lookup/deduplication without indexing raw identity |
-| `token_hash` | bytea NOT NULL | One-way hash of high-entropy token |
+| `identity_fingerprint` | bytea NOT NULL | HMAC-SHA-256 fingerprint; raw identity is not stored in the invitation row |
+| `token_hash` | bytea NOT NULL | HMAC-SHA-256 of a 256-bit random token |\n| `identity_key_version`, `token_key_version` | integer NOT NULL | Key version metadata |
 | `role` | text NOT NULL | `admin`, `manager`, `editor`, or `viewer` |
 | `status` | text NOT NULL | `pending`, `accepted`, `revoked`, `expired` |
 | `invited_by` | text NOT NULL | Actor subject |
@@ -62,9 +62,9 @@ Design constraints:
 - Index pending invitations by tenant and identity fingerprint for controlled lookup.
 - RLS ENABLE and FORCE with tenant-scoped policy.
 - Application role receives only the minimum required SELECT/INSERT and narrowly scoped UPDATE columns. No application UPDATE/DELETE of audit rows.
-- Avoid storing raw identity in general-purpose logs. Whether the normalized identity is encrypted at rest or stored in a separately protected identity vault must be decided during implementation security review. The keyed fingerprint must use a managed secret and support rotation.
+- Raw identity and token are absent from the invitation row. The encrypted outbox payload contains the normalized target and raw token under AES-256-GCM with tenant/invitation/version associated data. Key storage, rotation, and production secret provisioning remain deployment gates.
 
-A partial unique index for one pending invitation per tenant and identity may be used, but its exact semantics must account for expiration. An expired-but-not-yet-materialized row must not block a new invitation indefinitely. Use transaction-time expiry resolution plus a safe uniqueness strategy; do not rely on a time-dependent partial-index predicate.
+A pending-identity lookup is serialized by the tenant row lock. Expired pending invitations are transitioned to `expired` using PostgreSQL time and audited before duplicate detection. A live duplicate pending invitation is rejected; resend/replacement is not implemented.
 
 ### 3.2 `tenant_invitation_audit_events`
 
@@ -79,7 +79,7 @@ Proposed append-only audit table:
 - `correlation_id`
 - `occurred_at`
 
-Do not store raw invitation tokens, OTPs, passwords, full verification payloads, or unnecessary personal data. Apply RLS ENABLE/FORCE and tenant scope. Application role cannot UPDATE/DELETE audit rows. Define retention and privileged audit access separately.
+Do not store raw invitation tokens, OTPs, passwords, full verification payloads, or unnecessary personal data. The table has RLS ENABLE/FORCE and tenant scope. The application role has SELECT/INSERT only and cannot UPDATE/DELETE audit rows. Define retention and privileged audit access separately.
 
 ## 4. Identity verification contract
 
@@ -92,7 +92,7 @@ Acceptance must receive a trusted, server-validated identity assertion from the 
 
 The adapter must validate issuer, audience, signature/cryptographic integrity, expiry, and account binding according to the selected provider. Do not accept client-supplied `verified=true`, raw email/phone, or user ID as proof.
 
-The invitation service compares the trusted verified identity with the invitation's target identity using the same canonicalization rules used at invitation creation. Email normalization and phone normalization must be deterministic and versioned; phone parsing must use an explicit country context rather than guessing. The provider and exact assertion schema remain implementation prerequisites.
+The invitation service compares the trusted verified identity with the invitation's target identity using the same canonicalization rules used at invitation creation. Email normalization and phone normalization must be deterministic and versioned; phone parsing must use an explicit country context rather than guessing. The provider and exact assertion schema remain implementation prerequisites. The acceptance service accepts only a server-injected `InvitationIdentityVerifier`; no default or client-provided verifier exists, so acceptance remains unavailable until a provider is selected and integrated.
 
 If the invitee is new, registration and verification happen before acceptance. If the invitee already has an account, they authenticate and prove control of the invited identity. Account linking remains exclusively within the trusted identity provider workflow.
 
@@ -106,7 +106,7 @@ If the invitee is new, registration and verification happen before acceptance. I
 6. Redact token-bearing URLs and request fields from logs, traces, analytics, and error reporting.
 7. Rate-limit token checks and acceptance attempts by relevant combinations of IP/device, invitation, and account while avoiding account enumeration.
 
-The final hash/pepper strategy and secret-management mechanism must be confirmed during implementation review.
+The current implementation uses HMAC-SHA-256 with 32-byte key material for token hashes and identity fingerprints, and AES-256-GCM for outbox payloads. Key material is injected, never committed. Key rotation and secure secret-manager wiring remain open; the current acceptance path requires matching key versions.
 
 ## 6. Authorization and creation flow
 
@@ -121,7 +121,7 @@ Within one tenant-scoped transaction:
 8. Enforce invitation role allowlist; reject `owner`.
 9. Resolve any prior pending invitation for the same tenant/identity under lock. Require explicit, audited handling (revoke/replace) rather than silently issuing multiple live tokens.
 10. Insert invitation, token hash, expiry (`now() + interval '72 hours'`), and audit event atomically.
-11. Commit before dispatching delivery through an outbox/adapter pattern.
+11. Insert an AES-256-GCM encrypted outbox payload in the same transaction. A worker must dispatch only after commit; the worker is not yet implemented.
 
 The exact policy for an existing pending invitation should be deterministic: recommended behavior is to reject duplicate creation with a generic conflict unless an authorized explicit resend/replacement action revokes the old invitation and creates a new record in one transaction. Resend must not extend an existing token's expiry silently.
 
@@ -209,18 +209,18 @@ Use real PostgreSQL 16, RLS ENABLE/FORCE, and the least-privilege application ro
 
 Before implementation begins, the implementation plan must resolve:
 - selected identity provider and trusted verified-identity assertion contract;
-- safe token-to-tenant bootstrap lookup under RLS;
-- email/phone normalization library and country context rules;
-- token hash/pepper and secret rotation mechanism;
-- invitation identity privacy/encryption and fingerprint key management;
+- production ownership of `lookup_tenant_for_invitation_token(bytea)`: the current security-definer function uses a fixed search path and returns only `tenant_id`, but its owner must be a dedicated, reviewed role able to read through forced RLS (for example a narrowly scoped `BYPASSRLS` role); the CI migration owner is the PostgreSQL superuser and is not a production pattern;
+- email normalization/versioning and phone E.164 parsing/country-context rules (the current implementation rejects non-E.164 phone values rather than guessing);
+- production secret-manager integration and key rotation/key-version lookup; current code uses injected HMAC/AES keys and does not implement rotation;
+- fingerprint-key privacy governance and rotation procedure;
 - exact duplicate pending invitation/resend behavior;
-- outbox schema/worker and delivery adapter boundary;
+- outbox worker, delivery adapter, retry/backoff, rate limits, and provider selection;
 - whether denied unauthenticated attempts can be audited without unsafe cross-tenant disclosure;
 - migration privileges, RLS policies, and trigger-level invariants.
 
-These are engineering/security details to be finalized within the approved implementation scope. They must not be bypassed through permissive defaults.
+These gates must be resolved before production enablement. Missing provider configuration, keys, or the privileged lookup role must fail closed; do not weaken RLS or use permissive defaults.
 
-## 13. Proposed implementation slices (not yet authorized)
+## 13. Implementation slices and current status
 
 1. **Persistence foundation:** invitation and audit schema, constraints, RLS, least-privilege grants, expiry/state invariants.
 2. **Domain service:** invitation create/revoke/accept repositories, tenant-first locking, generation creation, idempotency, atomic audit.
@@ -232,4 +232,4 @@ No HTTP API or UI should be included unless separately scoped and approved. Impl
 
 ## 14. Governance
 
-This design is approved for documentation. Code implementation requires separate explicit founder approval of the bounded scope and prerequisites. Keep all work on `feat/adr-platform-foundation`; keep `main` unchanged. No merge, release, or deployment is authorized.
+The founder approved implementation of the bounded scope. Provider selection, production secrets, lookup-function ownership, and production enablement remain separate gates. Keep all work on `feat/adr-platform-foundation`; keep `main` unchanged. No merge, release, or deployment is authorized.
