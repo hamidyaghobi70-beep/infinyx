@@ -266,9 +266,9 @@ export async function acceptTenantInvitation(
 
       const memberships = await transaction.query<{ membership_id: string }>(
         `INSERT INTO tenant_memberships (tenant_id, user_id, internal_user_id, role, generation)
-         VALUES ($1, $2, $2::uuid, $3, $4)
+         VALUES ($1, $2::text, $3::uuid, $4, $5)
          RETURNING membership_id::text AS membership_id`,
-        [tenantId, principal.userId, role, generation]
+        [tenantId, principal.userId, principal.userId, role, generation]
       );
       const membershipId = memberships[0]?.membership_id;
       if (!membershipId) throw new InvitationAcceptanceUnavailableError();
