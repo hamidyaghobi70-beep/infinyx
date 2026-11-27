@@ -183,7 +183,7 @@ export function createBearerAuthMiddleware(
   return (request, response, next) => {
     const header = request.header("authorization");
     const reject = () => { response.status(401).json({ error: "unauthorized" }); };
-    if (!header || !/^Bearer [^\\s]+$/.test(header)) {
+    if (!header || !/^Bearer [^\s]+$/.test(header)) {
       reject();
       return;
     }
