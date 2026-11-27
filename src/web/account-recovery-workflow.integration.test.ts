@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { createPostgresPool } from "../persistence/postgres-pool.js";
 import { recoverSuspendedAccount } from "./account-recovery-workflow.js";
-import { createOpaqueSessionId } from "./session-crypto.js";
+import { createCsrfToken, createOpaqueSessionId } from "./session-crypto.js";
 import { PostgresAccountRecoveryTransactionStore } from "./account-recovery-transactions.js";
 import { PostgresWebSessionStore } from "./session-store.js";
 import { completeAccountSessionRevocation } from "./account-session-revocation.js";
@@ -44,6 +44,23 @@ integrationDescribe("PostgreSQL safe suspended account recovery", () => {
       [userId, issuer, subject]
     );
     const identityId = inserted.rows[0]!.identity_id;
+    let sessionId: string | undefined;
+    if (identityStatus === "active") {
+      const sessions = new PostgresWebSessionStore(pool, Buffer.alloc(32, 31));
+      sessionId = createOpaqueSessionId();
+      const csrfToken = createCsrfToken();
+      const now = new Date();
+      await sessions.create({
+        sessionId, csrfToken, userId, issuer, subject,
+        tokenBundle: {
+          accessToken: "synthetic-access-token",
+          accessTokenExpiresAt: now.getTime() + 300_000,
+          csrfToken
+        },
+        idleExpiresAt: new Date(now.getTime() + 1_800_000),
+        absoluteExpiresAt: new Date(now.getTime() + 28_800_000)
+      });
+    }
 
     if (identityStatus === "revoked") {
       await adminPool.query(
@@ -74,7 +91,7 @@ integrationDescribe("PostgreSQL safe suspended account recovery", () => {
         WHERE user_id = $1::uuid AND completed_at IS NULL`,
       [userId]
     );
-    return { userId, issuer, subject, identityId };
+    return { userId, issuer, subject, identityId, sessionId };
   }
 
   it("persists and consumes recovery transactions with the least-privilege application role", async () => {
@@ -126,9 +143,16 @@ integrationDescribe("PostgreSQL safe suspended account recovery", () => {
     expect(outbox.rows[0]).toEqual({ user_id: account.userId, completed_at: null });
 
     const sessions = new PostgresWebSessionStore(pool, Buffer.alloc(32, 31));
+    expect(await sessions.findActive(account.sessionId!)).toBeNull();
     await expect(completeAccountSessionRevocation(
       pool, sessions, account.userId, result.outboxId
     )).resolves.toBe(true);
+    const persistedSession = await adminPool.query(
+      "SELECT revoked_at FROM web_sessions WHERE user_id = $1::uuid",
+      [account.userId]
+    );
+    expect(persistedSession.rows.length).toBeGreaterThan(0);
+    expect(persistedSession.rows.every(row => row.revoked_at !== null)).toBe(true);
     const completedOutbox = await adminPool.query(
       "SELECT completed_at FROM user_account_session_revocation_outbox WHERE outbox_id = $1::uuid",
       [result.outboxId]
