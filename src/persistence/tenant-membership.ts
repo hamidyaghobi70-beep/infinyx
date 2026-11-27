@@ -18,7 +18,7 @@ export interface TenantMembership {
   readonly generation: number;
   readonly role: TenantRole;
   readonly status: "active";
-  readonly version: number;
+  readonly version: string;
 }
 
 export class TenantAuthorizationError extends Error {
@@ -63,7 +63,7 @@ export async function getTenantMembership(
     generation: row.generation,
     role: row.role,
     status: "active",
-    version: Number(row.version)
+    version: String(row.version)
   });
 }
 
