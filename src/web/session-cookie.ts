@@ -144,12 +144,12 @@ export function readIdentitySecurityCookie(
   const name = purpose === "stepup"
     ? IDENTITY_STEP_UP_COOKIE_NAME
     : IDENTITY_SECURITY_TRANSACTION_COOKIE_NAME;
-  for (const part of header.split(";")) {
+  const matches = header.split(";").filter(part => {
     const separator = part.indexOf("=");
-    if (separator < 0) continue;
-    if (part.slice(0, separator).trim() !== name) continue;
-    const value = part.slice(separator + 1).trim();
-    return /^[A-Za-z0-9_-]{43}$/u.test(value) ? value : null;
-  }
-  return null;
+    return separator >= 0 && part.slice(0, separator).trim() === name;
+  });
+  if (matches.length !== 1) return null;
+  const separator = matches[0]!.indexOf("=");
+  const value = matches[0]!.slice(separator + 1).trim();
+  return /^[A-Za-z0-9_-]{43}$/u.test(value) ? value : null;
 }
