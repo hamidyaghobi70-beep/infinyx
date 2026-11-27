@@ -179,3 +179,65 @@ function isValidOidcLoginPayload(value: unknown): value is OidcLoginPayload {
     typeof item.nonce === "string" &&
     /^[A-Za-z0-9_-]{43}$/u.test(item.nonce);
 }
+
+
+export interface IdentitySecurityTransactionPayload {
+  readonly codeVerifier: string;
+  readonly nonce: string;
+}
+
+export function encryptIdentitySecurityTransactionPayload(
+  payload: IdentitySecurityTransactionPayload,
+  key: Buffer
+): Buffer {
+  if (!Buffer.isBuffer(key) || key.length !== ENCRYPTION_KEY_BYTES ||
+      !isValidIdentitySecurityTransactionPayload(payload)) throw new SessionCryptoError();
+  try {
+    const nonce = randomBytes(GCM_NONCE_BYTES);
+    const cipher = createCipheriv("aes-256-gcm", key, nonce);
+    cipher.setAAD(Buffer.from("infinyx:identity-security-transaction:v1", "utf8"));
+    const plaintext = Buffer.from(JSON.stringify(payload), "utf8");
+    if (plaintext.length > 4096) throw new SessionCryptoError();
+    const ciphertext = Buffer.concat([cipher.update(plaintext), cipher.final()]);
+    return Buffer.concat([Buffer.from([1]), nonce, cipher.getAuthTag(), ciphertext]);
+  } catch {
+    throw new SessionCryptoError();
+  }
+}
+
+export function decryptIdentitySecurityTransactionPayload(
+  encrypted: Buffer,
+  key: Buffer
+): IdentitySecurityTransactionPayload {
+  if (!Buffer.isBuffer(encrypted) || encrypted.length < 1 + GCM_NONCE_BYTES + GCM_TAG_BYTES ||
+      encrypted.length > 4096 + 1 + GCM_NONCE_BYTES + GCM_TAG_BYTES ||
+      encrypted[0] !== 1 || !Buffer.isBuffer(key) || key.length !== ENCRYPTION_KEY_BYTES) {
+    throw new SessionCryptoError();
+  }
+  try {
+    const nonce = encrypted.subarray(1, 1 + GCM_NONCE_BYTES);
+    const tagStart = 1 + GCM_NONCE_BYTES;
+    const tag = encrypted.subarray(tagStart, tagStart + GCM_TAG_BYTES);
+    const ciphertext = encrypted.subarray(tagStart + GCM_TAG_BYTES);
+    const decipher = createDecipheriv("aes-256-gcm", key, nonce);
+    decipher.setAAD(Buffer.from("infinyx:identity-security-transaction:v1", "utf8"));
+    decipher.setAuthTag(tag);
+    const plaintext = Buffer.concat([decipher.update(ciphertext), decipher.final()]);
+    const parsed: unknown = JSON.parse(plaintext.toString("utf8"));
+    if (!isValidIdentitySecurityTransactionPayload(parsed)) throw new SessionCryptoError();
+    return Object.freeze({ codeVerifier: parsed.codeVerifier, nonce: parsed.nonce });
+  } catch {
+    throw new SessionCryptoError();
+  }
+}
+
+function isValidIdentitySecurityTransactionPayload(
+  value: unknown
+): value is IdentitySecurityTransactionPayload {
+  if (!value || typeof value !== "object") return false;
+  const item = value as Record<string, unknown>;
+  return typeof item.codeVerifier === "string" &&
+    /^[A-Za-z0-9._~-]{43,128}$/u.test(item.codeVerifier) &&
+    typeof item.nonce === "string" &&
+    /^[A-Za-z0-9_-]{43}$/u.test(item.nonce);
+}
