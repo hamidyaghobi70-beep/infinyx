@@ -134,6 +134,61 @@ integrationDescribe("PostgreSQL identity security transaction persistence", () =
     }
   });
 
+  it("rejects expired transactions and step-up grants using database timestamps", async () => {
+    const userId = randomUUID();
+    let clock = new Date();
+    const store = new PostgresIdentitySecurityTransactionStore(pool, key, () => new Date(clock));
+    const payload = {
+      codeVerifier: createOpaqueSessionId(),
+      nonce: createOpaqueSessionId()
+    };
+    await adminPool.query("INSERT INTO users (id) VALUES ($1::uuid)", [userId]);
+
+    try {
+      const expiredState = createOpaqueSessionId();
+      const expiredBinding = createOpaqueSessionId();
+      const expiredSession = createOpaqueSessionId();
+      await store.createTransaction(
+        expiredState, expiredBinding, userId, expiredSession,
+        "reauth_identity_link", payload, new Date(clock.getTime() + 60_000)
+      );
+      clock = new Date(clock.getTime() + 2 * 60 * 1000);
+      expect(await store.consumeTransaction(
+        expiredState, expiredBinding, userId, expiredSession, "reauth_identity_link"
+      )).toBeNull();
+
+      clock = new Date();
+      const state = createOpaqueSessionId();
+      const binding = createOpaqueSessionId();
+      const session = createOpaqueSessionId();
+      await store.createTransaction(
+        state, binding, userId, session,
+        "reauth_identity_link", payload, new Date(clock.getTime() + 4 * 60 * 1000)
+      );
+      const consumed = await store.consumeTransaction(
+        state, binding, userId, session, "reauth_identity_link"
+      );
+      expect(consumed).not.toBeNull();
+      const grant = await store.issueVerifiedStepUpGrant(
+        consumed!.transactionId, userId, session, "identity_link",
+        new Date(clock.getTime() + 4 * 60 * 1000)
+      );
+      expect(grant).toBeTruthy();
+      clock = new Date(clock.getTime() + 6 * 60 * 1000);
+      expect(await store.consumeStepUpGrant(
+        grant!, userId, session, "identity_link"
+      )).toBe(false);
+    } finally {
+      await adminPool.query(
+        "DELETE FROM identity_step_up_grants WHERE user_id = $1::uuid", [userId]
+      );
+      await adminPool.query(
+        "DELETE FROM identity_security_transactions WHERE user_id = $1::uuid", [userId]
+      );
+      await adminPool.query("DELETE FROM users WHERE id = $1::uuid", [userId]);
+    }
+  });
+
   it("enforces database checks for malformed hashes and invalid purpose values", async () => {
     const userId = randomUUID();
     await adminPool.query("INSERT INTO users (id) VALUES ($1::uuid)", [userId]);
