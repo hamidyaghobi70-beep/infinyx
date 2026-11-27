@@ -207,9 +207,11 @@ integrationDescribe("PostgreSQL tenant RLS integration", () => {
     }
   });
   it("resolves a tenant role only from the caller's membership row", async () => {
-    const membership = await getTenantMembership(
+    const owner = principalFor("tenant-a");
+    const membership = await withTenantTransaction(
       tenantPool,
-      principalFor("tenant-a")
+      owner,
+      (transaction) => getTenantMembership(transaction, owner)
     );
     expect(membership).toEqual({
       tenantId: "tenant-a",
@@ -220,17 +222,25 @@ integrationDescribe("PostgreSQL tenant RLS integration", () => {
 
   it("denies users without a membership and enforces explicit role allowlists", async () => {
     await expect(
-      getTenantMembership(
+      withTenantTransaction(
         tenantPool,
-        principalFor("tenant-a", "user-not-a-member")
+        principalFor("tenant-a", "user-not-a-member"),
+        (transaction) => getTenantMembership(
+          transaction,
+          principalFor("tenant-a", "user-not-a-member")
+        )
       )
     ).resolves.toBeNull();
 
     await expect(
-      requireTenantRole(
+      withTenantTransaction(
         tenantPool,
         principalFor("tenant-a"),
-        ["viewer", "editor"]
+        (transaction) => requireTenantRole(
+          transaction,
+          principalFor("tenant-a"),
+          ["viewer", "editor"]
+        )
       )
     ).rejects.toBeInstanceOf(TenantAuthorizationError);
   });
