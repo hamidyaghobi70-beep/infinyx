@@ -178,6 +178,62 @@ integrationDescribe("PostgreSQL external identity unlink workflow", () => {
     expect(replay).toEqual({ outcome: "step_up_required" });
   });
 
+
+  it("rejects link-purpose and expired unlink step-up grants", async () => {
+    const { userId, identities } = await createUserWithIdentities(2);
+    const sessionId = createOpaqueSessionId();
+
+    const wrongPurposeGrant = await createUnlinkGrant(userId, sessionId);
+    await adminPool.query(
+      "UPDATE identity_step_up_grants SET purpose = 'identity_link' WHERE grant_hash = $1",
+      [hashOpaqueSecret(wrongPurposeGrant)]
+    );
+    expect(await unlinkVerifiedIdentity(
+      pool, userId, sessionId, wrongPurposeGrant, identities[0]!, randomUUID()
+    )).toEqual({ outcome: "step_up_required" });
+
+    const expiredGrant = await createUnlinkGrant(userId, sessionId);
+    const grantHash = hashOpaqueSecret(expiredGrant);
+    const source = await adminPool.query(
+      "SELECT source_transaction_id::text AS transaction_id FROM identity_step_up_grants WHERE grant_hash = $1",
+      [grantHash]
+    );
+    await adminPool.query(
+      `UPDATE identity_security_transactions
+          SET created_at = now() - interval '4 minutes',
+              expires_at = now() - interval '1 minute',
+              consumed_at = NULL
+        WHERE transaction_id = $1::uuid`,
+      [source.rows[0]!.transaction_id]
+    );
+    await adminPool.query(
+      `UPDATE identity_step_up_grants
+          SET created_at = now() - interval '4 minutes',
+              expires_at = now() - interval '1 minute'
+        WHERE grant_hash = $1`,
+      [grantHash]
+    );
+    expect(await unlinkVerifiedIdentity(
+      pool, userId, sessionId, expiredGrant, identities[0]!, randomUUID()
+    )).toEqual({ outcome: "step_up_required" });
+  });
+
+  it("cannot unlink an identity owned by another internal user", async () => {
+    const actor = await createUserWithIdentities(2);
+    const stranger = await createUserWithIdentities(1);
+    const sessionId = createOpaqueSessionId();
+    const grant = await createUnlinkGrant(actor.userId, sessionId);
+    const result = await unlinkVerifiedIdentity(
+      pool, actor.userId, sessionId, grant, stranger.identities[0]!, randomUUID()
+    );
+    expect(result).toEqual({ outcome: "denied" });
+    const lifecycle = await adminPool.query(
+      "SELECT status, version FROM user_external_identity_lifecycle WHERE identity_id = $1::uuid",
+      [stranger.identities[0]]
+    );
+    expect(lifecycle.rows[0]).toEqual({ status: "active", version: 1 });
+  });
+
   it("rolls back lifecycle transition and grant consumption if the required audit write fails", async () => {
     const { userId, identities } = await createUserWithIdentities(2);
     const sessionId = createOpaqueSessionId();
