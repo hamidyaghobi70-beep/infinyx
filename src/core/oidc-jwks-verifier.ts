@@ -18,6 +18,7 @@ export interface OidcJwksVerifierOptions {
   readonly issuer: string;
   readonly audience: string;
   readonly authorizedParties: readonly string[];
+  readonly accessTokenType: string;
   readonly clockToleranceSeconds?: number;
   readonly cacheTtlMs?: number;
   readonly requestTimeoutMs?: number;
@@ -44,7 +45,8 @@ export function createOidcJwksPrincipalVerifier(
   options: OidcJwksVerifierOptions
 ): (token: string) => Promise<VerifiedExternalIdentity> {
   const issuer = validateHttpsUrl(options.issuer);
-  if (!options.audience.trim() || !Array.isArray(options.authorizedParties) ||
+  if (!options.audience.trim() || !options.accessTokenType.trim() ||
+      !Array.isArray(options.authorizedParties) ||
       options.authorizedParties.length === 0 ||
       options.authorizedParties.some((party) => typeof party !== "string" || !party.trim())) {
     throw new TypeError("A trusted API audience and at least one authorized client are required.");
@@ -154,7 +156,7 @@ export function createOidcJwksPrincipalVerifier(
       if (header.alg !== "RS256" || header.typ !== "JWT" ||
           typeof header.kid !== "string" || !KID_PATTERN.test(header.kid) ||
           header.jku !== undefined || header.x5u !== undefined || header.jwk !== undefined ||
-          header.crit !== undefined || claims.typ !== "Bearer" ||
+          header.crit !== undefined || claims.typ !== options.accessTokenType ||
           typeof claims.azp !== "string" || !allowedParties.has(claims.azp)) {
         throw new Error();
       }
