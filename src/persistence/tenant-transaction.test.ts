@@ -92,6 +92,21 @@ describe("withTenantTransaction", () => {
     expect(db.releaseCount).toBe(1);
   });
 
+  it("rejects use of a captured transaction after it has completed", async () => {
+    const db = fakeDatabase();
+    let captured: Parameters<Parameters<typeof withTenantTransaction>[2]>[0] | undefined;
+    await withTenantTransaction(db.pool, principal, async (tx) => {
+      captured = tx;
+      return "complete";
+    });
+
+    const callsBeforeReuse = db.calls.length;
+    await expect(captured!.query("SELECT private_data"))
+      .rejects.toBeInstanceOf(TenantPersistenceError);
+    expect(db.calls).toHaveLength(callsBeforeReuse);
+    expect(db.releaseCount).toBe(1);
+  });
+
   it("rejects a forged principal before acquiring a database client", async () => {
     const db = fakeDatabase();
     const connect = vi.spyOn(db.pool, "connect");
