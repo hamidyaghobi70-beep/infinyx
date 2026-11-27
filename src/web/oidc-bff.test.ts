@@ -35,7 +35,9 @@ async function openServer(handlers: ReturnType<typeof createOidcBffHandlers>) {
     handleUnlinkReauthCallback: (_request, response) => { response.statusCode = 404; response.end(); },
     unlinkIdentity: (_request, response) => { response.statusCode = 404; response.end(); },
     startLink: (_request, response) => { response.statusCode = 404; response.end(); },
-    handleLinkCallback: (_request, response) => { response.statusCode = 404; response.end(); }
+    handleLinkCallback: (_request, response) => { response.statusCode = 404; response.end(); },
+    startAccountRecovery: (_request, response) => { response.statusCode = 404; response.end(); },
+    handleAccountRecoveryCallback: (_request, response) => { response.statusCode = 404; response.end(); }
   });
   servers.push(server);
   await new Promise<void>(resolve => server.listen(0, "127.0.0.1", resolve));
