@@ -33,7 +33,7 @@ interface RoleRow {
 
 const issuer = "https://infinyx.integration.test";
 const audience = "infinyx-integration";
-const subjectIds = new Map([
+const subjectIds = new Map<string, string>([
   ["user-tenant-a", "10000000-0000-4000-8000-000000000001"],
   ["user-tenant-b", "10000000-0000-4000-8000-000000000002"],
   ["user-not-a-member", "10000000-0000-4000-8000-000000000003"],
@@ -42,7 +42,7 @@ const subjectIds = new Map([
   ["user-lifecycle-concurrent", "10000000-0000-4000-8000-000000000006"],
   ["user-lifecycle-trigger-guard", "10000000-0000-4000-8000-000000000007"],
   ["user-invited-from-other-tenant", "10000000-0000-4000-8000-000000000008"]
-] as const);
+]);
 const userIdFor = (subject: string) => {
   const id = subjectIds.get(subject);
   if (!id) throw new Error("Unseeded test identity");
