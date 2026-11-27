@@ -145,6 +145,10 @@ integrationDescribe("PostgreSQL safe suspended account recovery", () => {
       outcome: "succeeded", reason_code: "active_identity_proved",
       user_id: account.userId, identity_id: account.identityId
     });
+    await expect(adminPool.query(
+      "UPDATE user_account_recovery_audit_events SET reason_code = 'tampered' WHERE correlation_id = $1::uuid",
+      [recoveryCorrelationId]
+    )).rejects.toThrow();
 
     const bindingAfter = await adminPool.query(
       `SELECT identity_id::text, user_id::text, issuer, subject, created_at
@@ -164,10 +168,18 @@ integrationDescribe("PostgreSQL safe suspended account recovery", () => {
 
   it("cannot recover an account through a revoked identity", async () => {
     const account = await createAccount("revoked");
+    const recoveryCorrelationId = randomUUID();
     const result = await recoverSuspendedAccount(
-      pool, account.issuer, account.subject, randomUUID()
+      pool, account.issuer, account.subject, recoveryCorrelationId
     );
     expect(result).toEqual({ outcome: "denied" });
+    const deniedAudit = await adminPool.query(
+      "SELECT outcome, reason_code FROM user_account_recovery_audit_events WHERE correlation_id = $1::uuid",
+      [recoveryCorrelationId]
+    );
+    expect(deniedAudit.rows[0]).toEqual({
+      outcome: "denied", reason_code: "recovery_not_permitted"
+    });
     const state = await adminPool.query(
       "SELECT status, version FROM user_account_security WHERE user_id = $1::uuid",
       [account.userId]
