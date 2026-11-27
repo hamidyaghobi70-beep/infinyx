@@ -79,10 +79,14 @@ export async function recoverSuspendedAccount(
       return { outcome: "denied" };
     }
 
-    // Follow the same user -> identity -> lifecycle -> account-state lock order
-    // as the identity unlink workflow to avoid cross-workflow deadlocks.
+    // Share the per-user advisory lock with identity unlink so the proof
+    // cannot race an unlink of the same active sign-in method.
+    await client.query(
+      "SELECT pg_advisory_xact_lock(hashtextextended('identity-unlink:' || $1, 0))",
+      [first.user_id]
+    );
     const user = await client.query(
-      "SELECT id FROM users WHERE id = $1::uuid FOR UPDATE",
+      "SELECT id FROM users WHERE id = $1::uuid",
       [first.user_id]
     );
     if (user.rowCount !== 1) {
@@ -95,8 +99,7 @@ export async function recoverSuspendedAccount(
     const identity = await client.query<{ user_id: string; identity_id: string }>(
       `SELECT user_id::text AS user_id, identity_id::text AS identity_id
          FROM user_external_identities
-        WHERE issuer = $1 AND subject = $2
-        FOR UPDATE`,
+        WHERE issuer = $1 AND subject = $2`,
       [issuer, subject]
     );
     const currentIdentity = identity.rows[0];
