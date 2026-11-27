@@ -311,8 +311,8 @@ integrationDescribe("PostgreSQL tenant RLS integration", () => {
 
     await withTenantTransaction(tenantPool, owner, "tenant-a", (transaction) =>
       transaction.query(
-        "INSERT INTO tenant_memberships (tenant_id, user_id, internal_user_id, role) VALUES ($1, $2, $2::uuid, $3)",
-        ["tenant-a", targetUserId, "viewer"]
+        "INSERT INTO tenant_memberships (tenant_id, user_id, internal_user_id, role) VALUES ($1, $2::text, $3::uuid, $4)",
+        ["tenant-a", targetUserId, targetUserId, "viewer"]
       )
     );
 
@@ -341,8 +341,8 @@ integrationDescribe("PostgreSQL tenant RLS integration", () => {
 
     await withTenantTransaction(tenantPool, owner, "tenant-a", (transaction) =>
       transaction.query(
-        "INSERT INTO tenant_memberships (tenant_id, user_id, internal_user_id, role, generation) VALUES ($1, $2, $2::uuid, $3, $4)",
-        ["tenant-a", targetUserId, "viewer", 2]
+        "INSERT INTO tenant_memberships (tenant_id, user_id, internal_user_id, role, generation) VALUES ($1, $2::text, $3::uuid, $4, $5)",
+        ["tenant-a", targetUserId, targetUserId, "viewer", 2]
       )
     );
 
@@ -388,8 +388,8 @@ integrationDescribe("PostgreSQL tenant RLS integration", () => {
     const admin = principalFor("tenant-a", "user-lifecycle-admin");
     await withTenantTransaction(tenantPool, owner, "tenant-a", (transaction) =>
       transaction.query(
-        "INSERT INTO tenant_memberships (tenant_id, user_id, internal_user_id, role) VALUES ($1, $2, $2::uuid, $3)",
-        ["tenant-a", userIdFor("user-lifecycle-admin"), "admin"]
+        "INSERT INTO tenant_memberships (tenant_id, user_id, internal_user_id, role) VALUES ($1, $2::text, $3::uuid, $4)",
+        ["tenant-a", userIdFor("user-lifecycle-admin"), userIdFor("user-lifecycle-admin"), "admin"]
       )
     );
 
@@ -458,8 +458,8 @@ integrationDescribe("PostgreSQL tenant RLS integration", () => {
 
     await withTenantTransaction(tenantPool, owner, "tenant-a", (transaction) =>
       transaction.query(
-        "INSERT INTO tenant_memberships (tenant_id, user_id, internal_user_id, role) VALUES ($1, $2, $2::uuid, $3)",
-        ["tenant-a", targetUserId, "viewer"]
+        "INSERT INTO tenant_memberships (tenant_id, user_id, internal_user_id, role) VALUES ($1, $2::text, $3::uuid, $4)",
+        ["tenant-a", targetUserId, targetUserId, "viewer"]
       )
     );
 
@@ -505,8 +505,8 @@ integrationDescribe("PostgreSQL tenant RLS integration", () => {
 
     await withTenantTransaction(tenantPool, owner, "tenant-a", (transaction) =>
       transaction.query(
-        "INSERT INTO tenant_memberships (tenant_id, user_id, internal_user_id, role) VALUES ($1, $2, $2::uuid, $3)",
-        ["tenant-a", targetUserId, "viewer"]
+        "INSERT INTO tenant_memberships (tenant_id, user_id, internal_user_id, role) VALUES ($1, $2::text, $3::uuid, $4)",
+        ["tenant-a", targetUserId, targetUserId, "viewer"]
       )
     );
 
