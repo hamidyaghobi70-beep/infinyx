@@ -74,7 +74,7 @@ integrationDescribe("PostgreSQL tenant RLS integration", () => {
     pool = createPostgresPool({
       DATABASE_URL: databaseUrl!,
       DATABASE_SSL: "disable",
-      DATABASE_POOL_MAX: "1",
+      DATABASE_POOL_MAX: "4",
       DATABASE_CONNECTION_TIMEOUT_MS: "5000",
       DATABASE_IDLE_TIMEOUT_MS: "1000",
       DATABASE_STATEMENT_TIMEOUT_MS: "5000"
@@ -446,6 +446,53 @@ integrationDescribe("PostgreSQL tenant RLS integration", () => {
         ["tenant-a", "user-tenant-a"]
       )
     )).rejects.toBeInstanceOf(TenantPersistenceError);
+  });
+
+
+  it("serializes concurrent lifecycle changes for one tenant", async () => {
+    const owner = principalFor("tenant-a");
+    const targetUserId = "user-lifecycle-concurrent";
+    const target = principalFor("tenant-a", targetUserId);
+
+    await withTenantTransaction(tenantPool, owner, (transaction) =>
+      transaction.query(
+        "INSERT INTO tenant_memberships (tenant_id, user_id, role) VALUES ($1, $2, $3)",
+        ["tenant-a", targetUserId, "viewer"]
+      )
+    );
+
+    const outcomes = await Promise.all([
+      withTenantTransaction(tenantPool, owner, (transaction) =>
+        transitionTenantMembership(
+          transaction,
+          owner,
+          targetUserId,
+          "suspended",
+          "40000000-0000-4000-8000-000000000001"
+        )
+      ),
+      withTenantTransaction(tenantPool, owner, (transaction) =>
+        transitionTenantMembership(
+          transaction,
+          owner,
+          targetUserId,
+          "removed",
+          "40000000-0000-4000-8000-000000000002"
+        )
+      )
+    ]);
+
+    expect(outcomes.some((result) => result.outcome === "succeeded")).toBe(true);
+    const history = await withTenantTransaction(tenantPool, owner, (transaction) =>
+      transaction.query<{ status: string; version: string }>(
+        "SELECT status, version FROM tenant_memberships WHERE tenant_id = $1 AND user_id = $2 ORDER BY generation DESC LIMIT 1",
+        ["tenant-a", targetUserId]
+      )
+    );
+    expect(history[0]?.status).toBe("removed");
+    await expect(withTenantTransaction(tenantPool, target, (transaction) =>
+      getTenantMembership(transaction, target)
+    )).resolves.toBeNull();
   });
 
 });\n
