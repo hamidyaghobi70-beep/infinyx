@@ -17,6 +17,7 @@ import {
   TenantAuthorizationError
 } from "./tenant-membership.js";
 import { getCurrentTenant } from "./tenant-repository.js";
+import { transitionTenantMembership } from "./membership-lifecycle.js";
 
 const databaseUrl = process.env.INFINYX_TEST_DATABASE_URL;
 const integrationDescribe = databaseUrl ? describe : describe.skip;
@@ -215,9 +216,13 @@ integrationDescribe("PostgreSQL tenant RLS integration", () => {
       (transaction) => getTenantMembership(transaction, owner)
     );
     expect(membership).toEqual({
+      membershipId: expect.any(String),
       tenantId: "tenant-a",
       userId: "user-tenant-a",
-      role: "owner"
+      generation: 1,
+      role: "owner",
+      status: "active",
+      version: 1
     });
   });
 
@@ -236,9 +241,13 @@ integrationDescribe("PostgreSQL tenant RLS integration", () => {
         createdAt: expect.any(String)
       },
       membership: {
+        membershipId: expect.any(String),
         tenantId: "tenant-a",
         userId: "user-tenant-a",
-        role: "owner"
+        generation: 1,
+        role: "owner",
+        status: "active",
+        version: 1
       }
     });
   });
@@ -277,6 +286,106 @@ integrationDescribe("PostgreSQL tenant RLS integration", () => {
         )
       )
     ).rejects.toBeInstanceOf(TenantAuthorizationError);
+  });
+
+
+  it("applies audited membership transitions and preserves removed generations", async () => {
+    const owner = principalFor("tenant-a");
+    const targetUserId = "user-lifecycle-target";
+    const target = principalFor("tenant-a", targetUserId);
+
+    await withTenantTransaction(tenantPool, owner, (transaction) =>
+      transaction.query(
+        "INSERT INTO tenant_memberships (tenant_id, user_id, role) VALUES ($1, $2, $3)",
+        ["tenant-a", targetUserId, "viewer"]
+      )
+    );
+
+    const suspendId = "10000000-0000-4000-8000-000000000001";
+    await expect(withTenantTransaction(tenantPool, owner, (transaction) =>
+      transitionTenantMembership(transaction, owner, targetUserId, "suspended", suspendId)
+    )).resolves.toEqual({ outcome: "succeeded" });
+
+    await expect(withTenantTransaction(tenantPool, target, (transaction) =>
+      getTenantMembership(transaction, target)
+    )).resolves.toBeNull();
+
+    const reactivateId = "10000000-0000-4000-8000-000000000002";
+    await expect(withTenantTransaction(tenantPool, owner, (transaction) =>
+      transitionTenantMembership(transaction, owner, targetUserId, "active", reactivateId)
+    )).resolves.toEqual({ outcome: "succeeded" });
+
+    const removeId = "10000000-0000-4000-8000-000000000003";
+    await expect(withTenantTransaction(tenantPool, owner, (transaction) =>
+      transitionTenantMembership(transaction, owner, targetUserId, "removed", removeId)
+    )).resolves.toEqual({ outcome: "succeeded" });
+
+    await expect(withTenantTransaction(tenantPool, owner, (transaction) =>
+      transitionTenantMembership(transaction, owner, targetUserId, "removed", removeId)
+    )).resolves.toEqual({ outcome: "succeeded" });
+
+    await withTenantTransaction(tenantPool, owner, (transaction) =>
+      transaction.query(
+        "INSERT INTO tenant_memberships (tenant_id, user_id, role, generation) VALUES ($1, $2, $3, $4)",
+        ["tenant-a", targetUserId, "viewer", 2]
+      )
+    );
+
+    const current = await withTenantTransaction(tenantPool, target, (transaction) =>
+      getTenantMembership(transaction, target)
+    );
+    expect(current).toMatchObject({
+      tenantId: "tenant-a",
+      userId: targetUserId,
+      generation: 2,
+      status: "active",
+      role: "viewer"
+    });
+
+    const audit = await withTenantTransaction(tenantPool, owner, (transaction) =>
+      transaction.query<{ requested_status: string; outcome: string }>(
+        "SELECT requested_status, outcome FROM tenant_membership_audit_events WHERE tenant_id = $1 AND target_user_id = $2 ORDER BY occurred_at",
+        ["tenant-a", targetUserId]
+      )
+    );
+    expect(audit).toHaveLength(3);
+    expect(audit.map((row) => row.outcome)).toEqual([
+      "succeeded", "succeeded", "succeeded"
+    ]);
+  });
+
+  it("records denied owner-target lifecycle attempts without changing the owner", async () => {
+    const owner = principalFor("tenant-a");
+    const admin = principalFor("tenant-a", "user-lifecycle-admin");
+    await withTenantTransaction(tenantPool, owner, (transaction) =>
+      transaction.query(
+        "INSERT INTO tenant_memberships (tenant_id, user_id, role) VALUES ($1, $2, $3)",
+        ["tenant-a", "user-lifecycle-admin", "admin"]
+      )
+    );
+
+    await expect(withTenantTransaction(tenantPool, admin, (transaction) =>
+      transitionTenantMembership(
+        transaction,
+        admin,
+        "user-tenant-a",
+        "suspended",
+        "20000000-0000-4000-8000-000000000001"
+      )
+    )).resolves.toEqual({ outcome: "denied" });
+
+    const audit = await withTenantTransaction(tenantPool, owner, (transaction) =>
+      transaction.query<{ outcome: string }>(
+        "SELECT outcome FROM tenant_membership_audit_events WHERE tenant_id = $1 AND correlation_id = $2",
+        ["tenant-a", "20000000-0000-4000-8000-000000000001"]
+      )
+    );
+    expect(audit).toEqual([{ outcome: "denied" }]);
+
+    const ownerMembership = await withTenantTransaction(tenantPool, owner, (transaction) =>
+      getTenantMembership(transaction, owner)
+    );
+    expect(ownerMembership?.status).toBe("active");
   });
 
 });
