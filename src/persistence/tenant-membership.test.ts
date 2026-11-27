@@ -36,7 +36,7 @@ function principal() {
   return verifier(`${unsigned}.${signature}`);
 }
 
-function transactionWithRole(role: TenantRole | null): TenantTransaction {
+function transactionWithRole(role: TenantRole | null, status = "active"): TenantTransaction {
   return {
     query: async <Row = Record<string, unknown>>(
       sql: string,
@@ -50,7 +50,7 @@ function transactionWithRole(role: TenantRole | null): TenantTransaction {
         membership_id: "00000000-0000-4000-8000-000000000001",
         generation: 1,
         role,
-        status: "active",
+        status,
         version: "1"
       }] as unknown as readonly Row[]) : [];
     }
