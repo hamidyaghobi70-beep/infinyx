@@ -1,4 +1,9 @@
-import type { TenantTransaction } from "./tenant-transaction.js";
+export interface IdentityTransaction {
+  query<Row = Record<string, unknown>>(
+    sql: string,
+    values?: readonly unknown[]
+  ): Promise<readonly Row[]>;
+}
 
 export interface InternalUser {
   readonly id: string;
@@ -95,7 +100,7 @@ function toExternalIdentity(row: ExternalIdentityRow): ExternalIdentity {
  * when they also establish a verified external identity link.
  */
 export async function createInternalUser(
-  transaction: TenantTransaction
+  transaction: IdentityTransaction
 ): Promise<InternalUser> {
   try {
     const rows = await transaction.query<UserRow>(
@@ -110,7 +115,7 @@ export async function createInternalUser(
 }
 
 export async function getInternalUser(
-  transaction: TenantTransaction,
+  transaction: IdentityTransaction,
   userId: string
 ): Promise<InternalUser | null> {
   if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu.test(userId)) {
@@ -137,7 +142,7 @@ export async function getInternalUser(
  * This function never links by email/phone equality and never reassigns a link.
  */
 export async function linkExternalIdentity(
-  transaction: TenantTransaction,
+  transaction: IdentityTransaction,
   userId: string,
   issuer: string,
   subject: string
@@ -188,7 +193,7 @@ export async function linkExternalIdentity(
 }
 
 export async function resolveExternalIdentity(
-  transaction: TenantTransaction,
+  transaction: IdentityTransaction,
   issuer: string,
   subject: string
 ): Promise<ExternalIdentity | null> {
