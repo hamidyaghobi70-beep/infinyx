@@ -25,15 +25,11 @@ export async function completeAccountSessionRevocation(
 
   try {
     await sessions.revokeAllForUser(userId);
-    const completed = await pool.query(
-      `UPDATE user_account_session_revocation_outbox
-          SET completed_at = now(), attempts = attempts + 1, last_error_code = NULL
-        WHERE outbox_id = $1::uuid
-          AND user_id = $2::uuid
-          AND completed_at IS NULL`,
+    const completed = await pool.query<{ completed: boolean }>(
+      "SELECT complete_user_account_session_revocation($1::uuid, $2::uuid) AS completed",
       [outboxId, userId]
     );
-    if (completed.rowCount === 1) return true;
+    if (completed.rows[0]?.completed === true) return true;
 
     const current = await pool.query<{ completed_at: Date | null }>(
       `SELECT completed_at
