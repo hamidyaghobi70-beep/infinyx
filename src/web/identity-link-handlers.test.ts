@@ -17,7 +17,9 @@ async function openServer(handlers: ReturnType<typeof createIdentityLinkHandlers
     handleCallback: (_req, res) => { res.statusCode = 204; res.end(); },
     getSession: (_req, res) => { res.statusCode = 204; res.end(); },
     logout: (_req, res) => { res.statusCode = 204; res.end(); },
-    ...handlers
+    ...handlers,
+    startAccountRecovery: (_req, res) => { res.statusCode = 404; res.end(); },
+    handleAccountRecoveryCallback: (_req, res) => { res.statusCode = 404; res.end(); }
   });
   servers.push(server);
   await new Promise<void>(resolve => server.listen(0, "127.0.0.1", resolve));
