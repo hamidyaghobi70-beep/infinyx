@@ -91,6 +91,29 @@ integrationDescribe("PostgreSQL internal identity integration", () => {
     });
   });
 
+  it("serializes concurrent attempts to claim the same external identity", async () => {
+    const suffix = randomUUID();
+    const [first, second] = await withTenantTransaction(tenantPool, principal, async (transaction) => [
+      await createInternalUser(transaction),
+      await createInternalUser(transaction)
+    ]);
+    const results = await Promise.allSettled([
+      withTenantTransaction(tenantPool, principal, (transaction) =>
+        linkExternalIdentity(transaction, first.id, issuer, `race-${suffix}`)
+      ),
+      withTenantTransaction(tenantPool, principal, (transaction) =>
+        linkExternalIdentity(transaction, second.id, issuer, `race-${suffix}`)
+      )
+    ]);
+    expect(results.filter((result) => result.status === "fulfilled")).toHaveLength(1);
+    expect(results.filter((result) => result.status === "rejected")).toHaveLength(1);
+    const rejected = results.find((result) => result.status === "rejected");
+    expect(rejected).toMatchObject({
+      status: "rejected",
+      reason: expect.any(ExternalIdentityConflictError)
+    });
+  });
+
   it("keeps external identity records immutable and non-deletable to the app role", async () => {
     const suffix = randomUUID();
     const user = await withTenantTransaction(tenantPool, principal, (transaction) =>
