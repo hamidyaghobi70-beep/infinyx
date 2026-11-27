@@ -49,9 +49,10 @@ jobs:
         run: |
           psql "$DATABASE_URL" -v ON_ERROR_STOP=1 <<'SQL'
           GRANT USAGE ON SCHEMA public TO infinyx_app;
-          GRANT SELECT, INSERT, DELETE ON tenants, tenant_memberships TO infinyx_app;
+          GRANT SELECT, INSERT ON tenants, tenant_memberships TO infinyx_app;
+          GRANT DELETE ON tenants TO infinyx_app;
           GRANT UPDATE ON tenants TO infinyx_app;
-          GRANT UPDATE (role, status, status_changed_at, status_changed_by, version) ON tenant_memberships TO infinyx_app;
+          GRANT UPDATE (status, status_changed_at, status_changed_by, version) ON tenant_memberships TO infinyx_app;
           GRANT SELECT, INSERT ON tenant_membership_audit_events TO infinyx_app;
           INSERT INTO tenants (id, name) VALUES
             ('tenant-a', 'Tenant A'),
