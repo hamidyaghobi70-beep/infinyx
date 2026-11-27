@@ -62,9 +62,13 @@ describe("tenant membership authorization", () => {
     await expect(
       getTenantMembership(transactionWithRole("manager"), principal())
     ).resolves.toEqual({
+      membershipId: "00000000-0000-4000-8000-000000000001",
       tenantId: "tenant-1",
       userId: "user-1",
-      role: "manager"
+      generation: 1,
+      role: "manager",
+      status: "active",
+      version: 1
     });
   });
 
