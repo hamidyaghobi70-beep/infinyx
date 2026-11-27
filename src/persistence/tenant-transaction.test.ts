@@ -123,7 +123,7 @@ describe("withTenantTransaction", () => {
     const db = fakeDatabase();
     const connect = vi.spyOn(db.pool, "connect");
     await expect(
-      withTenantTransaction(db.pool, { ...principal } as AuthenticatedPrincipal, async () => "no")
+      withTenantTransaction(db.pool, { ...principal } as AuthenticatedPrincipal, "tenant-a", async () => "no")
     ).rejects.toBeInstanceOf(AuthenticationError);
     expect(connect).not.toHaveBeenCalled();
     expect(db.calls).toHaveLength(0);
@@ -178,6 +178,7 @@ describe("withTenantTransaction", () => {
     expect(db.calls.map((call) => call.sql)).toEqual([
       "BEGIN",
       "SELECT set_config('app.tenant_id', $1, true)",
+      "SELECT membership_id::text AS membership_id, role, generation, version\n           FROM tenant_memberships\n          WHERE tenant_id = $1\n            AND internal_user_id = $2::uuid\n            AND status = 'active'\n          ORDER BY generation DESC\n          LIMIT 1",
       "SELECT private_data",
       "ROLLBACK"
     ]);
