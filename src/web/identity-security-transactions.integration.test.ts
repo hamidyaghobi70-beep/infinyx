@@ -99,6 +99,23 @@ integrationDescribe("PostgreSQL identity security transaction persistence", () =
       );
       expect(grant).toBeTruthy();
 
+      await expect(pool.query(
+        `UPDATE identity_security_transactions
+            SET user_id = $2::uuid
+          WHERE transaction_id = $1::uuid`,
+        [transactionId, otherUserId]
+      )).rejects.toThrow();
+      const storedGrant = await pool.query<{ grant_hash: Buffer }>(
+        "SELECT grant_hash FROM identity_step_up_grants WHERE source_transaction_id = $1::uuid",
+        [transactionId]
+      );
+      await expect(pool.query(
+        `UPDATE identity_step_up_grants
+            SET purpose = 'identity_unlink'
+          WHERE grant_hash = $1`,
+        [storedGrant.rows[0]!.grant_hash]
+      )).rejects.toThrow();
+
       expect(await store.consumeStepUpGrant(
         grant!, otherUserId, sessionId, "identity_link"
       )).toBe(false);
