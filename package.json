@@ -19,7 +19,7 @@
     "vitest": "5.1.2"
   },
   "dependencies": {
-    "node-pg-migrate": "9.0.0",
+    "node-pg-migrate": "7.6.1",
     "pg": "8.23.1"
   }
 }
