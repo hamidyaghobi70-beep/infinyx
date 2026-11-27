@@ -64,16 +64,16 @@ integrationDescribe("PostgreSQL web-session refresh advisory lock", () => {
       );
 
       await store.create({
-      sessionId, csrfToken, userId, issuer, subject,
-      tokenBundle: {
-        accessToken: "expired-access-token",
-        refreshToken: "single-use-refresh-token",
-        accessTokenExpiresAt: now.getTime() - 1,
-        csrfToken
-      },
-      idleExpiresAt: new Date(now.getTime() + 1_800_000),
-      absoluteExpiresAt: new Date(now.getTime() + 28_800_000)
-    });
+        sessionId, csrfToken, userId, issuer, subject,
+        tokenBundle: {
+          accessToken: "expired-access-token",
+          refreshToken: "single-use-refresh-token",
+          accessTokenExpiresAt: now.getTime() - 1,
+          csrfToken
+        },
+        idleExpiresAt: new Date(now.getTime() + 1_800_000),
+        absoluteExpiresAt: new Date(now.getTime() + 28_800_000)
+      });
 
       const first = store.getUsableAccessToken(sessionId, refresh);
       await refreshStarted;
