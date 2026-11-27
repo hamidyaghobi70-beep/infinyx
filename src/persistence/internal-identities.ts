@@ -204,10 +204,15 @@ export async function resolveExternalIdentity(
 
   try {
     const rows = await transaction.query<ExternalIdentityRow>(
-      `SELECT identity_id::text AS identity_id, user_id::text AS user_id,
-              issuer, subject, created_at::text AS created_at
-         FROM user_external_identities
-        WHERE issuer = $1 AND subject = $2
+      `SELECT identity.identity_id::text AS identity_id,
+              identity.user_id::text AS user_id,
+              identity.issuer, identity.subject,
+              identity.created_at::text AS created_at
+         FROM user_external_identities AS identity
+         INNER JOIN user_external_identity_lifecycle AS lifecycle
+           ON lifecycle.identity_id = identity.identity_id
+          AND lifecycle.status = 'active'
+        WHERE identity.issuer = $1 AND identity.subject = $2
         LIMIT 1`,
       [issuer, subject]
     );
