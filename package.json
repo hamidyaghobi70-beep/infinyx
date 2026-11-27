@@ -9,7 +9,10 @@
   "scripts": {
     "test": "vitest run",
     "test:watch": "vitest",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "db:migrate:up": "node-pg-migrate up --migrations-dir migrations",
+    "db:migrate:down": "node-pg-migrate down --migrations-dir migrations",
+    "db:migrate:check": "node --check migrations/001_initial_tenant_schema.cjs"
   },
   "devDependencies": {
     "@types/express": "5.0.3",
