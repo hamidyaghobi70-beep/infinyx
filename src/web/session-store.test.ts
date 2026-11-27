@@ -123,6 +123,24 @@ describe("serialized web-session access-token refresh", () => {
       refreshToken: "rotated-refresh-token",
       csrfToken
     });
+    expect(fake.stored.refresh_lease_id).toBeNull();
+    expect(fake.stored.refresh_lease_expires_at).toBeNull();
+  });
+
+  it("fails closed while a durable refresh lease from a disconnected owner is active", async () => {
+    const row = sessionRow(now.getTime() - 1, "single-use-refresh-token");
+    row.refresh_lease_id = "20000000-0000-4000-8000-000000000002";
+    row.refresh_lease_expires_at = new Date(now.getTime() + 30_000);
+    const fake = fakePool(row);
+    const store = new PostgresWebSessionStore(fake.pool, key, () => now);
+    const refresh = vi.fn();
+
+    await expect(store.getUsableAccessToken(createOpaqueSessionId(), refresh)).resolves.toBeNull();
+
+    expect(refresh).not.toHaveBeenCalled();
+    expect(fake.stored.refresh_lease_id).toBe(row.refresh_lease_id);
+    expect(fake.client.release).toHaveBeenCalledOnce();
+    expect(fake.calls.some(call => call.sql.includes("pg_advisory_unlock"))).toBe(true);
   });
 
   it("does not persist refreshed credentials if the session expires during the provider request", async () => {
