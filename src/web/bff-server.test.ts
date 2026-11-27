@@ -21,7 +21,9 @@ async function request(
     handleUnlinkReauthCallback: (_req, res) => { res.statusCode = 204; res.end(); },
     unlinkIdentity: (_req, res) => { res.statusCode = 204; res.end(); },
     startLink: (_req, res) => { res.statusCode = 204; res.end(); },
-    handleLinkCallback: (_req, res) => { res.statusCode = 204; res.end(); }
+    handleLinkCallback: (_req, res) => { res.statusCode = 204; res.end(); },
+    startAccountRecovery: (_req, res) => { res.statusCode = 204; res.end(); },
+    handleAccountRecoveryCallback: (_req, res) => { res.statusCode = 204; res.end(); }
   };
   const server = createBffHttpServer(handlers);
   servers.push(server);
