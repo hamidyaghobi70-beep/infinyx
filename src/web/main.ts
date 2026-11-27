@@ -29,16 +29,17 @@ async function start(): Promise<void> {
   const accountRevocationRetryTimer = setInterval(() => {
     void application.retryPendingAccountSessionRevocations().then(failures => {
       if (failures > 0) {
-        process.stderr.write("INFINYX has pending account session revocations requiring retry.\\n");
+        process.stderr.write("INFINYX has pending account session revocations requiring retry.\n");
       }
     }).catch(() => {
-      process.stderr.write("INFINYX account session revocation retry failed.\\n");
+      process.stderr.write("INFINYX account session revocation retry failed.\n");
     });
   }, 30_000);
 
   let closing = false;
   const shutdown = () => {
-    clearInterval(revocationRetryTimer);\n    clearInterval(accountRevocationRetryTimer);
+    clearInterval(revocationRetryTimer);
+    clearInterval(accountRevocationRetryTimer);
     if (closing) return;
     closing = true;
     application.server.close((error) => {
