@@ -73,9 +73,6 @@ jobs:
           done
           docker logs infinyx-keycloak
           exit 1
-      - name: Stop Keycloak test realm
-        if: always()
-        run: docker rm --force infinyx-keycloak || true
       - name: Create least-privilege application role
         run: |
           psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -c "CREATE ROLE infinyx_app LOGIN PASSWORD 'ci-only-password' NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT NOBYPASSRLS"
@@ -131,3 +128,6 @@ jobs:
           KEYCLOAK_INTEGRATION_CLIENT_ID: infinyx-web
           KEYCLOAK_INTEGRATION_CLIENT_SECRET: ci-only-infinyx-web-secret
         run: npm run test:keycloak
+      - name: Stop Keycloak test realm
+        if: always()
+        run: docker rm --force infinyx-keycloak || true
