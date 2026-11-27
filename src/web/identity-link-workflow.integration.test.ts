@@ -121,16 +121,6 @@ integrationDescribe("PostgreSQL immutable external identity link workflow", () =
         (row: { identity_id: string }) => row.identity_id === oldIdentityId
       );
       expect(oldEventsAfter.rows).toEqual(eventsBeforeOld);
-    } finally {
-      await adminPool.query("DELETE FROM identity_session_revocation_outbox WHERE user_id IN ($1::uuid, $2::uuid)", [actor, owner]);
-      await adminPool.query("DELETE FROM identity_security_audit_events WHERE actor_user_id IN ($1::uuid, $2::uuid)", [actor, owner]);
-      await adminPool.query("DELETE FROM identity_step_up_grants WHERE user_id IN ($1::uuid, $2::uuid)", [actor, owner]);
-      await adminPool.query("DELETE FROM identity_security_transactions WHERE user_id IN ($1::uuid, $2::uuid)", [actor, owner]);
-      await adminPool.query("DELETE FROM user_external_identity_lifecycle_events WHERE identity_id IN (SELECT identity_id FROM user_external_identities WHERE user_id IN ($1::uuid, $2::uuid))", [actor, owner]);
-      await adminPool.query("DELETE FROM user_external_identity_lifecycle WHERE identity_id IN (SELECT identity_id FROM user_external_identities WHERE user_id IN ($1::uuid, $2::uuid))", [actor, owner]);
-      await adminPool.query("DELETE FROM user_external_identities WHERE user_id IN ($1::uuid, $2::uuid)", [actor, owner]);
-      await adminPool.query("DELETE FROM users WHERE id IN ($1::uuid, $2::uuid)", [actor, owner]);
-    }
   });
 
   it("allows exactly one owner in concurrent attempts and never transfers the identity", async () => {
@@ -152,14 +142,6 @@ integrationDescribe("PostgreSQL immutable external identity link workflow", () =
       );
       expect(rows.rows).toHaveLength(1);
       expect([first, second]).toContain(rows.rows[0]?.user_id);
-    } finally {
-      await adminPool.query("DELETE FROM identity_session_revocation_outbox WHERE user_id IN ($1::uuid, $2::uuid)", [first, second]);
-      await adminPool.query("DELETE FROM identity_security_audit_events WHERE actor_user_id IN ($1::uuid, $2::uuid)", [first, second]);
-      await adminPool.query("DELETE FROM user_external_identity_lifecycle_events WHERE identity_id IN (SELECT identity_id FROM user_external_identities WHERE user_id IN ($1::uuid, $2::uuid))", [first, second]);
-      await adminPool.query("DELETE FROM user_external_identity_lifecycle WHERE identity_id IN (SELECT identity_id FROM user_external_identities WHERE user_id IN ($1::uuid, $2::uuid))", [first, second]);
-      await adminPool.query("DELETE FROM user_external_identities WHERE user_id IN ($1::uuid, $2::uuid)", [first, second]);
-      await adminPool.query("DELETE FROM users WHERE id IN ($1::uuid, $2::uuid)", [first, second]);
-    }
   });
 
   it("rolls back a newly inserted identity when the required audit write fails", async () => {
@@ -181,9 +163,5 @@ integrationDescribe("PostgreSQL immutable external identity link workflow", () =
         [issuer, subject]
       );
       expect(rows.rowCount).toBe(0);
-    } finally {
-      await adminPool.query("DELETE FROM identity_security_audit_events WHERE actor_user_id = $1::uuid", [actor]);
-      await adminPool.query("DELETE FROM users WHERE id = $1::uuid", [actor]);
-    }
   });
 });
