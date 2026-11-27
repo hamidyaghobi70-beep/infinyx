@@ -6,7 +6,7 @@
 
 ## Context
 
-ADR-0003 selects PostgreSQL with shared tenant-aware tables and Row-Level Security (RLS). The repository currently has no database driver, migration tooling, schema, connection pool, or persistence runtime. The implementation must preserve transparent SQL behavior so RLS policies, transaction boundaries, and tenant predicates remain reviewable.
+ADR-0003 selects PostgreSQL with shared tenant-aware tables and Row-Level Security (RLS). The initial implementation now includes the `pg` pool adapter, `node-pg-migrate` tooling, a tenant schema migration, and a transaction boundary. CI applies the migration to ephemeral PostgreSQL and runs RLS integration tests using a separate application role. The implementation must preserve transparent SQL behavior so RLS policies, transaction boundaries, and tenant predicates remain reviewable.
 
 ## Decisions
 
@@ -54,9 +54,19 @@ Acceptance requires integration tests against real PostgreSQL with the actual ap
 - The application role cannot bypass RLS or access protected tables outside the intended grants.
 - Cross-tenant references are rejected by constraints.
 
+## Current implementation status
+
+- `pg` pool adapter: IMPLEMENTED with bounded pool/timeouts and TLS required by default; local/test TLS opt-out is explicit.
+- `node-pg-migrate`: IMPLEMENTED and pinned to an audited version; dependency audit reported zero vulnerabilities in the latest CI run.
+- Initial migration: IMPLEMENTED for `tenants` and `tenant_memberships`, including tenant-aware constraints and forced RLS policies.
+- Tenant transaction boundary: IMPLEMENTED; it sets `app.tenant_id` transaction-locally from a verified principal.
+- Real PostgreSQL CI: PASSING with a non-superuser application role that does not own the tables and has no `BYPASSRLS` privilege.
+- RLS integration tests: 5 PASSING; the complete CI suite reported 49 tests passing.
+- DAL/repositories, product-domain tables, production role provisioning, production database configuration, and operational procedures: NOT YET IMPLEMENTED.
+
 ## Consequences
 
 - Explicit SQL and a small DAL are preferred over ORM convenience in the initial security-critical persistence layer.
 - PostgreSQL connectivity can be tested independently from API routes.
-- This ADR selects implementation tooling; it does not claim that PostgreSQL, RLS, migrations, or tenant isolation are already implemented.
+- The passing tests verify only the initial two-table schema and the documented custom-GUC threat-model limits; they do not establish production readiness or protect against arbitrary SQL execution under the shared database role.
 - Hosting, production credentials, backup/restore, and deployment topology remain separate operational decisions.
