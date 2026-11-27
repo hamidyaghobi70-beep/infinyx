@@ -1,13 +1,13 @@
 # Keycloak Staging Integration — Proposed Implementation Plan
 
-- **Status:** Founder review required; implementation not authorized
+- **Status:** Phase 1 implemented and CI verified; Phases 2–6 require separate founder approval
 - **Related:** ADR-0011 and Keycloak Staging Integration Design
 - **Branch:** feat/adr-platform-foundation
 - **Environment:** Staging only, after separate infrastructure approval
 
 ## 1. Purpose and approved decisions
 
-This plan turns the approved architecture into a bounded sequence of work. It does not authorize code changes, Keycloak configuration, infrastructure provisioning, deployment, live message delivery, merge, or release.
+This plan records the approved architecture and bounded execution sequence. Phase 1 was explicitly authorized, implemented, and CI verified. This document does not authorize any additional phase, Keycloak configuration, infrastructure provisioning, deployment, live message delivery, merge, or release.
 
 Accepted design decisions:
 1. Keycloak Self-Hosted; staging-first.
@@ -18,7 +18,7 @@ Accepted design decisions:
 6. Client-supplied tenant identifiers are selectors, never proof of access.
 7. Work remains on feat/adr-platform-foundation; main remains unchanged; no merge, release, or production deployment.
 
-## 2. Current compatibility findings
+## 2. Baseline compatibility findings (before Phase 1)
 
 Review of the current branch source identifies these required changes:
 
@@ -29,7 +29,7 @@ Review of the current branch source identifies these required changes:
 - Invitation persistence uses the principal for actor identity, while invitation-token lookup independently resolves the invitation tenant; preserve this distinction.
 - The current principal trust boundary uses a module-private WeakSet. Any replacement must continue rejecting arbitrary client-created objects.
 
-These are compatibility observations, not a complete security audit.
+These were baseline observations before Phase 1. The implemented state and remaining limitations are recorded in [Identity and Tenant Separation — Implementation Record](identity-tenant-separation-implementation.md). These observations are not a complete security audit.
 
 ## 3. Target security boundary
 
@@ -67,7 +67,7 @@ A user may belong to multiple tenants. Authentication does not select a tenant. 
 
 **Exit criteria:** all call sites accounted for; no unexplained principal/tenant-context consumer; no production credentials or real user data required.
 
-### Phase 1 — Identity/tenant separation
+### Phase 1 — Identity/tenant separation — Implemented
 
 - Replace the tenant-bearing principal with a trusted identity based on internal userId and verified identity provenance.
 - Refactor withTenantTransaction to accept identity plus separate tenant selector and perform mandatory active-membership authorization before exposing its callback.
@@ -78,7 +78,7 @@ A user may belong to multiple tenants. Authentication does not select a tenant. 
 
 Avoid long-lived dual-mode authentication accepting both old tenant-bearing and new tenant-independent principals. Make the change atomically across callers/tests. No fallback to old JWT tenant claims.
 
-**Exit criteria:** no-membership user denied even with a valid tenant selector; multi-tenant user restricted to current memberships; suspended/removed denied; tenant/role/branch claims grant no access; RLS integration tests pass; no repository callback runs before membership check.
+**Exit criteria:** no-membership user denied even with a valid tenant selector; multi-tenant user restricted to separately granted memberships; suspended/removed denied; tenant/role claims grant no access; RLS integration tests pass; no repository callback runs before membership check. Verified by CI [#45935238195](https://github.com/hamidyaghobi70-beep/infinyx/actions/runs/45935238195): 11 test files and 99 tests passed, TypeScript typecheck passed, migrations and syntax checks passed, and npm audit reported 0 vulnerabilities. See the [implementation record](identity-tenant-separation-implementation.md).
 
 ### Phase 2 — Provider-neutral OIDC verification
 
@@ -155,22 +155,25 @@ Produce test/security evidence, operational effort and resource observations, fa
 
 No production deployment/public exposure/HA/production credentials; no real-user migration; no live email/SMS delivery or vendor selection; no custom Keycloak extensions without separate approval; no mobile implementation; no merge/release/deployment; no changes to main.
 
-## 7. Decisions required before code authorization
+## 7. Decisions for remaining phases
 
-1. Confirm canonical internal user table/identifier and lifecycle.
-2. Approve transaction wrapper performing mandatory membership check before callback.
-3. Confirm personal vs tenant/business/project memory scope contract.
-4. Decide whether one internal user may link multiple external identities and define recovery rules.
-5. Choose initial provisioning path, or explicitly keep unknown identities denied.
-6. Select staging server-side BFF session store and outage behavior.
-7. Define API audience, token type/use, accepted algorithms, azp expectations, and clock-skew tolerance.
+Resolved by the implemented Phase 1:
+1. **Internal identity:** canonical internal identity is `users.id` (UUID). User lifecycle/profile fields remain a later decision.
+2. **Tenant transaction boundary:** mandatory active-membership authorization before repository callbacks is implemented.
+3. **Memory scope:** personal scope uses internal user ID; tenant scope requires a live authorized transaction. Business/project-specific scopes remain deferred until their resource authorization boundaries exist.
+4. **External identities:** one internal user may have multiple external identities; each exact `(issuer, subject)` pair maps to at most one internal user. Unlink and recovery workflows remain deferred.
+5. **Unknown identities:** fail closed. Invitation acceptance requires an already mapped internal user; automatic account provisioning and email/phone-based linking are not enabled.
+
+Still required before later phases:
+6. Select the staging server-side BFF session store and define outage behavior.
+7. Define API audience, token type/use, accepted algorithms, authorized-party/client expectations, and clock-skew tolerance.
 8. Select hosting/network boundary, secret manager, and backup destination before infrastructure work.
-9. Decide local-only email/SMS test sinks versus separately approved non-production delivery provider and controlled recipients.
+9. Decide local-only email/SMS test sinks versus a separately approved non-production delivery provider and controlled recipients.
 
 ## 8. Separate approval gates
 
 - **A — Design:** approve the target identity/tenant contract and resolve Section 7. No code or infrastructure changes.
-- **B — Code:** separately authorize Phases 0–4 on feat/adr-platform-foundation, with tests and code review. No Keycloak deployment/configuration and no live delivery.
+- **B — Code:** Phase 1 is complete. Phases 2–4 (OIDC/JWKS, extended identity provisioning/linking, and web BFF/session implementation) each require explicit implementation approval, with tests and code review. No Keycloak deployment/configuration and no live delivery.
 - **C — Staging infrastructure:** separately authorize Phase 5 after an explicit hosting, secrets, network, database, and test-data plan.
 - **D — Production recommendation:** review Phase 6 evidence. Production deployment, merge, and release still require separate explicit authorization.
 
@@ -178,4 +181,4 @@ No phase may begin without its corresponding explicit approval.
 
 ## 9. Governance
 
-This is a proposal for founder review, not implementation authorization. All approved work remains on feat/adr-platform-foundation; main remains unchanged. No merge, release, production deployment, public exposure, production credentials, or live message delivery is authorized.
+Phase 1 implementation is recorded separately. All remaining work stays gated by explicit approval. All work remains on feat/adr-platform-foundation; main remains unchanged. No merge, release, production deployment, public exposure, production credentials, or live message delivery is authorized.
