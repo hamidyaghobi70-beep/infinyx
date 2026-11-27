@@ -73,7 +73,7 @@ describe("createJwtPrincipalVerifier", () => {
     expect(() => verify("not-a-jwt")).toThrow(AuthenticationError);
     expect(() => verify("x".repeat(16_385))).toThrow(AuthenticationError);
     expect(() => verify(token({ sub: "  " }))).toThrow(AuthenticationError);
-    expect(() => verify(token({ sub: "bad\\u0000subject" }))).toThrow(AuthenticationError);
+    expect(() => verify(token({ sub: "bad\u0000subject" }))).toThrow(AuthenticationError);
   });
 
   it("rejects invalid verifier configuration", () => {
@@ -99,8 +99,7 @@ describe("internal principal resolution", () => {
   });
 
   it("fails closed for unknown identities and forged external identity objects", () => {
-    expect(() => resolvePrincipal(verify(token({ sub: "unknown-user" })))
-      .toThrow(AuthenticationError);
+    expect(() => resolvePrincipal(verify(token({ sub: "unknown-user" })))).toThrow(AuthenticationError);
     expect(() => resolvePrincipal({
       issuer, subject: "provider-subject-1", audience: [audience], expiresAt: now + 10
     })).toThrow(AuthenticationError);
