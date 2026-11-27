@@ -42,15 +42,17 @@ const principal = verify(
 function fakeDatabase() {
   const calls: Array<{ sql: string; values?: readonly unknown[] }> = [];
   let releaseCount = 0;
-  let failOn: string | undefined;
+  const failures = new Set<string>();
+  const destroyedClients: boolean[] = [];
   const client: TenantSqlClient = {
     async query<Row>(sql: string, values?: readonly unknown[]): Promise<SqlQueryResult<Row>> {
       calls.push({ sql, values });
-      if (sql === failOn) throw new Error("sensitive database detail");
+      if (failures.has(sql)) throw new Error("sensitive database detail");
       return { rows: [{ value: "ok" } as Row], rowCount: 1 };
     },
-    release() {
+    release(destroy?: boolean) {
       releaseCount += 1;
+      destroyedClients.push(destroy === true);
     }
   };
   const pool: TenantSqlPool = {
@@ -62,7 +64,8 @@ function fakeDatabase() {
     calls,
     pool,
     client,
-    setFailure(sql: string) { failOn = sql; },
+    setFailure(sql: string) { failures.add(sql); },
+    destroyedClients,
     get releaseCount() { return releaseCount; }
   };
 }
@@ -127,6 +130,42 @@ describe("withTenantTransaction", () => {
       "ROLLBACK"
     ]);
     expect(db.releaseCount).toBe(1);
+  });
+
+
+  it("rolls back if repository code catches a failed query", async () => {
+    const db = fakeDatabase();
+    db.setFailure("SELECT private_data");
+    await expect(
+      withTenantTransaction(db.pool, principal, async (tx) => {
+        try {
+          await tx.query("SELECT private_data");
+        } catch {
+          // A repository must not be able to swallow a database failure.
+        }
+        return "incorrect success";
+      })
+    ).rejects.toBeInstanceOf(TenantPersistenceError);
+    expect(db.calls.map((call) => call.sql)).toEqual([
+      "BEGIN",
+      "SELECT set_config('app.tenant_id', $1, true)",
+      "SELECT private_data",
+      "ROLLBACK"
+    ]);
+    expect(db.releaseCount).toBe(1);
+    expect(db.destroyedClients).toEqual([false]);
+  });
+
+  it("destroys the pooled client if rollback fails", async () => {
+    const db = fakeDatabase();
+    db.setFailure("ROLLBACK");
+    await expect(
+      withTenantTransaction(db.pool, principal, async () => {
+        throw new Error("repository failure");
+      })
+    ).rejects.toThrow("repository failure");
+    expect(db.releaseCount).toBe(1);
+    expect(db.destroyedClients).toEqual([true]);
   });
 
   it("releases the client if tenant context setup fails", async () => {
