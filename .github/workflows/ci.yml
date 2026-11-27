@@ -120,9 +120,12 @@ jobs:
       - name: Grant read-only application access to lifecycle state and events
         run: |
           psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -c "GRANT SELECT ON user_external_identity_lifecycle, user_external_identity_lifecycle_events TO infinyx_app"
-      - name: Grant application access to identity security transaction stores
+      - name: Grant least-privilege access to identity security transaction stores
         run: |
-          psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -c "GRANT SELECT, INSERT, UPDATE, DELETE ON identity_security_transactions, identity_step_up_grants TO infinyx_app"
+          psql "$DATABASE_URL" -v ON_ERROR_STOP=1 <<'SQL'
+          GRANT SELECT, INSERT, DELETE ON identity_security_transactions, identity_step_up_grants TO infinyx_app;
+          GRANT UPDATE (consumed_at) ON identity_security_transactions, identity_step_up_grants TO infinyx_app;
+          SQL
       - name: Verify legacy identity backfill preserved existing bindings
         run: |
           psql "$INFINYX_TEST_DATABASE_URL" -v ON_ERROR_STOP=1 <<'SQL'
