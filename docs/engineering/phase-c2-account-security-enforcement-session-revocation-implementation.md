@@ -22,7 +22,7 @@
   - leave failed requests pending so all session paths remain blocked;
   - retry pending requests in bounded batches.
 - BFF startup retries pending account-session revocations, and the runtime exposes a retry function for an operational worker or controlled invocation.
-- Application database privileges are limited to reading the outbox and updating only completion/attempt/error fields. The application cannot insert or rewrite outbox ownership or event references.
+- C4 hardening moves completion into database-owned SECURITY DEFINER functions. The application role cannot update completed_at directly; it can only update retry metadata and execute the exact (outbox_id, user_id) completion function. The function revokes persisted sessions and completes the outbox atomically.
 
 ## Security and preservation boundaries
 
@@ -31,7 +31,7 @@
 - The outbox event and account-security transition are committed in the same database transaction.
 - Session revocation failure is never reported as success; the pending outbox record continues to deny session use.
 - No external identity binding, external identity lifecycle row/history, tenant membership, role, or branch assignment is changed by C2.
-- Existing identity-session-revocation behavior remains in place and is checked alongside the new account-level barrier.
+- Existing identity-session-revocation behavior remains in place and is checked alongside the new account-level barrier. C4 applies the same database-owned completion protection to both outboxes.
 
 ## Tests and verification
 
@@ -51,7 +51,7 @@
 
 CI used an ephemeral PostgreSQL 16 database with synthetic test records and a temporary Keycloak realm. No production or staging database was accessed, and no live environment migration was run.
 
-C2 does not add account administration endpoints or an administrative authorization model. Account recovery and recovery-specific ownership proof remain C3. Final cross-phase security audit/closure remains C4. Keycloak configuration, merge, deployment, and release are not included.
+C2 does not add account administration endpoints or an administrative authorization model. Account recovery and recovery-specific ownership proof are implemented in C3. C4 adds active-identity checks to every session-store operation and database-owned completion functions for both revocation outboxes. Keycloak configuration, merge, deployment, and release are not included.
 
 ## Source state
 
@@ -59,3 +59,10 @@ C2 does not add account administration endpoints or an administrative authorizat
 - Branch: `feat/adr-platform-foundation`
 - PR #68 remains open and Draft; it is not merged.
 - `main` remains at `b9c201963b64b1b419714ac893003b7598191de5`.
+
+## C4 cross-phase hardening
+
+- Database-owned completion functions now revoke sessions and mark either outbox complete atomically.
+- Direct application updates to completed_at are denied.
+- Session creation, lookup, touch, and token access require the exact linked identity to remain active.
+- Verification: https://github.com/hamidyaghobi70-beep/infinyx/actions/runs/45958974264 (31 test files, 194 tests; 0 dependency vulnerabilities).
