@@ -1,8 +1,8 @@
 # Branch Access Implementation Design
 
-**Status:** Proposed technical design — not authorized for implementation  
+**Status:** Proposed branch design — branch schema/runtime remain unimplemented  
 **Scope:** Branch data model, visibility resolution, transaction boundaries, and security verification  
-**Related decisions:** ADR-0001 (multi-tenancy), ADR-0004 (PostgreSQL/RLS), ADR-0005 (branch visibility and assignment scope), ADR-0006 (assignment administration authorization), ADR-0007 (tenant membership lifecycle), ADR-0008 (membership lifecycle administration)
+**Related decisions:** ADR-0001 (multi-tenancy), ADR-0004 (PostgreSQL/RLS), ADR-0005 (branch visibility and assignment scope), ADR-0006 (assignment administration authorization), ADR-0007 (tenant membership lifecycle), ADR-0008 (membership lifecycle administration), ADR-0009 (lifecycle safety and ownership continuity)
 
 ## 1. Purpose
 
@@ -15,12 +15,12 @@ This document is a proposal only. It does not add database migrations, applicati
 The current persistence layer has:
 
 - `tenants(id, name, created_at)`.
-- `tenant_memberships(tenant_id, user_id, role, created_at)`, with primary key `(tenant_id, user_id)`.
+- `tenant_memberships` with primary key `membership_id`, tenant/user identity, generation, role, lifecycle status, status metadata, and version (migration 002).
 - Tenant membership roles: `owner`, `admin`, `manager`, `editor`, and `viewer`.
 - Tenant-scoped RLS using transaction-local `app.tenant_id`.
-- `getTenantMembership` and `requireTenantRole`, which resolve membership inside a supplied tenant transaction.
+- `getTenantMembership` and `requireTenantRole`, which resolve only the latest active membership generation inside a supplied tenant transaction.
 
-The current membership table has no active/suspended/removed status or membership lifecycle timestamps. A missing membership row is currently treated as no membership. The founder has approved a three-state membership lifecycle for the target design: `active`, `suspended`, and `removed`. This lifecycle is a design decision only; the current schema and code do not yet implement it.
+The membership lifecycle is now represented in migration 002. Each lifecycle generation has its own `membership_id`; `removed` rows remain historical and a future fresh invitation must create a new generation. The membership helper fails closed for suspended and removed rows.
 
 ## 3. Approved branch visibility policy
 
@@ -63,18 +63,18 @@ Proposed table: `tenant_membership_branch_assignments`.
 | Column | Proposed type | Notes |
 |---|---|---|
 | `tenant_id` | text, not null | Tenant scope |
-| `user_id` | text, not null | Assigned member |
+| `membership_id` | uuid, not null | Exact membership lifecycle generation |
 | `branch_id` | text, not null | Assigned branch |
 | `created_at` | timestamptz, not null | Assignment creation time |
 
 Proposed constraints:
 
-- Primary key: `(tenant_id, user_id, branch_id)`.
-- Composite foreign key `(tenant_id, user_id)` to `tenant_memberships(tenant_id, user_id)`.
+- Primary key: `(tenant_id, membership_id, branch_id)`.
+- Composite foreign key `(tenant_id, membership_id)` to `tenant_memberships(tenant_id, membership_id)`.
 - Composite foreign key `(tenant_id, branch_id)` to `branches(tenant_id, id)`.
 - Index assignments by `(tenant_id, branch_id)` for branch/member lookups.
 
-These composite foreign keys enforce that both the member and branch belong to the same tenant. Duplicate assignments are prevented by the primary key.
+These composite foreign keys enforce that the exact membership generation and branch belong to the same tenant. Duplicate assignments are prevented by the primary key. A new membership generation cannot inherit assignments from a removed generation.
 
 ### 4.3 Tenant-wide visibility is derived, not copied
 
@@ -84,7 +84,7 @@ For manager/editor/viewer, visibility comes only from explicit assignment rows.
 
 ## 5. Membership lifecycle and revocation
 
-The approved policy requires suspended or removed membership to end branch access. The current schema models removal by the absence of a membership row; it does not model suspension.
+The approved policy requires suspended or removed membership to end branch access. The membership lifecycle schema now stores these states explicitly and retains removed generations as historical rows.
 
 The founder has approved a three-state membership lifecycle:
 
@@ -92,11 +92,11 @@ The founder has approved a three-state membership lifecycle:
 - **`suspended`:** membership is retained but all tenant and branch access is denied until it is reactivated.
 - **`removed`:** membership has ended and all tenant and branch access is denied. Historical audit records must remain available according to the eventual retention policy.
 
-This is a target design decision, not an implemented schema or behavior. The current membership table has no status column, and the current authorization helper does not yet check lifecycle state.
+This lifecycle is implemented at the membership persistence layer on the feature branch. Branch assignment tables and branch-scoped authorization are still proposals and are not implemented.
 
 Every protected operation must verify that the membership is currently `active` inside the same transaction as the protected operation. Missing, `suspended`, or `removed` membership must fail closed, regardless of any surviving branch-assignment row.
 
-Do not physically erase audit history when a membership is removed. Assignment retention and audit-history behavior must be designed together. The implementation must decide whether assignments are retained as historical/inert records or deleted while preserving independent audit events; retained assignment rows must never authorize suspended or removed members.
+Do not physically erase audit history when a membership is removed. The membership lifecycle implementation retains the removed generation and its audit events. When branch assignments are implemented, attach them to `membership_id` and retain them as inert generation-scoped rows; they must never authorize suspended or removed memberships.
 
 ## 6. Visibility resolution and transaction boundary
 
@@ -108,7 +108,7 @@ Resolution order:
 2. Resolve the current database membership inside that transaction.
 3. Reject missing or inactive membership.
 4. If role is owner/admin, verify that the requested branch belongs to the current tenant.
-5. If role is manager/editor/viewer, require an explicit assignment for the exact `(tenant_id, user_id, branch_id)`.
+5. If role is manager/editor/viewer, require an explicit assignment for the exact `(tenant_id, membership_id, branch_id)`.
 6. Only then perform the protected branch-scoped read or write, using the same transaction.
 
 The branch ID from the request is a selector only. Never trust a client-supplied tenant ID, role, or assignment claim as authorization evidence.
@@ -155,9 +155,7 @@ Founder-approved policy recorded in ADR-0008:
 - Lifecycle administration does not imply role changes, ownership transfer, or branch-assignment administration beyond ADR-0006.
 - Each attempted operation must be audited with tenant, actor, target member, action, timestamp, and outcome.
 
-The following safeguards remain unresolved and are implementation gates: self-suspension/removal, admin actions against owners, last-active-owner protection, owner-to-owner actions, removal reversibility, exact transition/idempotency rules, and audit retention/immutability/failure behavior. Do not infer permissive behavior; affected operations must fail closed until these decisions are approved.
-
-This policy is not implemented by the current schema or runtime helpers. It does not authorize migrations, repositories, endpoints, or UI.
+ADR-0009 has since resolved the lifecycle safety gates: no self-suspend/remove through the administrative API; admins cannot affect owners; the ordinary lifecycle endpoint cannot affect any owner; removed is terminal; same-state requests are no-ops; and successful mutation plus audit are atomic. These safeguards are implemented in the membership persistence layer on the feature branch. Ownership transfer/departure and branch assignment flows remain separate, unimplemented workflows.
 
 ## 9. Audit requirements
 
@@ -196,18 +194,18 @@ Use real PostgreSQL integration tests with the least-privilege application role 
 
 ## 11. Membership lifecycle administration implementation gates
 
-In addition to the unresolved branch-specific items below, ADR-0008 requires explicit decisions for self-suspension/removal, admin actions against owners, last-active-owner protection, owner-to-owner actions, removal reversibility, transition/idempotency rules, and audit retention/immutability/failure behavior. These must be settled before implementing membership lifecycle administration. Do not infer default permissions for these edge cases.
+ADR-0009 has resolved the membership lifecycle safeguards. The ordinary lifecycle repository rejects all owner targets, so owner continuity cannot be weakened through that endpoint. Any future ownership-governance workflow must serialize on the tenant row and preserve at least one active owner. Branch-specific authorization remains a separate implementation gate.
 
 ## 12. Implementation gates
 
 Do not implement the migration or runtime resolver until the following are settled:
 
-- assignment retention behavior after membership suspension/removal, including the independent audit retention policy;
+- branch assignment rows must reference a specific `membership_id` generation and remain non-authorizing when that membership is inactive;
 - editor/viewer write permissions, if any, for branch-scoped resources;
 - exact branch identifier and naming constraints, if different from the proposed defaults.
 
-Once these decisions are approved, implement in small, independently tested changes on `feat/adr-platform-foundation`. Keep `main` unchanged. No merge, release, or deployment is authorized by this design.
+Once branch-specific decisions are approved, implement branch schema and resolver in small, independently tested changes on `feat/adr-platform-foundation`. Keep `main` unchanged. No merge, release, or deployment is authorized by this design.
 
 ## 13. Current status
 
-This document records a proposed technical design based on the current repository schema and founder-approved visibility and assignment-administration policies. It is not an implementation authorization and does not claim production readiness.
+This document records a proposed branch design updated to align with the implemented membership lifecycle schema. Branch tables, assignment administration, and branch-scoped authorization remain unimplemented. This does not claim production readiness.
