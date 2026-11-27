@@ -192,8 +192,6 @@ exports.up = (pgm) => {
       SELECT invitation.tenant_id
         FROM public.tenant_invitations AS invitation
        WHERE invitation.token_hash = candidate_hash
-         AND invitation.status = 'pending'
-         AND invitation.expires_at > pg_catalog.clock_timestamp()
        LIMIT 1
     $function$;
 
