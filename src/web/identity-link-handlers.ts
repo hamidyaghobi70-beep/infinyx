@@ -104,6 +104,8 @@ export function createIdentityLinkHandlers(deps: Dependencies) {
       redirect_uri: `${deps.configuration.publicOrigin}${callbackPath}`,
       response_type: "code",
       scope: "openid",
+      prompt: "login",
+      ...(purpose === "reauth_identity_link" ? { max_age: "0" } : {}),
       code_challenge: codeChallenge,
       code_challenge_method: "S256",
       state,
