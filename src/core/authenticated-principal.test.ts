@@ -46,7 +46,7 @@ function makeVerifier(options: {
   fetcher?: typeof fetch;
   now?: () => number;
 } = {}) {
-  const fetcher = options.fetcher ?? (async (input: string | URL | Request) => {
+  const fetcher = options.fetcher ?? (async (input: RequestInfo | URL) => {
     const url = String(input);
     if (url.endsWith("/.well-known/openid-configuration")) {
       return new Response(JSON.stringify({
@@ -120,7 +120,7 @@ describe("OIDC discovery and JWKS token verifier", () => {
   it("refreshes trusted JWKS once to accept a rotated signing key", async () => {
     const nextKey = jwk(rotatedPair, "key-2");
     let jwksCalls = 0;
-    const fetcher = async (input: string | URL | Request) => {
+    const fetcher: typeof fetch = async (input: RequestInfo | URL) => {
       const url = String(input);
       if (url.endsWith("/.well-known/openid-configuration")) {
         return new Response(JSON.stringify({
