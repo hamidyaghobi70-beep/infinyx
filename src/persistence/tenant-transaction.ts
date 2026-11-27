@@ -59,6 +59,7 @@ export async function withTenantTransaction<Result>(
   }
 
   let transactionOpen = false;
+  let transactionActive = false;
   let transactionFailed = false;
   let destroyClient = false;
   const controlQuery = async (sql: string, values?: readonly unknown[]) => {
@@ -81,11 +82,15 @@ export async function withTenantTransaction<Result>(
       [principal.tenantId]
     );
 
+    transactionActive = true;
     const transaction: TenantTransaction = Object.freeze({
       query: async <Row = Record<string, unknown>>(
         sql: string,
         values: readonly unknown[] = []
       ): Promise<readonly Row[]> => {
+        if (!transactionActive) {
+          throw new TenantPersistenceError();
+        }
         try {
           const result = await client.query<Row>(sql, values);
           return result.rows;
@@ -97,6 +102,7 @@ export async function withTenantTransaction<Result>(
     });
 
     const result = await work(transaction);
+    transactionActive = false;
     if (transactionFailed) {
       throw new TenantPersistenceError();
     }
@@ -114,6 +120,7 @@ export async function withTenantTransaction<Result>(
     }
     throw error;
   } finally {
+    transactionActive = false;
     try {
       client.release(destroyClient);
     } catch {
