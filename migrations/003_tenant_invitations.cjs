@@ -22,6 +22,8 @@ exports.up = (pgm) => {
       version bigint NOT NULL DEFAULT 1,
       CONSTRAINT tenant_invitations_tenant_fk
         FOREIGN KEY (tenant_id) REFERENCES tenants (id) ON DELETE RESTRICT,
+      CONSTRAINT tenant_invitations_tenant_invitation_unique
+        UNIQUE (tenant_id, invitation_id),
       CONSTRAINT tenant_invitations_identity_type_check
         CHECK (identity_type IN ('email', 'phone')),
       CONSTRAINT tenant_invitations_identity_fingerprint_check
