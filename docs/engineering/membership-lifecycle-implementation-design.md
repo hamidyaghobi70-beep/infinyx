@@ -1,6 +1,6 @@
 # Membership Lifecycle Implementation Design
 
-- **Status:** Implemented persistence baseline on feature branch; CI verification pending
+- **Status:** Implemented persistence baseline on feature branch; CI verified for commit `251cf438d4671dc2a784ba769e625f1ae69198f6`
 - **Date:** 2026-11-27
 - **Branch:** `feat/adr-platform-foundation`
 - **Decision basis:** Accepted ADR-0007, ADR-0008, and ADR-0009
@@ -189,7 +189,7 @@ The following persistence baseline has been committed on the feature branch:
 2. **Audit foundation:** tenant-scoped RLS-protected audit events are added. The CI application role receives SELECT/INSERT only; it receives no UPDATE/DELETE privilege on audit rows. Membership rows cannot be deleted by the CI application role, and its update grant is restricted to lifecycle metadata columns, including the exact transition correlation ID.
 3. **Repository enforcement:** membership reads require active status. The lifecycle repository locks the tenant row, locks current actor/target generations, enforces the approved transition and owner safeguards, and writes audit events atomically. PostgreSQL triggers independently reject self/owner status changes, immutable identity/role changes, invalid transitions, and lifecycle updates without a matching success audit event.
 4. **Idempotency:** tenant-scoped correlation IDs prevent duplicate processing; reuse for a different actor/target/action is rejected.
-5. **Integration verification:** PostgreSQL 16 tests cover transitions, revocation, reactivation, removal history, new generations, owner-target denial, audit isolation, and append-only application grants. CI result must be checked before declaring this baseline verified.
+5. **Integration verification:** PostgreSQL 16 tests cover transitions, revocation, reactivation, removal history, new generations, owner-target denial, audit isolation, append-only application grants, and concurrent lifecycle requests. GitHub Actions run `45928762306` verified commit `251cf438d4671dc2a784ba769e625f1ae69198f6`: migrations and migration syntax passed, dependency audit reported zero vulnerabilities, TypeScript typecheck passed, and all 78 tests across 7 files passed.
 
 Branch assignments are not yet implemented; when added, they must reference `membership_id` rather than only a user ID.
 
@@ -236,6 +236,6 @@ Still requiring separate decisions/design before enabling broader functionality:
 
 ## 10. Remaining implementation boundaries
 
-The founder approved the migration/backfill, audit schema, repository changes, and PostgreSQL integration tests. Those changes are committed on `feat/adr-platform-foundation`; their verification remains pending until CI reports a result.
+The founder approved the migration/backfill, audit schema, repository changes, and PostgreSQL integration tests. The code snapshot at `251cf438d4671dc2a784ba769e625f1ae69198f6` passed CI run `45928762306`. Subsequent changes to this document are documentation-only.
 
 This implementation does not add HTTP endpoints, UI, invitation delivery/acceptance, self-leave, ownership transfer/governance, branch assignment tables, or branch-scoped authorization. Do not treat it as production-ready. Keep `main` unchanged. No merge, release, or deployment is authorized.
