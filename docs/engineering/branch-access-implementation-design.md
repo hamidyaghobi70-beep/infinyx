@@ -2,7 +2,7 @@
 
 **Status:** Proposed technical design — not authorized for implementation  
 **Scope:** Branch data model, visibility resolution, transaction boundaries, and security verification  
-**Related decisions:** ADR-0001 (multi-tenancy), ADR-0004 (PostgreSQL/RLS), ADR-0005 (branch visibility and assignment scope)
+**Related decisions:** ADR-0001 (multi-tenancy), ADR-0004 (PostgreSQL/RLS), ADR-0005 (branch visibility and assignment scope), ADR-0006 (assignment administration authorization)
 
 ## 1. Purpose
 
@@ -32,7 +32,7 @@ The following policy is already founder-approved in ADR-0005:
 4. Removing a branch assignment revokes that member's branch visibility.
 5. A removed or suspended tenant membership ends all branch access.
 6. A branch ID supplied by a client is only a selector; it is never proof of authorization.
-7. This policy defines visibility only. It does not grant write permissions or define who may create/revoke assignments.
+7. Visibility is separate from write permissions. Assignment administration is governed by ADR-0006: only `owner` and `admin` may grant or revoke branch assignments.
 
 ## 4. Proposed relational model
 
@@ -124,13 +124,19 @@ Important limitation: the current `app.tenant_id` custom GUC is transaction-loca
 
 Do not treat a branch-scoped GUC as an authorization guarantee unless its trust model is separately reviewed. Prefer explicit tenant and branch predicates plus verified membership/assignment checks in the DAL.
 
-## 8. Assignment administration remains undecided
+## 8. Assignment administration authorization
 
-ADR-0005 does not decide who may grant or revoke branch assignments. This design intentionally does not infer that permission from branch visibility or from a role name.
+Founder-approved decision recorded in ADR-0006:
 
-Before implementing assignment-management endpoints or repository methods, obtain an explicit founder decision on the authorized grant/revoke actors and any delegation rules.
+- Only `owner` and `admin` may create or revoke branch assignments.
+- `manager`, `editor`, and `viewer` may not administer branch assignments.
+- This permission is limited to assignments within the actor's own tenant and does not permit changing tenant roles, tenant ownership, or cross-tenant access.
+- Every grant/revoke operation must verify the actor's current database membership and allowed role in the same transaction as the assignment mutation.
+- Assignment changes must be audited with actor, target member, branch, action, timestamp, and outcome.
 
-Also unresolved: write permissions for editor and viewer. Visibility must not be interpreted as permission to create, update, delete, publish, or administer branch data.
+Do not infer any additional delegation or role-management capability from this decision.
+
+Still unresolved: write permissions for editor and viewer. Visibility must not be interpreted as permission to create, update, delete, publish, or administer branch data.
 
 ## 9. Audit requirements
 
@@ -170,7 +176,6 @@ Use real PostgreSQL integration tests with the least-privilege application role 
 Do not implement the migration or runtime resolver until the following are settled:
 
 - membership removal versus suspension lifecycle and assignment/audit retention;
-- who is allowed to grant and revoke branch assignments;
 - editor/viewer write permissions, if any, for branch-scoped resources;
 - exact branch identifier and naming constraints, if different from the proposed defaults.
 
@@ -178,4 +183,4 @@ Once these decisions are approved, implement in small, independently tested chan
 
 ## 12. Current status
 
-This document records a proposed technical design based on the current repository schema and approved visibility policy. It is not an implementation authorization and does not claim production readiness.
+This document records a proposed technical design based on the current repository schema and founder-approved visibility and assignment-administration policies. It is not an implementation authorization and does not claim production readiness.
