@@ -77,6 +77,12 @@ integrationDescribe("PostgreSQL durable web-session refresh reservation", () => 
       });
       await refreshStarted;
 
+      // A concurrent browser session-status poll must not expire the cookie
+      // merely because token refresh currently owns a durable reservation.
+      const activeDuringRefresh = await store.findActive(sessionId);
+      expect(activeDuringRefresh).not.toBeNull();
+      expect(await store.touch(sessionId, new Date(Date.now() + 1_800_000))).toBe(true);
+
       const second = await store.getUsableAccessToken(sessionId, async () => {
         providerCalls += 1;
         return { accessToken: "unexpected", accessTokenExpiresAt: Date.now() + 300_000 };
