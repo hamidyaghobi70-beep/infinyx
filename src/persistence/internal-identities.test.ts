@@ -84,7 +84,7 @@ describe("internal identity persistence", () => {
   });
 
   it("treats a repeated link to the same user as idempotent", async () => {
-    const { tx } = transaction((sql) => sql.includes("INSERT INTO user_external_identities")
+    const { tx, calls } = transaction((sql) => sql.includes("INSERT INTO user_external_identities")
       ? []
       : [identityRow]);
     await expect(linkExternalIdentity(tx, userId, issuer, subject)).resolves.toMatchObject({
