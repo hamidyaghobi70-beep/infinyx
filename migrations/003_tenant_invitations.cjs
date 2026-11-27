@@ -255,10 +255,10 @@ exports.down = (pgm) => {
     $block$;
 
     DROP FUNCTION IF EXISTS lookup_tenant_for_invitation_token(bytea);
-    DROP FUNCTION IF EXISTS require_tenant_invitation_audit();
-    DROP FUNCTION IF EXISTS enforce_tenant_invitation_transition();
     DROP TABLE IF EXISTS tenant_invitation_delivery_outbox;
     DROP TABLE IF EXISTS tenant_invitation_audit_events;
     DROP TABLE IF EXISTS tenant_invitations;
+    DROP FUNCTION IF EXISTS require_tenant_invitation_audit();
+    DROP FUNCTION IF EXISTS enforce_tenant_invitation_transition();
   `);
 };
