@@ -235,7 +235,7 @@ export class PostgresIdentitySecurityTransactionStore {
       );
       const transactions = await this.pool.query(
         `DELETE FROM identity_security_transactions AS security_tx
-          WHERE (security_tx.expires_at <= $1
+          WHERE ((security_tx.consumed_at IS NULL AND security_tx.expires_at <= $1)
              OR (security_tx.consumed_at IS NOT NULL
                  AND security_tx.consumed_at < $1 - interval '1 day'))
             AND NOT EXISTS (
