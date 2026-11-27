@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import type { AuthenticatedPrincipal } from "../core/authenticated-principal.js";
 import {
+  constantTimeEqual32,
   createInvitationSecrets,
   encryptInvitationDelivery,
   normalizeInvitationIdentity,
@@ -173,6 +174,48 @@ export async function createTenantInvitation(
 
   await lockAndAuthorizeTenant(transaction, principal);
 
+  const secrets = createInvitationSecrets(
+    target.identityType,
+    target.normalizedIdentity,
+    keys
+  );
+
+  const prior = await transaction.query<AuditRow>(
+    `SELECT action, outcome, invitation_id::text AS invitation_id, actor_user_id
+       FROM tenant_invitation_audit_events
+      WHERE tenant_id = $1 AND correlation_id = $2
+      LIMIT 1`,
+    [principal.tenantId, correlationId]
+  );
+  if (prior[0]) {
+    if (prior[0].action !== "created" ||
+        prior[0].actor_user_id !== principal.subject ||
+        !prior[0].invitation_id) {
+      throw new InvitationConflictError();
+    }
+    const existing = await transaction.query<{
+      identity_type: string;
+      identity_fingerprint: Buffer;
+      role: string;
+      invitation_id: string;
+      expires_at: string;
+    }>(
+      `SELECT invitation_id::text AS invitation_id, identity_type,
+              identity_fingerprint, role, expires_at::text AS expires_at
+         FROM tenant_invitations
+        WHERE tenant_id = $1 AND invitation_id = $2
+        LIMIT 1`,
+      [principal.tenantId, prior[0].invitation_id]
+    );
+    const row = existing[0];
+    if (!row || row.identity_type !== target.identityType ||
+        row.role !== role ||
+        !constantTimeEqual32(row.identity_fingerprint, secrets.identityFingerprint)) {
+      throw new InvitationConflictError();
+    }
+    return Object.freeze({ invitationId: row.invitation_id, expiresAt: row.expires_at });
+  }
+
   if (target.accountSubject) {
     const currentMembership = await transaction.query<{ membership_id: string }>(
       `SELECT membership_id::text AS membership_id
@@ -185,12 +228,6 @@ export async function createTenantInvitation(
     );
     if (currentMembership.length > 0) throw new InvitationConflictError();
   }
-
-  const secrets = createInvitationSecrets(
-    target.identityType,
-    target.normalizedIdentity,
-    keys
-  );
 
   const expired = await transaction.query<InvitationRow>(
     `SELECT invitation_id::text AS invitation_id, status, expires_at::text AS expires_at, version
