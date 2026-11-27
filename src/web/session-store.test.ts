@@ -27,7 +27,10 @@ function sessionRow(expiry: number, refreshToken?: string) {
       csrfToken
     }, key),
     idle_expires_at: new Date(now.getTime() + 1_800_000),
-    absolute_expires_at: new Date(now.getTime() + 28_800_000)
+    absolute_expires_at: new Date(now.getTime() + 28_800_000),
+    refresh_lease_id: null as string | null,
+    refresh_lease_expires_at: null as Date | null,
+    revoked_at: null as Date | null
   };
 }
 
@@ -48,13 +51,35 @@ function fakePool(
       if (sql.includes("SELECT user_id::text AS user_id")) {
         return { rows: [stored], rowCount: 1 };
       }
-      if (sql.includes("UPDATE web_sessions") && sql.includes("SET encrypted_token_bundle")) {
-        const updatedAt = (values?.[3] as Date).getTime();
-        if (updatedAt >= stored.idle_expires_at.getTime() ||
-            updatedAt >= stored.absolute_expires_at.getTime()) {
+      if (sql.includes("UPDATE web_sessions") && sql.includes("SET refresh_lease_id = $3::uuid")) {
+        const existingExpiry = stored.refresh_lease_expires_at;
+        if (existingExpiry && new Date(existingExpiry).getTime() > now.getTime()) {
           return { rows: [], rowCount: 0 };
         }
-        stored = { ...stored, encrypted_token_bundle: values?.[2] as Buffer };
+        stored = {
+          ...stored,
+          refresh_lease_id: values?.[2] as string,
+          refresh_lease_expires_at: new Date(now.getTime() + Number(values?.[3]))
+        };
+        return { rows: [], rowCount: 1 };
+      }
+      if (sql.includes("UPDATE web_sessions") && sql.includes("SET encrypted_token_bundle = $3")) {
+        const updatedAt = (values?.[3] as Date).getTime();
+        if (updatedAt >= stored.idle_expires_at.getTime() ||
+            updatedAt >= stored.absolute_expires_at.getTime() ||
+            stored.refresh_lease_id !== values?.[4]) {
+          return { rows: [], rowCount: 0 };
+        }
+        stored = {
+          ...stored,
+          encrypted_token_bundle: values?.[2] as Buffer,
+          refresh_lease_id: null,
+          refresh_lease_expires_at: null
+        };
+        return { rows: [], rowCount: 1 };
+      }
+      if (sql.includes("UPDATE web_sessions") && sql.includes("SET revoked_at")) {
+        stored = { ...stored, revoked_at: values?.[3] ?? values?.[2], refresh_lease_id: null, refresh_lease_expires_at: null };
         return { rows: [], rowCount: 1 };
       }
       return { rows: [], rowCount: null };
@@ -98,6 +123,24 @@ describe("serialized web-session access-token refresh", () => {
       refreshToken: "rotated-refresh-token",
       csrfToken
     });
+    expect(fake.stored.refresh_lease_id).toBeNull();
+    expect(fake.stored.refresh_lease_expires_at).toBeNull();
+  });
+
+  it("fails closed while a durable refresh lease from a disconnected owner is active", async () => {
+    const row = sessionRow(now.getTime() - 1, "single-use-refresh-token");
+    row.refresh_lease_id = "20000000-0000-4000-8000-000000000002";
+    row.refresh_lease_expires_at = new Date(now.getTime() + 30_000);
+    const fake = fakePool(row);
+    const store = new PostgresWebSessionStore(fake.pool, key, () => now);
+    const refresh = vi.fn();
+
+    await expect(store.getUsableAccessToken(createOpaqueSessionId(), refresh)).resolves.toBeNull();
+
+    expect(refresh).not.toHaveBeenCalled();
+    expect(fake.stored.refresh_lease_id).toBe(row.refresh_lease_id);
+    expect(fake.client.release).toHaveBeenCalledOnce();
+    expect(fake.calls.some(call => call.sql.includes("pg_advisory_unlock"))).toBe(true);
   });
 
   it("does not persist refreshed credentials if the session expires during the provider request", async () => {

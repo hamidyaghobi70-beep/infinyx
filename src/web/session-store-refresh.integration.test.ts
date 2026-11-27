@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import type { Pool } from "pg";
 import { createPostgresPool } from "../persistence/postgres-pool.js";
-import { createCsrfToken, createOpaqueSessionId, decryptSessionTokenBundle } from "./session-crypto.js";
+import { createCsrfToken, createOpaqueSessionId, decryptSessionTokenBundle, hashOpaqueSecret } from "./session-crypto.js";
 import { PostgresWebSessionStore } from "./session-store.js";
 
 const databaseUrl = process.env.INFINYX_TEST_DATABASE_URL;
@@ -110,12 +110,18 @@ integrationDescribe("PostgreSQL web-session refresh advisory lock", () => {
       await expect(first).resolves.toBe("rotated-access-token");
       expect(refreshCalls).toBe(1);
 
-      const persisted = await adminPool.query<{ encrypted_token_bundle: Buffer }>(
-        "SELECT encrypted_token_bundle FROM web_sessions WHERE user_id = $1::uuid",
+      const persisted = await adminPool.query<{
+        encrypted_token_bundle: Buffer;
+        refresh_lease_id: string | null;
+        refresh_lease_expires_at: Date | null;
+      }>(
+        "SELECT encrypted_token_bundle, refresh_lease_id, refresh_lease_expires_at FROM web_sessions WHERE user_id = $1::uuid",
         [userId]
       );
       expect(persisted.rows).toHaveLength(1);
       expect(persisted.rows[0]?.encrypted_token_bundle).toBeInstanceOf(Buffer);
+      expect(persisted.rows[0]?.refresh_lease_id).toBeNull();
+      expect(persisted.rows[0]?.refresh_lease_expires_at).toBeNull();
       expect(decryptSessionTokenBundle(persisted.rows[0]!.encrypted_token_bundle, encryptionKey))
         .toMatchObject({ accessToken: "rotated-access-token", refreshToken: "rotated-refresh-token", csrfToken });
     } finally {
@@ -125,4 +131,113 @@ integrationDescribe("PostgreSQL web-session refresh advisory lock", () => {
       // (their schema rejects deletion); use unique fixture identifiers per run.
     }
   });
+  it("keeps a durable refresh lease when PostgreSQL disconnects during the provider request", async () => {
+    const userId = randomUUID();
+    const issuer = `https://refresh-disconnect-${randomUUID()}.example.test`;
+    const subject = `subject-${randomUUID()}`;
+    const sessionId = createOpaqueSessionId();
+    const csrfToken = createCsrfToken();
+    const now = new Date();
+    const backendPids: number[] = [];
+    let signalClientError!: (error: Error) => void;
+    const firstClientError = new Promise<Error>(resolve => { signalClientError = resolve; });
+    const trackedPool = {
+      connect: async () => {
+        const client = await pool.connect();
+        const backend = await client.query<{ pid: number }>("SELECT pg_backend_pid() AS pid");
+        backendPids.push(backend.rows[0]!.pid);
+        if (backendPids.length === 1) client.once("error", signalClientError);
+        return client;
+      }
+    } as unknown as Pool;
+    const store = new PostgresWebSessionStore(trackedPool, encryptionKey);
+
+    let signalRefreshStarted!: () => void;
+    const refreshStarted = new Promise<void>(resolve => { signalRefreshStarted = resolve; });
+    let finishRefresh!: () => void;
+    const refreshGate = new Promise<void>(resolve => { finishRefresh = resolve; });
+    let refreshCalls = 0;
+    const refresh = async (token: string) => {
+      refreshCalls += 1;
+      expect(token).toBe("single-use-refresh-token");
+      signalRefreshStarted();
+      await refreshGate;
+      return {
+        accessToken: "rotated-access-token",
+        refreshToken: "rotated-refresh-token",
+        accessTokenExpiresAt: Date.now() + 300_000
+      };
+    };
+
+    let first: Promise<string | null> | undefined;
+    let firstRejected: Promise<void> | undefined;
+    try {
+      await adminPool.query("INSERT INTO users (id) VALUES ($1::uuid)", [userId]);
+      await adminPool.query(
+        "INSERT INTO user_external_identities (user_id, issuer, subject) VALUES ($1::uuid, $2, $3)",
+        [userId, issuer, subject]
+      );
+      await new PostgresWebSessionStore(adminPool, encryptionKey).create({
+        sessionId, csrfToken, userId, issuer, subject,
+        tokenBundle: {
+          accessToken: "expired-access-token",
+          refreshToken: "single-use-refresh-token",
+          accessTokenExpiresAt: now.getTime() - 1,
+          csrfToken
+        },
+        idleExpiresAt: new Date(now.getTime() + 1_800_000),
+        absoluteExpiresAt: new Date(now.getTime() + 28_800_000)
+      });
+
+      first = store.getUsableAccessToken(sessionId, refresh);
+      firstRejected = expect(first).rejects.toThrow("Web session operation failed.");
+      await refreshStarted;
+      expect(backendPids).toHaveLength(1);
+
+      const terminated = await adminPool.query<{ terminated: boolean }>(
+        "SELECT pg_terminate_backend($1) AS terminated",
+        [backendPids[0]]
+      );
+      expect(terminated.rows[0]?.terminated).toBe(true);
+      await firstClientError;
+
+      // Prove the old session-level advisory lock was released with the dead
+      // backend. The following store call must be blocked by the durable lease.
+      const probe = await adminPool.connect();
+      try {
+        const acquired = await probe.query<{ acquired: boolean }>(
+          "SELECT pg_try_advisory_lock(hashtextextended(encode($1::bytea, 'hex'), 78123)) AS acquired",
+          [hashOpaqueSecret(sessionId)]
+        );
+        expect(acquired.rows[0]?.acquired).toBe(true);
+        await probe.query(
+          "SELECT pg_advisory_unlock(hashtextextended(encode($1::bytea, 'hex'), 78123))",
+          [hashOpaqueSecret(sessionId)]
+        );
+      } finally {
+        probe.release();
+      }
+
+      await expect(store.getUsableAccessToken(sessionId, refresh)).resolves.toBeNull();
+      expect(refreshCalls).toBe(1);
+
+      const persisted = await adminPool.query<{
+        refresh_lease_id: string | null;
+        refresh_lease_expires_at: Date | null;
+      }>(
+        "SELECT refresh_lease_id, refresh_lease_expires_at FROM web_sessions WHERE user_id = $1::uuid",
+        [userId]
+      );
+      expect(persisted.rows).toHaveLength(1);
+      expect(persisted.rows[0]?.refresh_lease_id).toMatch(/^[0-9a-f-]{36}$/iu);
+      expect(new Date(persisted.rows[0]!.refresh_lease_expires_at!).getTime()).toBeGreaterThan(Date.now());
+
+      finishRefresh();
+      await firstRejected;
+    } finally {
+      finishRefresh?.();
+      await adminPool.query("DELETE FROM web_sessions WHERE user_id = $1::uuid", [userId]);
+    }
+  });
+
 });
