@@ -12,9 +12,13 @@ export const TENANT_ROLES = [
 export type TenantRole = (typeof TENANT_ROLES)[number];
 
 export interface TenantMembership {
+  readonly membershipId: string;
   readonly tenantId: string;
   readonly userId: string;
+  readonly generation: number;
   readonly role: TenantRole;
+  readonly status: "active";
+  readonly version: number;
 }
 
 export class TenantAuthorizationError extends Error {
@@ -29,27 +33,41 @@ function isTenantRole(value: unknown): value is TenantRole {
     (TENANT_ROLES as readonly string[]).includes(value);
 }
 
-/** A JWT tenant claim alone is not membership: resolve it from the database. */
+/** A JWT tenant claim alone is not membership: resolve an active row from the database. */
 export async function getTenantMembership(
   transaction: TenantTransaction,
   principal: AuthenticatedPrincipal
 ): Promise<TenantMembership | null> {
-  const rows = await transaction.query<{ role: string }>(
-    "SELECT role FROM tenant_memberships WHERE tenant_id = $1 AND user_id = $2 LIMIT 1",
+  const rows = await transaction.query<{
+    membership_id: string;
+    generation: number;
+    role: string;
+    status: string;
+    version: string | number;
+  }>(
+    `SELECT membership_id::text AS membership_id, generation, role, status, version
+       FROM tenant_memberships
+      WHERE tenant_id = $1 AND user_id = $2 AND status = 'active'
+      ORDER BY generation DESC
+      LIMIT 1`,
     [principal.tenantId, principal.subject]
   );
 
-  const role = rows[0]?.role;
-  if (!isTenantRole(role)) return null;
+  const row = rows[0];
+  if (!row || row.status !== "active" || !isTenantRole(row.role)) return null;
 
   return Object.freeze({
+    membershipId: row.membership_id,
     tenantId: principal.tenantId,
     userId: principal.subject,
-    role
+    generation: row.generation,
+    role: row.role,
+    status: "active",
+    version: Number(row.version)
   });
 }
 
-/** Requires a database membership and an explicitly allowed role. */
+/** Requires a current active database membership and an explicitly allowed role. */
 export async function requireTenantRole(
   transaction: TenantTransaction,
   principal: AuthenticatedPrincipal,
