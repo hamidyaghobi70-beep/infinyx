@@ -1,5 +1,5 @@
 import { generateKeyPairSync, sign } from "node:crypto";
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 import { createJwtPrincipalVerifier } from "../core/authenticated-principal.js";
 import {
   getTenantMembership,
@@ -38,14 +38,16 @@ function principal() {
 
 function transactionWithRole(role: TenantRole | null): TenantTransaction {
   return {
-    query: vi.fn(async <Row = Record<string, unknown>>(sql: string) => {
+    query: async <Row = Record<string, unknown>>(
+      sql: string,
+      _values?: readonly unknown[]
+    ): Promise<readonly Row[]> => {
       if (sql === "BEGIN" || sql === "COMMIT" || sql === "ROLLBACK" ||
           sql.startsWith("SELECT set_config")) {
-        return { rows: [] as Row[], rowCount: null };
+        return [];
       }
-      const rows = role ? [{ role } as unknown as Row] : [];
-      return { rows, rowCount: role ? 1 : 0 };
-    })
+      return role ? ([{ role }] as unknown as readonly Row[]) : [];
+    }
   };
 }
 
