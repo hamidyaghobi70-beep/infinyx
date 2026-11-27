@@ -31,14 +31,20 @@ function sessionRow(expiry: number, refreshToken?: string) {
   };
 }
 
-function fakePool(row: ReturnType<typeof sessionRow>) {
+function fakePool(
+  row: ReturnType<typeof sessionRow>,
+  options: { readonly unlockResult?: boolean; readonly unlockError?: boolean } = {}
+) {
   let stored = row;
   const calls: Array<{ sql: string; values?: readonly unknown[] }> = [];
   const client = {
     async query(sql: string, values?: readonly unknown[]) {
       calls.push({ sql, values });
       if (sql.includes("pg_try_advisory_lock")) return { rows: [{ acquired: true }], rowCount: 1 };
-      if (sql.includes("pg_advisory_unlock")) return { rows: [{ unlocked: true }], rowCount: 1 };
+      if (sql.includes("pg_advisory_unlock")) {
+        if (options.unlockError) throw new Error("simulated advisory unlock failure");
+        return { rows: [{ unlocked: options.unlockResult ?? true }], rowCount: 1 };
+      }
       if (sql.includes("SELECT user_id::text AS user_id")) {
         return { rows: [stored], rowCount: 1 };
       }
@@ -144,6 +150,22 @@ describe("serialized web-session access-token refresh", () => {
     expect(fake.client.release).toHaveBeenCalledOnce();
   });
 
+  it.each([
+    ["returns false", { unlockResult: false }],
+    ["throws", { unlockError: true }]
+  ] as const)("discards the PostgreSQL client when advisory unlock %s", async (_label, options) => {
+    const fake = fakePool(sessionRow(now.getTime() + 180_000, "refresh-token"), options);
+    const store = new PostgresWebSessionStore(fake.pool, key, () => now);
+
+    await expect(
+      store.getUsableAccessToken(createOpaqueSessionId(), vi.fn())
+    ).resolves.toBe("old-access-token");
+
+    expect(fake.client.release).toHaveBeenCalledOnce();
+    expect(fake.client.release).toHaveBeenCalledWith(
+      expect.objectContaining({ message: "Discarding connection after advisory-lock cleanup failure." })
+    );
+  });
   it("fails closed for malformed session identifiers", async () => {
     const fake = fakePool(sessionRow(now.getTime() + 100_000, "refresh-token"));
     const store = new PostgresWebSessionStore(fake.pool, key, () => now);
