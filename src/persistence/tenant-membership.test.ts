@@ -38,12 +38,13 @@ function principal() {
 
 function poolWithRole(role: TenantRole | null): TenantSqlPool {
   const client: TenantSqlClient = {
-    query: vi.fn(async (sql: string) => {
+    query: vi.fn(async <Row = Record<string, unknown>>(sql: string) => {
       if (sql === "BEGIN" || sql === "COMMIT" || sql === "ROLLBACK" ||
           sql.startsWith("SELECT set_config")) {
-        return { rows: [], rowCount: null };
+        return { rows: [] as Row[], rowCount: null };
       }
-      return { rows: role ? [{ role }] : [], rowCount: role ? 1 : 0 };
+      const rows = role ? [{ role } as Row] : [];
+      return { rows, rowCount: role ? 1 : 0 };
     }),
     release: vi.fn()
   };
