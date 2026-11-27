@@ -92,9 +92,14 @@ function setup() {
     tokenRevocation: vi.fn(async () => undefined)
   } as unknown as OidcBffClient;
 
+  let transactionConsumed = false;
   const pendingTransactions = {
     create: vi.fn(async () => undefined),
-    consume: vi.fn(async () => ({ codeVerifier: verifier, nonce }))
+    consume: vi.fn(async () => {
+      if (transactionConsumed) return null;
+      transactionConsumed = true;
+      return { codeVerifier: verifier, nonce };
+    })
   } as unknown as PostgresOidcLoginTransactionStore;
 
   let createdSession: Record<string, unknown> | undefined;
@@ -174,9 +179,10 @@ describe("OIDC-backed Node BFF handlers", () => {
     const base = await openServer(f.handlers);
     const login = await fetch(`${base}/auth/login`, { redirect: "manual" });
     const bindingCookie = getCookies(login)[0]!.split(";")[0]!;
+    const previousSessionId = createOpaqueSessionId();
     const callback = await fetch(
-      `${base}/auth/callback?state=${f.state}&code=synthetic-code&iss=${encodeURIComponent(issuer)}`,
-      { redirect: "manual", headers: { cookie: bindingCookie } }
+      `${base}/auth/callback?state=${f.state}&code=synthetic-code&iss=${encodeURIComponent(issuer)}&returnTo=https%3A%2F%2Fevil.example`,
+      { redirect: "manual", headers: { cookie: `${bindingCookie}; __Host-infinyx_session=${previousSessionId}` } }
     );
     expect(callback.status).toBe(303);
     expect(callback.headers.get("location")).toBe("/");
@@ -184,6 +190,7 @@ describe("OIDC-backed Node BFF handlers", () => {
     expect(f.authorizationCodeGrant).toHaveBeenCalledOnce();
     expect(f.database.query).toHaveBeenCalledWith(expect.stringContaining("user_external_identities"), [issuer, "subject-123"]);
     expect(f.sessions.create).toHaveBeenCalledOnce();
+    expect(f.sessions.revoke).toHaveBeenCalledWith(previousSessionId);
     expect(f.createdSession).toMatchObject({
       userId,
       issuer,
@@ -193,6 +200,13 @@ describe("OIDC-backed Node BFF handlers", () => {
     expect(cookies.some(cookie => cookie.startsWith("__Host-infinyx_session="))).toBe(true);
     expect(cookies.some(cookie => cookie.includes("__Host-infinyx_oidc_tx=") && cookie.includes("Max-Age=0"))).toBe(true);
     expect(callback.headers.get("cache-control")).toBe("no-store");
+
+    const replay = await fetch(
+      `${base}/auth/callback?state=${f.state}&code=synthetic-code`,
+      { redirect: "manual", headers: { cookie: bindingCookie } }
+    );
+    expect(replay.status).toBe(401);
+    expect(f.sessions.create).toHaveBeenCalledOnce();
   });
 
   it("returns only the internal user and CSRF token, never OAuth tokens", async () => {
