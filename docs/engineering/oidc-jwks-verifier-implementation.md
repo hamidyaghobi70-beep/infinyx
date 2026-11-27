@@ -1,6 +1,6 @@
 # OIDC/JWKS Verification — Implementation Record
 
-- **Status:** Implemented on the working branch; CI verification pending.
+- **Status:** Implemented and CI verified.
 - **Founder authorization:** Bounded OIDC/JWKS verification phase approved.
 - **Branch:** `feat/adr-platform-foundation`
 - **Environment:** Provider-neutral code and synthetic tests only; no live identity provider.
@@ -51,4 +51,8 @@ Synthetic RSA key pairs and a deterministic fake discovery/JWKS fetcher cover:
 
 ## Verification
 
-CI evidence will be added after the GitHub Actions run for the implementation commit completes.
+CI verification:
+- [GitHub Actions run #45936364957](https://github.com/hamidyaghobi70-beep/infinyx/actions/runs/45936364957) completed successfully on implementation commit `5d06bb371f269d3f80c06137c4a4a50cf10c548a`.
+- 11 test files passed; 101 tests passed.
+- TypeScript typecheck, migration apply, migration syntax checks, and dependency audit passed; npm audit reported 0 vulnerabilities.
+- The CI tests use synthetic signing keys and a fake OIDC discovery/JWKS endpoint; no live identity provider was contacted.
