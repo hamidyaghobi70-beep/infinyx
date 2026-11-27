@@ -267,3 +267,23 @@ This document does not authorize:
 - deployment, public exposure, merge, or release.
 
 **Next proposed step:** a separately approved implementation of Layer 1 local deterministic tests and the minimal configuration hardening needed to make TLS policy non-overridable. Cloud testing remains a separate approval gate.
+
+
+## 13. Layer 1 implementation status
+
+Layer 1 (local deterministic tests and connection-policy hardening) has now been implemented and CI-verified.
+
+Implementation details and evidence are recorded in:
+`docs/engineering/postgres-strict-tls-local-validation-implementation.md`
+
+The implementation requires `DATABASE_SSL_CA` and `DATABASE_SSL_SERVERNAME`, rejects SSL-related URL parameters, validates the configured CA and DNS identity, and restricts plaintext opt-out to tests or local loopback development.
+
+CI evidence for implementation commit `d185a06994358b8b30ab70cdb32c9a14d227dd49`:
+- Push run #45964970516: success.
+- Pull request run #45964977856: success.
+- 31 test files / 207 tests passed.
+- Separate ephemeral Keycloak HTTPS integration: 1 test passed.
+- Typecheck and BFF build passed.
+- npm audit reported zero vulnerabilities.
+
+Layer 1 does not validate Cloud SQL itself. Layer 2 remains a separate approval gate and must use a disposable private-only Cloud SQL instance with synthetic credentials. Public IP, external database URL fallback, production/staging database access, and any weakening of TLS remain prohibited.
