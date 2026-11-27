@@ -62,11 +62,25 @@ export class PostgresWebSessionStore {
   async create(input: NewWebSession): Promise<void> {
     validateNewSession(input);
     try {
-      await this.pool.query(
+      const inserted = await this.pool.query(
         `INSERT INTO web_sessions
            (session_id_hash, user_id, issuer, subject, csrf_token_hash,
             encrypted_token_bundle, idle_expires_at, absolute_expires_at)
-         VALUES ($1, $2::uuid, $3, $4, $5, $6, $7, $8)`,
+         SELECT $1, $2::uuid, $3, $4, $5, $6, $7, $8
+          WHERE EXISTS (
+            SELECT 1 FROM user_account_security AS account_security
+             WHERE account_security.user_id = $2::uuid
+               AND account_security.status = 'active'
+          )
+            AND NOT EXISTS (
+              SELECT 1 FROM user_account_session_revocation_outbox AS account_pending
+               WHERE account_pending.user_id = $2::uuid
+                 AND account_pending.completed_at IS NULL
+            )
+            AND NOT EXISTS (
+              SELECT 1 FROM identity_session_revocation_outbox AS pending
+               WHERE pending.user_id = $2::uuid AND pending.completed_at IS NULL
+            )`,
         [
           hashOpaqueSecret(input.sessionId),
           input.userId,
@@ -78,6 +92,7 @@ export class PostgresWebSessionStore {
           input.absoluteExpiresAt
         ]
       );
+      if (inserted.rowCount !== 1) throw new WebSessionStoreError();
     } catch {
       throw new WebSessionStoreError();
     }
@@ -96,6 +111,16 @@ export class PostgresWebSessionStore {
             AND revoked_at IS NULL
             AND idle_expires_at > $2
             AND absolute_expires_at > $2
+            AND EXISTS (
+              SELECT 1 FROM user_account_security AS account_security
+               WHERE account_security.user_id = web_sessions.user_id
+                 AND account_security.status = 'active'
+            )
+            AND NOT EXISTS (
+              SELECT 1 FROM user_account_session_revocation_outbox AS account_pending
+               WHERE account_pending.user_id = web_sessions.user_id
+                 AND account_pending.completed_at IS NULL
+            )
              AND NOT EXISTS (
                SELECT 1 FROM identity_session_revocation_outbox AS pending
                 WHERE pending.user_id = web_sessions.user_id AND pending.completed_at IS NULL
@@ -136,6 +161,16 @@ export class PostgresWebSessionStore {
             AND revoked_at IS NULL
             AND idle_expires_at > $2
             AND absolute_expires_at > $2
+            AND EXISTS (
+              SELECT 1 FROM user_account_security AS account_security
+               WHERE account_security.user_id = web_sessions.user_id
+                 AND account_security.status = 'active'
+            )
+            AND NOT EXISTS (
+              SELECT 1 FROM user_account_session_revocation_outbox AS account_pending
+               WHERE account_pending.user_id = web_sessions.user_id
+                 AND account_pending.completed_at IS NULL
+            )
              AND NOT EXISTS (
                SELECT 1 FROM identity_session_revocation_outbox AS pending
                 WHERE pending.user_id = web_sessions.user_id AND pending.completed_at IS NULL
@@ -181,6 +216,16 @@ export class PostgresWebSessionStore {
             AND revoked_at IS NULL
             AND idle_expires_at > $2
             AND absolute_expires_at > $2
+            AND EXISTS (
+              SELECT 1 FROM user_account_security AS account_security
+               WHERE account_security.user_id = web_sessions.user_id
+                 AND account_security.status = 'active'
+            )
+            AND NOT EXISTS (
+              SELECT 1 FROM user_account_session_revocation_outbox AS account_pending
+               WHERE account_pending.user_id = web_sessions.user_id
+                 AND account_pending.completed_at IS NULL
+            )
              AND NOT EXISTS (
                SELECT 1 FROM identity_session_revocation_outbox AS pending
                 WHERE pending.user_id = web_sessions.user_id AND pending.completed_at IS NULL
