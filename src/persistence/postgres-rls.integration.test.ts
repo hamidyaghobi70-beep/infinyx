@@ -18,6 +18,8 @@ import {
 } from "./tenant-membership.js";
 import { getCurrentTenant } from "./tenant-repository.js";
 import { transitionTenantMembership } from "./membership-lifecycle.js";
+import { acceptTenantInvitation } from "./tenant-invitation-acceptance.js";
+import { createInvitationSecrets, type InvitationKeyMaterial } from "./tenant-invitation-crypto.js";
 
 const databaseUrl = process.env.INFINYX_TEST_DATABASE_URL;
 const integrationDescribe = databaseUrl ? describe : describe.skip;
@@ -628,6 +630,94 @@ integrationDescribe("PostgreSQL tenant RLS integration", () => {
         [owner.subject, "tenant-a", invitationId]
       )
     )).rejects.toBeInstanceOf(TenantPersistenceError);
+  });
+
+
+  it("accepts a single-use invitation using token-resolved tenant scope and verified identity", async () => {
+    const owner = principalFor("tenant-a");
+    const invitee = principalFor("tenant-b", "user-invited-from-other-tenant");
+    const keys: InvitationKeyMaterial = {
+      tokenKey: Buffer.alloc(32, 71),
+      tokenKeyVersion: 1,
+      identityKey: Buffer.alloc(32, 72),
+      identityKeyVersion: 1,
+      deliveryKey: Buffer.alloc(32, 73),
+      deliveryKeyVersion: 1
+    };
+    const secret = createInvitationSecrets("email", "invitee@example.com", keys);
+    const invitationId = await withTenantTransaction(tenantPool, owner, async (transaction) => {
+      const rows = await transaction.query<{ invitation_id: string }>(
+        `INSERT INTO tenant_invitations
+          (tenant_id, identity_type, identity_fingerprint, identity_key_version,
+           token_hash, token_key_version, role, invited_by)
+         VALUES ($1, 'email', $2, 1, $3, 1, 'viewer', $4)
+         RETURNING invitation_id::text AS invitation_id`,
+        ["tenant-a", secret.identityFingerprint, secret.tokenHash, owner.subject]
+      );
+      const id = rows[0]!.invitation_id;
+      await transaction.query(
+        `INSERT INTO tenant_invitation_audit_events
+          (tenant_id, invitation_id, actor_user_id, action, previous_status,
+           new_status, outcome, reason_code, correlation_id)
+         VALUES ($1, $2, $3, 'created', NULL, 'pending', 'succeeded',
+                 'integration_seed', $4)`,
+        ["tenant-a", id, owner.subject, "51000000-0000-4000-8000-000000000001"]
+      );
+      return id;
+    });
+
+    const result = await acceptTenantInvitation(
+      tenantPool,
+      invitee,
+      secret.rawToken,
+      {
+        async verifyAuthenticatedIdentity(principal) {
+          return {
+            subject: principal.subject,
+            identityType: "email",
+            identity: "invitee@example.com",
+            issuer: "https://trusted.identity.integration.test",
+            audience: "infinyx-api",
+            verifiedAt: Math.floor(Date.now() / 1000)
+          };
+        }
+      },
+      keys
+    );
+
+    expect(result).toMatchObject({
+      outcome: "accepted",
+      tenantId: "tenant-a",
+      generation: 1,
+      role: "viewer"
+    });
+    const persisted = await withTenantTransaction(tenantPool, owner, async (transaction) => ({
+      invitation: await transaction.query<{ status: string; accepted_by: string }>(
+        "SELECT status, accepted_by FROM tenant_invitations WHERE invitation_id = $1",
+        [invitationId]
+      ),
+      membership: await transaction.query<{ user_id: string; generation: number; role: string }>(
+        "SELECT user_id, generation, role FROM tenant_memberships WHERE tenant_id = $1 AND user_id = $2",
+        ["tenant-a", invitee.subject]
+      )
+    }));
+    expect(persisted.invitation).toEqual([{
+      status: "accepted",
+      accepted_by: invitee.subject
+    }]);
+    expect(persisted.membership).toEqual([{
+      user_id: invitee.subject,
+      generation: 1,
+      role: "viewer"
+    }]);
+
+    const wrongTenant = await withTenantTransaction(tenantPool, principalFor("tenant-b"), (transaction) =>
+      transaction.query(
+        "SELECT user_id FROM tenant_memberships WHERE tenant_id = $1 AND user_id = $2",
+        ["tenant-a", invitee.subject]
+      )
+    );
+    expect(wrongTenant).toEqual([]);
   });
 
 });
