@@ -166,6 +166,7 @@ describe("serialized web-session access-token refresh", () => {
       expect.objectContaining({ message: "Discarding connection after advisory-lock cleanup failure." })
     );
   });
+
   it("fails closed for malformed session identifiers", async () => {
     const fake = fakePool(sessionRow(now.getTime() + 100_000, "refresh-token"));
     const store = new PostgresWebSessionStore(fake.pool, key, () => now);
