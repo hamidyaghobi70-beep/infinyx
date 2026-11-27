@@ -106,10 +106,14 @@ export function buildPostgresPoolConfig(
   }
 
   const nodeEnvironment = env.NODE_ENV ?? process.env.NODE_ENV;
+  const isLoopbackDatabase =
+    parsedUrl.hostname === "localhost" ||
+    (isIP(parsedUrl.hostname) === 4 && parsedUrl.hostname.startsWith("127."));
+
   if (
     sslMode === "disable" &&
     nodeEnvironment !== "test" &&
-    nodeEnvironment !== "development"
+    !(nodeEnvironment === "development" && isLoopbackDatabase)
   ) {
     throw new PostgresConfigurationError();
   }
