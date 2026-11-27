@@ -1,0 +1,32 @@
+{
+  "name": "infinyx",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=22 <23"
+  },
+  "scripts": {
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "typecheck": "tsc --noEmit",
+    "db:migrate:up": "node-pg-migrate up --migrations-dir migrations",
+    "db:migrate:down": "node-pg-migrate down --migrations-dir migrations",
+    "db:migrate:check": "node --check migrations/001_initial_tenant_schema.cjs && node --check migrations/002_membership_lifecycle.cjs && node --check migrations/003_tenant_invitations.cjs && node --check migrations/004_internal_identity_foundation.cjs && node --check migrations/005_internal_user_membership_mapping.cjs && node --check migrations/006_web_sessions.cjs && node --check migrations/007_web_login_transactions.cjs && node --check migrations/008_external_identity_lifecycle.cjs && node --check migrations/009_identity_security_transactions.cjs && node --check migrations/010_external_identity_link_workflow.cjs && node --check migrations/011_external_identity_unlink_audit.cjs && node --check migrations/012_user_account_security_lifecycle.cjs && node --check migrations/013_account_session_revocation_outbox.cjs && node --check migrations/014_account_recovery_workflow.cjs && node --check migrations/015_database_owned_session_revocation_completion.cjs",
+    "build": "tsc -p tsconfig.build.json",
+    "start:web": "node dist/web/main.js",
+    "test:keycloak": "vitest run src/web/keycloak.integration.test.ts"
+  },
+  "devDependencies": {
+    "@types/express": "5.0.3",
+    "@types/node": "22.15.30",
+    "@types/pg": "8.23.1",
+    "typescript": "5.8.3",
+    "vitest": "5.1.2"
+  },
+  "dependencies": {
+    "node-pg-migrate": "7.6.1",
+    "openid-client": "6.9.1",
+    "pg": "8.23.1"
+  }
+}
