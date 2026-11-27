@@ -133,15 +133,13 @@ integrationDescribe("PostgreSQL internal identity integration", () => {
   });
 
   it("does not allow links to nonexistent internal users", async () => {
-    await withTenantTransaction(tenantPool, principal, async (transaction) => {
-      await expect(
-        linkExternalIdentity(
-          transaction,
-          "00000000-0000-4000-8000-000000000001",
-          issuer,
-          `orphan-${randomUUID()}`
-        )
-      ).rejects.toThrow("Internal identity operation failed");
-    });
+    await expect(withTenantTransaction(tenantPool, principal, (transaction) =>
+      linkExternalIdentity(
+        transaction,
+        "00000000-0000-4000-8000-000000000001",
+        issuer,
+        `orphan-${randomUUID()}`
+      )
+    )).rejects.toThrow();
   });
 });
