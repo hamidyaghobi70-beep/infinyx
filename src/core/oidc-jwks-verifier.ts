@@ -102,7 +102,7 @@ export function createOidcJwksPrincipalVerifier(
             typeof jwk.kid !== "string" || !KID_PATTERN.test(jwk.kid)) continue;
         if (keys.has(jwk.kid)) throw new Error("Duplicate signing key ID.");
         try {
-          const key = createPublicKey({ key: jwk as JsonWebKey, format: "jwk" });
+          const key = createPublicKey({ key: jwk as import("node:crypto").JsonWebKey, format: "jwk" });
           if (key.asymmetricKeyType !== "rsa" ||
               (key.asymmetricKeyDetails?.modulusLength ?? 0) < 2048) continue;
           keys.set(jwk.kid, key);
