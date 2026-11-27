@@ -258,7 +258,8 @@ describe("buildPostgresPoolConfig", () => {
     expect(() =>
       buildPostgresPoolConfig({
         DATABASE_URL: databaseUrl,
-        DATABASE_SSL: "disable"
+        DATABASE_SSL: "disable",
+        NODE_ENV: ""
       })
     ).toThrow(PostgresConfigurationError);
   });
