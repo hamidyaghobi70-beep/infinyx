@@ -2,7 +2,7 @@
 
 **Status:** Proposed technical design — not authorized for implementation  
 **Scope:** Branch data model, visibility resolution, transaction boundaries, and security verification  
-**Related decisions:** ADR-0001 (multi-tenancy), ADR-0004 (PostgreSQL/RLS), ADR-0005 (branch visibility and assignment scope), ADR-0006 (assignment administration authorization)
+**Related decisions:** ADR-0001 (multi-tenancy), ADR-0004 (PostgreSQL/RLS), ADR-0005 (branch visibility and assignment scope), ADR-0006 (assignment administration authorization), ADR-0007 (tenant membership lifecycle), ADR-0008 (membership lifecycle administration)
 
 ## 1. Purpose
 
@@ -141,6 +141,24 @@ Do not infer any additional delegation or role-management capability from this d
 
 Still unresolved: write permissions for editor and viewer. Visibility must not be interpreted as permission to create, update, delete, publish, or administer branch data.
 
+
+
+## 8.1 Membership lifecycle administration authorization
+
+Founder-approved policy recorded in ADR-0008:
+
+- Only an active, database-verified `owner` or `admin` may suspend, reactivate, or remove a membership in the same tenant.
+- The target membership must belong to the actor's tenant.
+- The actor's current membership state and role must be checked in the database; client and JWT role claims are not authorization evidence.
+- Authorization and the lifecycle mutation must occur in the same tenant transaction.
+- `manager`, `editor`, and `viewer` cannot administer membership lifecycle.
+- Lifecycle administration does not imply role changes, ownership transfer, or branch-assignment administration beyond ADR-0006.
+- Each attempted operation must be audited with tenant, actor, target member, action, timestamp, and outcome.
+
+The following safeguards remain unresolved and are implementation gates: self-suspension/removal, admin actions against owners, last-active-owner protection, owner-to-owner actions, removal reversibility, exact transition/idempotency rules, and audit retention/immutability/failure behavior. Do not infer permissive behavior; affected operations must fail closed until these decisions are approved.
+
+This policy is not implemented by the current schema or runtime helpers. It does not authorize migrations, repositories, endpoints, or UI.
+
 ## 9. Audit requirements
 
 Assignment creation and revocation should produce security audit events containing, at minimum:
@@ -176,7 +194,11 @@ Use real PostgreSQL integration tests with the least-privilege application role 
 16. Cross-tenant assignment rows are rejected by composite foreign keys.
 17. Generic authorization failures do not reveal whether another tenant's branch or member exists.
 
-## 11. Implementation gates
+## 11. Membership lifecycle administration implementation gates
+
+In addition to the unresolved branch-specific items below, ADR-0008 requires explicit decisions for self-suspension/removal, admin actions against owners, last-active-owner protection, owner-to-owner actions, removal reversibility, transition/idempotency rules, and audit retention/immutability/failure behavior. These must be settled before implementing membership lifecycle administration. Do not infer default permissions for these edge cases.
+
+## 12. Implementation gates
 
 Do not implement the migration or runtime resolver until the following are settled:
 
@@ -186,6 +208,6 @@ Do not implement the migration or runtime resolver until the following are settl
 
 Once these decisions are approved, implement in small, independently tested changes on `feat/adr-platform-foundation`. Keep `main` unchanged. No merge, release, or deployment is authorized by this design.
 
-## 12. Current status
+## 13. Current status
 
 This document records a proposed technical design based on the current repository schema and founder-approved visibility and assignment-administration policies. It is not an implementation authorization and does not claim production readiness.
