@@ -168,11 +168,11 @@ export async function transitionTenantMembership(
     reasonCode = "target_not_found";
   } else if (target.role === "owner") {
     reasonCode = "owner_governance_required";
-  } else if (target.status === "removed") {
-    reasonCode = "removed_membership_terminal";
   } else if (target.status === requestedStatus) {
     outcome = "noop";
     reasonCode = "same_state";
+  } else if (target.status === "removed") {
+    reasonCode = "removed_membership_terminal";
   } else {
     outcome = "succeeded";
     reasonCode = "transition_applied";
