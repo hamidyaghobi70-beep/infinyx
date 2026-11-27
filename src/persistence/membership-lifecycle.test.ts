@@ -131,6 +131,14 @@ describe("membership lifecycle repository", () => {
     expect(db.calls.some((call) => call.sql.startsWith("UPDATE tenant_memberships"))).toBe(false);
   });
 
+  it("treats a removed-to-removed request as a stable no-op", async () => {
+    const db = makeTransaction({ target: { status: "removed" } });
+    await expect(transitionTenantMembership(
+      db.tx, principal, "target-user", "removed", correlationId
+    )).resolves.toEqual({ outcome: "noop" });
+    expect(db.calls.some((call) => call.sql.startsWith("UPDATE tenant_memberships"))).toBe(false);
+  });
+
   it("returns an earlier result for an identical idempotent retry", async () => {
     const db = makeTransaction({
       priorAudit: {
