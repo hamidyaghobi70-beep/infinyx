@@ -87,6 +87,7 @@ jobs:
           psql "$DATABASE_URL" -v ON_ERROR_STOP=1 <<'SQL'
           GRANT USAGE ON SCHEMA public TO infinyx_app;
           GRANT SELECT, INSERT ON users, user_external_identities TO infinyx_app;
+          GRANT SELECT ON user_external_identity_lifecycle, user_external_identity_lifecycle_events TO infinyx_app;
           GRANT SELECT, INSERT, UPDATE, DELETE ON web_sessions TO infinyx_app;
           GRANT SELECT, INSERT, UPDATE, DELETE ON web_login_transactions TO infinyx_app;
           GRANT SELECT, INSERT ON tenants, tenant_memberships TO infinyx_app;
