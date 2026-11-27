@@ -264,7 +264,7 @@ integrationDescribe("PostgreSQL tenant RLS integration", () => {
       membership: {
         membershipId: expect.any(String),
         tenantId: "tenant-a",
-        userId: "user-tenant-a",
+        userId: userIdFor("user-tenant-a"),
         generation: 1,
         role: "owner",
         status: "active",
@@ -290,7 +290,7 @@ integrationDescribe("PostgreSQL tenant RLS integration", () => {
           principalFor("tenant-a", "user-not-a-member")
         )
       )
-    ).resolves.toBeNull();
+    ).rejects.toBeInstanceOf(TenantAuthorizationError);
 
     await expect(
       withTenantTransaction(tenantPool, principalFor("tenant-a"), "tenant-a",
@@ -323,7 +323,7 @@ integrationDescribe("PostgreSQL tenant RLS integration", () => {
 
     await expect(withTenantTransaction(tenantPool, target, "tenant-a", (transaction) =>
       getTenantMembership(transaction, target)
-    )).resolves.toBeNull();
+    )).rejects.toBeInstanceOf(TenantAuthorizationError);
 
     const reactivateId = "10000000-0000-4000-8000-000000000002";
     await expect(withTenantTransaction(tenantPool, owner, "tenant-a", (transaction) =>
@@ -369,7 +369,7 @@ integrationDescribe("PostgreSQL tenant RLS integration", () => {
 
     await expect(withTenantTransaction(tenantPool, target, "tenant-a", (transaction) =>
       getTenantMembership(transaction, target)
-    )).resolves.toBeNull();
+    )).rejects.toBeInstanceOf(TenantAuthorizationError);
 
     const audit = await withTenantTransaction(tenantPool, owner, "tenant-a", (transaction) =>
       transaction.query<{ requested_status: string; outcome: string }>(
@@ -388,7 +388,7 @@ integrationDescribe("PostgreSQL tenant RLS integration", () => {
     const admin = principalFor("tenant-a", "user-lifecycle-admin");
     await withTenantTransaction(tenantPool, owner, "tenant-a", (transaction) =>
       transaction.query(
-        "INSERT INTO tenant_memberships (tenant_id, user_id, role) VALUES ($1, $2, $3)",
+        "INSERT INTO tenant_memberships (tenant_id, user_id, internal_user_id, role) VALUES ($1, $2, $2::uuid, $3)",
         ["tenant-a", "user-lifecycle-admin", "admin"]
       )
     );
@@ -438,14 +438,14 @@ integrationDescribe("PostgreSQL tenant RLS integration", () => {
     await expect(withTenantTransaction(tenantPool, owner, "tenant-a", (transaction) =>
       transaction.query(
         "UPDATE tenant_memberships SET role = $1 WHERE tenant_id = $2 AND user_id = $3",
-        ["admin", "tenant-a", "user-tenant-a"]
+        ["admin", "tenant-a", userIdFor("user-tenant-a")]
       )
     )).rejects.toBeInstanceOf(TenantPersistenceError);
 
     await expect(withTenantTransaction(tenantPool, owner, "tenant-a", (transaction) =>
       transaction.query(
         "DELETE FROM tenant_memberships WHERE tenant_id = $1 AND user_id = $2",
-        ["tenant-a", "user-tenant-a"]
+        ["tenant-a", userIdFor("user-tenant-a")]
       )
     )).rejects.toBeInstanceOf(TenantPersistenceError);
   });
@@ -458,7 +458,7 @@ integrationDescribe("PostgreSQL tenant RLS integration", () => {
 
     await withTenantTransaction(tenantPool, owner, "tenant-a", (transaction) =>
       transaction.query(
-        "INSERT INTO tenant_memberships (tenant_id, user_id, role) VALUES ($1, $2, $3)",
+        "INSERT INTO tenant_memberships (tenant_id, user_id, internal_user_id, role) VALUES ($1, $2, $2::uuid, $3)",
         ["tenant-a", targetUserId, "viewer"]
       )
     );
@@ -494,7 +494,7 @@ integrationDescribe("PostgreSQL tenant RLS integration", () => {
     expect(history[0]?.status).toBe("removed");
     await expect(withTenantTransaction(tenantPool, target, "tenant-a", (transaction) =>
       getTenantMembership(transaction, target)
-    )).resolves.toBeNull();
+    )).rejects.toBeInstanceOf(TenantAuthorizationError);
   });
 
 
@@ -505,7 +505,7 @@ integrationDescribe("PostgreSQL tenant RLS integration", () => {
 
     await withTenantTransaction(tenantPool, owner, "tenant-a", (transaction) =>
       transaction.query(
-        "INSERT INTO tenant_memberships (tenant_id, user_id, role) VALUES ($1, $2, $3)",
+        "INSERT INTO tenant_memberships (tenant_id, user_id, internal_user_id, role) VALUES ($1, $2, $2::uuid, $3)",
         ["tenant-a", targetUserId, "viewer"]
       )
     );
@@ -527,7 +527,7 @@ integrationDescribe("PostgreSQL tenant RLS integration", () => {
     await expect(withTenantTransaction(tenantPool, owner, "tenant-a", (transaction) =>
       transaction.query(
         "UPDATE tenant_memberships SET status = $1, status_changed_at = now(), status_changed_by = $2, version = version + 1 WHERE tenant_id = $3 AND user_id = $4",
-        ["suspended", "user-lifecycle-trigger-guard", "tenant-a", "user-tenant-a"]
+        ["suspended", userIdFor("user-lifecycle-trigger-guard"), "tenant-a", userIdFor("user-tenant-a")]
       )
     )).rejects.toBeInstanceOf(TenantPersistenceError);
 
