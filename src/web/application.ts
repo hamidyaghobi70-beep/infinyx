@@ -98,6 +98,7 @@ export async function createWebBffApplication(
     return Object.freeze({
       server: createBffHttpServer({ ...handlers, ...identityHandlers }),
       pool,
+      retryPendingIdentitySessionRevocations: () => retryPendingIdentitySessionRevocations(pool!, sessions),
       host: runtime.host,
       port: runtime.port
     });
