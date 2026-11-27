@@ -138,7 +138,14 @@ export async function transitionTenantMembership(
     `SELECT membership_id::text AS membership_id, user_id, role, status,
             generation, version
        FROM tenant_memberships
-      WHERE tenant_id = $1 AND user_id = ANY($2::text[])
+      WHERE tenant_id = $1
+        AND user_id = ANY($2::text[])
+        AND generation = (
+          SELECT max(latest.generation)
+            FROM tenant_memberships AS latest
+           WHERE latest.tenant_id = tenant_memberships.tenant_id
+             AND latest.user_id = tenant_memberships.user_id
+        )
       ORDER BY user_id
       FOR UPDATE`,
     [principal.tenantId, [principal.subject, targetUserId]]
