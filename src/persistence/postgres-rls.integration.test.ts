@@ -42,7 +42,7 @@ integrationDescribe("PostgreSQL tenant RLS integration", () => {
   let pool: ReturnType<typeof createPostgresPool>;
   let tenantPool: ReturnType<typeof createTenantSqlPool>;
 
-  function principalFor(tenantId: string) {
+  function principalFor(tenantId: string, subject = `user-${tenantId}`) {
     const encode = (value: unknown) =>
       Buffer.from(JSON.stringify(value)).toString("base64url");
     const unsigned = [
@@ -50,7 +50,7 @@ integrationDescribe("PostgreSQL tenant RLS integration", () => {
       encode({
         iss: issuer,
         aud: audience,
-        sub: `user-${tenantId}`,
+        sub: subject,
         tenant_id: tenantId,
         exp: Math.floor(Date.now() / 1000) + 60
       })
