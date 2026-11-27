@@ -307,7 +307,7 @@ integrationDescribe("PostgreSQL tenant RLS integration", () => {
   it("applies audited membership transitions and preserves removed generations", async () => {
     const owner = principalFor("tenant-a");
     const targetUserId = userIdFor("user-lifecycle-target");
-    const target = principalFor("tenant-a", targetUserId);
+    const target = principalFor("tenant-a", "user-lifecycle-target");
 
     await withTenantTransaction(tenantPool, owner, "tenant-a", (transaction) =>
       transaction.query(
@@ -389,7 +389,7 @@ integrationDescribe("PostgreSQL tenant RLS integration", () => {
     await withTenantTransaction(tenantPool, owner, "tenant-a", (transaction) =>
       transaction.query(
         "INSERT INTO tenant_memberships (tenant_id, user_id, internal_user_id, role) VALUES ($1, $2, $2::uuid, $3)",
-        ["tenant-a", "user-lifecycle-admin", "admin"]
+        ["tenant-a", userIdFor("user-lifecycle-admin"), "admin"]
       )
     );
 
@@ -397,7 +397,7 @@ integrationDescribe("PostgreSQL tenant RLS integration", () => {
       transitionTenantMembership(
         transaction,
         admin,
-        "user-tenant-a",
+        userIdFor("user-tenant-a"),
         "suspended",
         "20000000-0000-4000-8000-000000000001"
       )
@@ -454,7 +454,7 @@ integrationDescribe("PostgreSQL tenant RLS integration", () => {
   it("serializes concurrent lifecycle changes for one tenant", async () => {
     const owner = principalFor("tenant-a");
     const targetUserId = userIdFor("user-lifecycle-concurrent");
-    const target = principalFor("tenant-a", targetUserId);
+    const target = principalFor("tenant-a", "user-lifecycle-concurrent");
 
     await withTenantTransaction(tenantPool, owner, "tenant-a", (transaction) =>
       transaction.query(
@@ -501,7 +501,7 @@ integrationDescribe("PostgreSQL tenant RLS integration", () => {
   it("requires an audit event for direct lifecycle updates and blocks removed reactivation", async () => {
     const owner = principalFor("tenant-a");
     const targetUserId = userIdFor("user-lifecycle-trigger-guard");
-    const target = principalFor("tenant-a", targetUserId);
+    const target = principalFor("tenant-a", "user-lifecycle-trigger-guard");
 
     await withTenantTransaction(tenantPool, owner, "tenant-a", (transaction) =>
       transaction.query(
