@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { createPostgresPool } from "../persistence/postgres-pool.js";
+import { createCsrfToken, createOpaqueSessionId } from "./session-crypto.js";
 import { PostgresWebSessionStore } from "./session-store.js";
 import {
   completeIdentitySessionRevocation,
@@ -202,6 +203,20 @@ integrationDescribe("PostgreSQL immutable external identity link workflow", () =
     const issuer = `https://outbox-${randomUUID()}.example.test`;
     const subject = `subject-${randomUUID()}`;
     await adminPool.query("INSERT INTO users (id) VALUES ($1::uuid)", [actor]);
+    const sessions = new PostgresWebSessionStore(pool, sessionKey);
+    const sessionId = createOpaqueSessionId();
+    const csrfToken = createCsrfToken();
+    const now = new Date();
+    await sessions.create({
+      sessionId, csrfToken, userId: actor, issuer, subject,
+      tokenBundle: {
+        accessToken: "synthetic-access-token",
+        accessTokenExpiresAt: now.getTime() + 300_000,
+        csrfToken
+      },
+      idleExpiresAt: new Date(now.getTime() + 1_800_000),
+      absoluteExpiresAt: new Date(now.getTime() + 28_800_000)
+    });
     const linked = await registerVerifiedIdentityLink(pool, actor, issuer, subject, randomUUID());
     expect(linked.outcome).toBe("linked");
     if (linked.outcome !== "linked") throw new Error("Expected linked outcome.");
@@ -225,9 +240,9 @@ integrationDescribe("PostgreSQL immutable external identity link workflow", () =
       completed_at: null, attempts: 1, last_error_code: "session_revocation_failed"
     });
 
-    const successfulSessions = new PostgresWebSessionStore(pool, sessionKey);
+    expect(await sessions.findActive(sessionId)).toBeNull();
     expect(await completeIdentitySessionRevocation(
-      pool, successfulSessions, actor, linked.outboxId
+      pool, sessions, actor, linked.outboxId
     )).toBe(true);
     const completed = await adminPool.query(
       "SELECT completed_at, attempts, last_error_code FROM identity_session_revocation_outbox WHERE outbox_id = $1::uuid",
