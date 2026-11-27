@@ -55,7 +55,7 @@ Rationale: prevents stale assignments or old credentials from silently restoring
 
 **Recommendation:** Enforce only these transitions:
 
-| Current state | Requested state | Recommendation |
+| Current state | Requested state | Decision |
 |---|---|---|
 | active | suspended | Allow if actor and ownership safeguards pass |
 | active | removed | Allow if actor and ownership safeguards pass |
