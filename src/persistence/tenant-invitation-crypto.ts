@@ -82,6 +82,26 @@ function hmac(key: Buffer, purpose: string, value: string): Buffer {
     .digest();
 }
 
+export function fingerprintInvitationIdentity(
+  type: InvitationIdentityType,
+  identity: string,
+  identityKey: Buffer
+): Buffer {
+  if (!Buffer.isBuffer(identityKey) || identityKey.length < 32) {
+    throw new TypeError("Invitation identity key is unavailable.");
+  }
+  const normalizedIdentity = normalizeInvitationIdentity(type, identity);
+  return hmac(
+    identityKey,
+    `infinyx-invitation-identity-v1:${type}`,
+    normalizedIdentity
+  );
+}
+
+export function constantTimeEqual32(candidate: Buffer, stored: Buffer): boolean {
+  return constantTimeEqual32(candidate, stored);
+}
+
 export function createInvitationSecrets(
   type: InvitationIdentityType,
   identity: string,
@@ -93,10 +113,10 @@ export function createInvitationSecrets(
   return Object.freeze({
     rawToken,
     tokenHash: hmac(keys.tokenKey, "infinyx-invitation-token-v1", rawToken),
-    identityFingerprint: hmac(
-      keys.identityKey,
-      `infinyx-invitation-identity-v1:${type}`,
-      normalizedIdentity
+    identityFingerprint: fingerprintInvitationIdentity(
+      type,
+      normalizedIdentity,
+      keys.identityKey
     ),
     identityType: type,
     normalizedIdentity
