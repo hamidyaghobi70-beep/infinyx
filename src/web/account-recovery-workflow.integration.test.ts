@@ -144,6 +144,12 @@ integrationDescribe("PostgreSQL safe suspended account recovery", () => {
       [result.outboxId]
     );
     expect(outbox.rows[0]).toEqual({ user_id: account.userId, completed_at: null });
+    await expect(pool.query(
+      `UPDATE user_account_session_revocation_outbox
+          SET completed_at = now()
+        WHERE outbox_id = $1::uuid AND user_id = $2::uuid`,
+      [result.outboxId, account.userId]
+    )).rejects.toThrow();
 
     const sessions = new PostgresWebSessionStore(pool, Buffer.alloc(32, 31));
     expect(await sessions.findActive(account.sessionId!)).toBeNull();
