@@ -53,7 +53,7 @@ async function dispatch(
     return;
   }
 
-  const identityUnlinkPath = /^\\/account\\/identities\\/[0-9a-f-]{36}\\/unlink$/iu.test(pathname);
+  const identityUnlinkPath = /^\/account\/identities\/[0-9a-f-]{36}\/unlink$/iu.test(pathname);
   const handlerName = ROUTES.get(`${method} ${pathname}`) ??
     (method === "POST" && identityUnlinkPath ? "unlinkIdentity" : undefined);
   if (!handlerName) {

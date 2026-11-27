@@ -278,7 +278,7 @@ export function createIdentityLinkHandlers(deps: Dependencies) {
 
     unlinkIdentity: async (request: IncomingMessage, response: ServerResponse): Promise<void> => {
       const incoming = requestUrl(request, deps.configuration.publicOrigin);
-      const match = incoming?.pathname.match(/^\\/account\\/identities\\/([0-9a-f-]{36})\\/unlink$/iu);
+      const match = incoming?.pathname.match(/^\/account\/identities\/([0-9a-f-]{36})\/unlink$/iu);
       const sessionId = readSessionCookie(request.headers.cookie);
       const grant = readIdentitySecurityCookie(request.headers.cookie, "stepup");
       if (!sessionId || !grant || !match) {
