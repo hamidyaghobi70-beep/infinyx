@@ -1,6 +1,6 @@
 # INFINYX Staging Deployment Decision Record (DDR)
 
-- **Status:** Proposed; no provider selected
+- **Status:** Proposed; private PostgreSQL connectivity is an owner-approved non-negotiable requirement; no provider selected
 - **Date:** 2026-11-27
 - **Repository:** `hamidyaghobi70-beep/infinyx`
 - **Branch:** `feat/adr-platform-foundation`
@@ -221,6 +221,7 @@ No exact total is approved in this DDR because final sizing, region, database to
 | Decision | Current state |
 |---|---|
 | Hosting provider | Not selected |
+| PostgreSQL network boundary | **Private connectivity is mandatory; public/external database URLs are not an acceptable substitute** |
 | Region | Not selected |
 | Staging domain | Not selected |
 | Monthly budget ceiling | Not provided |
@@ -235,4 +236,15 @@ No exact total is approved in this DDR because final sizing, region, database to
 
 This DDR authorizes no account creation, trial activation, payment, resource provisioning, DNS/certificate issuance, database creation, Keycloak configuration, secret generation, code or CI changes, deployment, public exposure, merge, or release.
 
-Next step: review this comparison and choose whether to (a) request a detailed Render validation plan, (b) request a Hetzner + managed PostgreSQL plan, or (c) provide a budget/region constraint for a revised comparison. Provider selection and all provisioning actions require explicit approval.
+### Owner decision — private PostgreSQL connectivity
+
+The project owner has selected the private-network-first option:
+
+- PostgreSQL connectivity for INFINYX staging must remain private.
+- A public/external PostgreSQL URL is not an acceptable fallback, even if TLS certificate validation and source-IP allow-listing are available.
+- TLS must remain enabled with certificate and hostname verification; `rejectUnauthorized: false` and unverified `sslmode=require` are prohibited.
+- If a provider cannot satisfy both private networking and the required TLS verification, that provider is a no-go for this architecture. The project must compare another provider or a separately approved architecture; it must not weaken the requirement to preserve a provider choice.
+
+This records a network/security requirement only. It does not select Render or another provider and does not authorize provisioning.
+
+Next step: continue read-only validation of candidate providers against this fixed private-connectivity requirement. Provider selection and all provisioning actions require explicit approval.
