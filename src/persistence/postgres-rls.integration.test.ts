@@ -1,9 +1,5 @@
-import { generateKeyPairSync, sign } from "node:crypto";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import {
-  createAuthenticatedPrincipalResolver,
-  createJwtPrincipalVerifier
-} from "../core/authenticated-principal.js";
+import { createTestPrincipal } from "../core/testing/test-principal.js";
 import {
   createPostgresPool,
   createTenantSqlPool
@@ -37,54 +33,30 @@ interface RoleRow {
 
 const issuer = "https://infinyx.integration.test";
 const audience = "infinyx-integration";
+const subjectIds = new Map([
+  ["user-tenant-a", "10000000-0000-4000-8000-000000000001"],
+  ["user-tenant-b", "10000000-0000-4000-8000-000000000002"],
+  ["user-not-a-member", "10000000-0000-4000-8000-000000000003"],
+  ["user-lifecycle-target", "10000000-0000-4000-8000-000000000004"],
+  ["user-lifecycle-admin", "10000000-0000-4000-8000-000000000005"],
+  ["user-lifecycle-concurrent", "10000000-0000-4000-8000-000000000006"],
+  ["user-lifecycle-trigger-guard", "10000000-0000-4000-8000-000000000007"],
+  ["user-invited-from-other-tenant", "10000000-0000-4000-8000-000000000008"]
+] as const);
+const principalsBySubject = new Map<string, Awaited<ReturnType<typeof createTestPrincipal>>>();
+for (const [subject, userId] of subjectIds) {
+  principalsBySubject.set(subject, await createTestPrincipal({ issuer, audience, subject, userId }));
+}
 
 integrationDescribe("PostgreSQL tenant RLS integration", () => {
-  const keys = generateKeyPairSync("rsa", { modulusLength: 2048 });
-  const publicKeyPem = keys.publicKey
-    .export({ type: "spki", format: "pem" })
-    .toString();
-  const verifyToken = createJwtPrincipalVerifier({ issuer, audience, publicKeyPem });
-  const subjectIds = new Map([
-    ["user-tenant-a", "10000000-0000-4000-8000-000000000001"],
-    ["user-tenant-b", "10000000-0000-4000-8000-000000000002"],
-    ["user-not-a-member", "10000000-0000-4000-8000-000000000003"],
-    ["user-lifecycle-target", "10000000-0000-4000-8000-000000000004"],
-    ["user-lifecycle-admin", "10000000-0000-4000-8000-000000000005"],
-    ["user-lifecycle-concurrent", "10000000-0000-4000-8000-000000000006"],
-    ["user-lifecycle-trigger-guard", "10000000-0000-4000-8000-000000000007"],
-    ["user-invited-from-other-tenant", "10000000-0000-4000-8000-000000000008"]
-  ]);
-  const userIdFor = (subject: string) => {
-    const id = subjectIds.get(subject);
-    if (!id) throw new Error("Unseeded test identity");
-    return id;
-  };
-  const resolvePrincipal = createAuthenticatedPrincipalResolver(
-    (_issuer, subject) => userIdFor(subject)
-  );
 
   let pool: ReturnType<typeof createPostgresPool>;
   let tenantPool: ReturnType<typeof createTenantSqlPool>;
 
   function principalFor(tenantId: string, subject = `user-${tenantId}`) {
-    const encode = (value: unknown) =>
-      Buffer.from(JSON.stringify(value)).toString("base64url");
-    const unsigned = [
-      encode({ alg: "RS256", typ: "JWT" }),
-      encode({
-        iss: issuer,
-        aud: audience,
-        sub: subject,
-        tenant_id: tenantId,
-        exp: Math.floor(Date.now() / 1000) + 60
-      })
-    ].join(".");
-    const signature = sign(
-      "RSA-SHA256",
-      Buffer.from(unsigned, "ascii"),
-      keys.privateKey
-    ).toString("base64url");
-    return resolvePrincipal(verifyToken(`${unsigned}.${signature}`));
+    const principal = principalsBySubject.get(subject);
+    if (!principal) throw new Error("Unseeded test identity");
+    return principal;
   }
 
   beforeAll(async () => {
