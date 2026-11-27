@@ -40,7 +40,7 @@ describe("account session revocation outbox", () => {
     await expect(completeAccountSessionRevocation(pool, sessions, userId, outboxId))
       .resolves.toBe(false);
     expect(pool.query).toHaveBeenCalledOnce();
-    expect(vi.mocked(pool.query).mock.calls[0]?.[0]).toContain("session_revocation_failed");
+    expect(vi.mocked(pool.query).mock.calls[0]?.[0] as string).toContain("session_revocation_failed");
   });
 
   it("retries pending requests and reports unresolved failures", async () => {
