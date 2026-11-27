@@ -45,11 +45,11 @@ export function readWebBffRuntimeConfiguration(
     validateOidcBffConfiguration(oidc);
     const sessionEncryptionKey = decodeSessionEncryptionKey(env.SESSION_ENCRYPTION_KEY);
     const host = env.HOST ?? "0.0.0.0";
-    if (host.length < 1 || host.length > 253 || /[\\s\\u0000-\\u001f\\u007f]/u.test(host)) {
+    if (host.length < 1 || host.length > 253 || /[\s\u0000-\u001f\u007f]/u.test(host)) {
       throw new WebBffStartupError();
     }
     const portText = env.PORT ?? "3000";
-    if (!/^\\d{1,5}$/u.test(portText)) throw new WebBffStartupError();
+    if (!/^\d{1,5}$/u.test(portText)) throw new WebBffStartupError();
     const port = Number(portText);
     if (!Number.isSafeInteger(port) || port < 1 || port > 65_535) {
       throw new WebBffStartupError();
