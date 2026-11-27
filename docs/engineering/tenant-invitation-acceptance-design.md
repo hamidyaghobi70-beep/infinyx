@@ -24,7 +24,6 @@ The current repository provides:
 
 Important limitations:
 - The current tenant GUC is defense in depth, not cryptographically authenticated.
-- No production identity provider has been selected.
 - No production identity provider or trusted assertion implementation has been selected; acceptance fails closed without an injected verifier.
 - Branch tables and branch assignments are not implemented.
 - Current code is not production-ready and has not undergone independent security review.
@@ -33,16 +32,16 @@ Important limitations:
 
 ### 3.1 `tenant_invitations`
 
-Proposed columns:
+Implemented columns:
 
 | Column | Type | Purpose |
 |---|---|---|
 | `invitation_id` | UUID PK | Invitation identity |
 | `tenant_id` | text NOT NULL | Tenant boundary |
 | `identity_type` | text/enum NOT NULL | `email` or `phone` |
-| `normalized_identity` | text NOT NULL | Canonical target identity |
 | `identity_fingerprint` | bytea NOT NULL | HMAC-SHA-256 fingerprint; raw identity is not stored in the invitation row |
-| `token_hash` | bytea NOT NULL | HMAC-SHA-256 of a 256-bit random token |\n| `identity_key_version`, `token_key_version` | integer NOT NULL | Key version metadata |
+| `token_hash` | bytea NOT NULL | HMAC-SHA-256 of a 256-bit random token |
+| `identity_key_version`, `token_key_version` | integer NOT NULL | Key version metadata |
 | `role` | text NOT NULL | `admin`, `manager`, `editor`, or `viewer` |
 | `status` | text NOT NULL | `pending`, `accepted`, `revoked`, `expired` |
 | `invited_by` | text NOT NULL | Actor subject |
@@ -52,10 +51,9 @@ Proposed columns:
 | `accepted_at` | timestamptz NULL | Acceptance time |
 | `revoked_by` | text NULL | Revoking actor |
 | `revoked_at` | timestamptz NULL | Revocation time |
-| `correlation_id` | UUID NOT NULL | Operation/idempotency correlation |
 | `version` | bigint NOT NULL | Concurrency/version guard |
 
-Design constraints:
+Implemented schema constraints:
 - Foreign key to tenant with deletion restricted, consistent with retained membership/audit history.
 - Check constraints for identity type, role allowlist (excluding `owner`), status allowlist, valid expiry, and state metadata consistency.
 - Unique token hash.
@@ -158,13 +156,15 @@ Acceptance is one atomic tenant-scoped transaction:
 
 All membership creation paths must share the tenant-first serialization protocol. The existing partial unique index remains a final guard against concurrent current memberships. The unique `(tenant_id,user_id,generation)` constraint protects generation uniqueness. Any failure to create membership, consume invitation, or write required audit rolls back the entire acceptance.
 
-### 8.1 Tenant resolution and RLS design gate
+### 8.1 Tenant resolution and RLS design
 
-A token-only unauthenticated lookup cannot simply trust a client-supplied tenant ID to establish `app.tenant_id`. The implementation must provide a reviewed bootstrap resolution mechanism that maps a valid token hash to a tenant/invitation without granting general tenant data access. Options include a narrowly privileged security-definer function with a fixed safe search_path and minimal return shape, or a separate invitation lookup boundary. This mechanism requires security review; do not weaken existing RLS or grant broad cross-tenant reads as a shortcut.
+The implementation adds `lookup_tenant_for_invitation_token(bytea)`, a SECURITY DEFINER function with a fixed `search_path` that accepts only a server-computed token hash and returns only the associated `tenant_id`. `withInvitationTenantTransaction` calls this function before setting transaction-local tenant context; the client cannot supply the tenant. The function does not expose invitation rows or identity data.
+
+**Production gate:** because invitation tables use FORCE RLS, the function owner must be a dedicated, reviewed role that can perform this narrow lookup through RLS (for example, a role with carefully scoped `BYPASSRLS`). CI currently runs migrations as PostgreSQL superuser solely to test the mechanism; that is not an acceptable production ownership model. Do not grant the ordinary application role broad cross-tenant table access.
 
 ## 9. Delivery and outbox
 
-Create an outbox record in the same transaction as invitation creation. A worker/adapter sends the notification after commit. Delivery attempts, retries, and provider message IDs are operational metadata, not proof of acceptance. Never log the raw token or full token URL. Provider selection, credentials, templates, and retry policy require separate integration design.
+The `tenant_invitation_delivery_outbox` table is implemented with tenant RLS and encrypted payload columns (`nonce`, `ciphertext`, `auth_tag`, `key_version`). Creation inserts an AES-256-GCM encrypted payload in the same transaction as the invitation and audit event. The worker/adapter, retry scheduler, dead-letter policy, provider credentials, templates, and delivery status updates are not implemented. Delivery attempts and provider message IDs are operational metadata, not proof of acceptance. Never log the raw token or full token URL.
 
 ## 10. Concurrency, idempotency, and state invariants
 
@@ -207,7 +207,7 @@ Use real PostgreSQL 16, RLS ENABLE/FORCE, and the least-privilege application ro
 
 ## 12. Implementation prerequisites and open technical gates
 
-Before implementation begins, the implementation plan must resolve:
+Before production enablement, the following items must be resolved:
 - selected identity provider and trusted verified-identity assertion contract;
 - production ownership of `lookup_tenant_for_invitation_token(bytea)`: the current security-definer function uses a fixed search path and returns only `tenant_id`, but its owner must be a dedicated, reviewed role able to read through forced RLS (for example a narrowly scoped `BYPASSRLS` role); the CI migration owner is the PostgreSQL superuser and is not a production pattern;
 - email normalization/versioning and phone E.164 parsing/country-context rules (the current implementation rejects non-E.164 phone values rather than guessing);
@@ -222,11 +222,11 @@ These gates must be resolved before production enablement. Missing provider conf
 
 ## 13. Implementation slices and current status
 
-1. **Persistence foundation:** invitation and audit schema, constraints, RLS, least-privilege grants, expiry/state invariants.
-2. **Domain service:** invitation create/revoke/accept repositories, tenant-first locking, generation creation, idempotency, atomic audit.
-3. **Identity proof boundary:** provider-neutral interface and test doubles; production adapter only after provider selection.
-4. **Delivery boundary:** transactional outbox and provider-neutral delivery contract; no live provider until explicitly configured.
-5. **Verification:** PostgreSQL 16 integration tests, race tests, security tests, typecheck, dependency audit, CI.
+1. **Persistence foundation:** IMPLEMENTED in migration 003; migration/CI verification remains pending.
+2. **Domain service:** create/revoke/acceptance services IMPLEMENTED with tenant-first locking, generation creation, encrypted outbox insertion, and atomic audit. Idempotency and race coverage still require completion.
+3. **Identity proof boundary:** provider-neutral directory/verifier contracts IMPLEMENTED; production adapter BLOCKED on provider selection.
+4. **Delivery boundary:** encrypted transactional outbox schema and encryption primitives IMPLEMENTED; worker/provider adapter NOT IMPLEMENTED.
+5. **Verification:** crypto/service/PostgreSQL integration tests ADDED; CI execution and fixes remain pending.
 
 No HTTP API or UI should be included unless separately scoped and approved. Implementation must be reviewed against ADR-0010 and the security gates above.
 
