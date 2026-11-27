@@ -76,6 +76,19 @@ describe("Node BFF HTTP transport", () => {
     expect(wrongMethod.headers.get("allow")).toBe("POST");
   });
 
+  it("routes account recovery and restricts initiation to POST", async () => {
+    const response = await request("/account/recovery/start", "POST");
+    expect(response.status).toBe(204);
+    const wrongMethod = await request("/account/recovery/start", "GET");
+    expect(wrongMethod.status).toBe(405);
+    expect(wrongMethod.headers.get("allow")).toBe("POST");
+  });
+
+  it("rejects account recovery initiation request bodies", async () => {
+    const response = await request("/account/recovery/start", "POST", {}, "unexpected");
+    expect(response.status).toBe(400);
+  });
+
   it("rejects logout request bodies", async () => {
     const response = await request("/auth/logout", "POST", {}, "x");
     expect(response.status).toBe(400);
