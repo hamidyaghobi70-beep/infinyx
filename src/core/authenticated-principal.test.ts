@@ -59,7 +59,7 @@ function makeVerifier(options: {
     });
   });
   const verifier = createOidcJwksPrincipalVerifier({
-    issuer, audience, authorizedParties: [authorizedParty],
+    issuer, audience, authorizedParties: [authorizedParty], accessTokenType: "Bearer",
     now: options.now ?? (() => now), fetcher
   });
   return { verifier, fetcher };
@@ -161,7 +161,7 @@ describe("OIDC discovery and JWKS token verifier", () => {
       issuer, audience, authorizedParties: []
     })).toThrow(TypeError);
     expect(() => createOidcJwksPrincipalVerifier({
-      issuer, audience, authorizedParties: [authorizedParty], cacheTtlMs: 99
+      issuer, audience, authorizedParties: [authorizedParty], accessTokenType: "Bearer", cacheTtlMs: 99
     })).toThrow(TypeError);
   });
 });
