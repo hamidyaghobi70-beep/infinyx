@@ -51,8 +51,12 @@ export async function registerVerifiedIdentityLink(
   try {
     await client.query("BEGIN");
     open = true;
+    await client.query(
+      "SELECT pg_advisory_xact_lock(hashtextextended($1 || E'\\n' || $2, 0))",
+      [issuer, subject]
+    );
     const user = await client.query(
-      "SELECT id FROM users WHERE id = $1::uuid FOR UPDATE",
+      "SELECT id FROM users WHERE id = $1::uuid",
       [userId]
     );
     if (user.rowCount !== 1) {
@@ -104,7 +108,7 @@ export async function registerVerifiedIdentityLink(
          LEFT JOIN user_external_identity_lifecycle AS lifecycle
            ON lifecycle.identity_id = identity.identity_id
         WHERE identity.issuer = $1 AND identity.subject = $2
-        FOR UPDATE OF identity`,
+        `,
       [issuer, subject]
     );
     const row = existing.rows[0];
