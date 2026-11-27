@@ -236,6 +236,24 @@ describe("OIDC-backed Node BFF handlers", () => {
     expect(vi.mocked(f.database.query).mock.calls[0]?.[0]).toContain("lifecycle.status = 'active'");
   });
 
+  it("denies login when the internal account is suspended or disabled", async () => {
+    const f = setup();
+    vi.mocked(f.database.query).mockResolvedValueOnce({ rows: [], rowCount: 0 } as never);
+    const base = await openServer(f.handlers);
+    const login = await fetch(`${base}/auth/login`, { redirect: "manual" });
+    const bindingCookie = getCookies(login)[0]!.split(";")[0]!;
+    const callback = await fetch(
+      `${base}/auth/callback?state=${f.state}&code=synthetic-code`,
+      { redirect: "manual", headers: { cookie: bindingCookie } }
+    );
+    expect(callback.status).toBe(401);
+    expect(f.sessions.create).not.toHaveBeenCalled();
+    const sql = vi.mocked(f.database.query).mock.calls[0]?.[0] as string;
+    expect(sql).toContain("INNER JOIN user_account_security");
+    expect(sql).toContain("account_security.status = 'active'");
+    expect(sql).toContain("user_account_session_revocation_outbox");
+  });
+
   it("returns only the internal user and CSRF token, never OAuth tokens", async () => {
     const f = setup();
     const base = await openServer(f.handlers);
