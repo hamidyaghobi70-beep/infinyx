@@ -1,13 +1,13 @@
 # Keycloak Staging Integration — Proposed Implementation Plan
 
-- **Status:** Phase 1 implemented and CI verified; Phases 2–6 require separate founder approval
+- **Status:** Phases 1 and 2 implemented; Phase 2 CI verification pending; Phases 3–6 require separate founder approval
 - **Related:** ADR-0011 and Keycloak Staging Integration Design
 - **Branch:** feat/adr-platform-foundation
 - **Environment:** Staging only, after separate infrastructure approval
 
 ## 1. Purpose and approved decisions
 
-This plan records the approved architecture and bounded execution sequence. Phase 1 was explicitly authorized, implemented, and CI verified. This document does not authorize any additional phase, Keycloak configuration, infrastructure provisioning, deployment, live message delivery, merge, or release.
+This plan records the approved architecture and bounded execution sequence. Phase 1 was explicitly authorized, implemented, and CI verified. This document does not authorize any additional phase, Keycloak configuration, infrastructure provisioning, deployment, live message delivery, merge, or release. Phases 1 and 2 have bounded code approval only; all later phases remain separately gated.
 
 Accepted design decisions:
 1. Keycloak Self-Hosted; staging-first.
@@ -80,7 +80,7 @@ Avoid long-lived dual-mode authentication accepting both old tenant-bearing and 
 
 **Exit criteria:** no-membership user denied even with a valid tenant selector; multi-tenant user restricted to separately granted memberships; suspended/removed denied; tenant/role claims grant no access; RLS integration tests pass; no repository callback runs before membership check. Verified by CI [#45935238195](https://github.com/hamidyaghobi70-beep/infinyx/actions/runs/45935238195): 11 test files and 99 tests passed, TypeScript typecheck passed, migrations and syntax checks passed, and npm audit reported 0 vulnerabilities. See the [implementation record](identity-tenant-separation-implementation.md).
 
-### Phase 2 — Provider-neutral OIDC verification
+### Phase 2 — Provider-neutral OIDC verification — Implemented
 
 - Pin trusted issuer and expected API audience per environment.
 - Fetch discovery metadata only from configured issuer over TLS; require exact issuer match.
