@@ -65,6 +65,7 @@ interface InvitationRow {
   invitation_id: string;
   status: string;
   expires_at: string;
+  is_expired?: boolean;
   version: string | number;
 }
 
@@ -330,7 +331,7 @@ export async function revokeTenantInvitation(
 
   const rows = await transaction.query<InvitationRow>(
     `SELECT invitation_id::text AS invitation_id, status,
-            expires_at::text AS expires_at, version
+            expires_at::text AS expires_at, expires_at <= now() AS is_expired, version
        FROM tenant_invitations
       WHERE tenant_id = $1 AND invitation_id = $2
       FOR UPDATE`,
