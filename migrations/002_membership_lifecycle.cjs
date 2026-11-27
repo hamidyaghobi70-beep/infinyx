@@ -80,11 +80,18 @@ exports.up = (pgm) => {
       IF NEW.membership_id IS DISTINCT FROM OLD.membership_id
          OR NEW.tenant_id IS DISTINCT FROM OLD.tenant_id
          OR NEW.user_id IS DISTINCT FROM OLD.user_id
-         OR NEW.generation IS DISTINCT FROM OLD.generation THEN
-        RAISE EXCEPTION 'Membership identity and generation are immutable';
+         OR NEW.generation IS DISTINCT FROM OLD.generation
+         OR NEW.role IS DISTINCT FROM OLD.role THEN
+        RAISE EXCEPTION 'Membership identity, role, and generation require separate governance';
       END IF;
 
       IF OLD.status IS DISTINCT FROM NEW.status THEN
+        IF OLD.role = 'owner' THEN
+          RAISE EXCEPTION 'Owner lifecycle changes require ownership governance';
+        END IF;
+        IF NEW.status_changed_by = OLD.user_id THEN
+          RAISE EXCEPTION 'Self lifecycle changes are not allowed';
+        END IF;
         IF NOT (
           (OLD.status = 'active' AND NEW.status IN ('suspended', 'removed'))
           OR (OLD.status = 'suspended' AND NEW.status IN ('active', 'removed'))
