@@ -27,7 +27,9 @@ function sessionRow(expiry: number, refreshToken?: string) {
       csrfToken
     }, key),
     idle_expires_at: new Date(now.getTime() + 1_800_000),
-    absolute_expires_at: new Date(now.getTime() + 28_800_000)
+    absolute_expires_at: new Date(now.getTime() + 28_800_000),
+    refresh_lease_id: null,
+    refresh_lease_expires_at: null
   };
 }
 
@@ -48,13 +50,36 @@ function fakePool(
       if (sql.includes("SELECT user_id::text AS user_id")) {
         return { rows: [stored], rowCount: 1 };
       }
-      if (sql.includes("UPDATE web_sessions") && sql.includes("SET encrypted_token_bundle")) {
-        const updatedAt = (values?.[3] as Date).getTime();
-        if (updatedAt >= stored.idle_expires_at.getTime() ||
-            updatedAt >= stored.absolute_expires_at.getTime()) {
+      if (sql.includes("UPDATE web_sessions") && sql.includes("SET refresh_lease_id = $3::uuid")) {
+        const claimTime = values?.[4] as Date;
+        const existingExpiry = stored.refresh_lease_expires_at;
+        if (existingExpiry && new Date(existingExpiry).getTime() > claimTime.getTime()) {
           return { rows: [], rowCount: 0 };
         }
-        stored = { ...stored, encrypted_token_bundle: values?.[2] as Buffer };
+        stored = {
+          ...stored,
+          refresh_lease_id: values?.[2] as string,
+          refresh_lease_expires_at: values?.[3] as Date
+        };
+        return { rows: [], rowCount: 1 };
+      }
+      if (sql.includes("UPDATE web_sessions") && sql.includes("SET encrypted_token_bundle = $3")) {
+        const updatedAt = (values?.[3] as Date).getTime();
+        if (updatedAt >= stored.idle_expires_at.getTime() ||
+            updatedAt >= stored.absolute_expires_at.getTime() ||
+            stored.refresh_lease_id !== values?.[4]) {
+          return { rows: [], rowCount: 0 };
+        }
+        stored = {
+          ...stored,
+          encrypted_token_bundle: values?.[2] as Buffer,
+          refresh_lease_id: null,
+          refresh_lease_expires_at: null
+        };
+        return { rows: [], rowCount: 1 };
+      }
+      if (sql.includes("UPDATE web_sessions") && sql.includes("SET revoked_at")) {
+        stored = { ...stored, revoked_at: values?.[3] ?? values?.[2], refresh_lease_id: null, refresh_lease_expires_at: null };
         return { rows: [], rowCount: 1 };
       }
       return { rows: [], rowCount: null };
