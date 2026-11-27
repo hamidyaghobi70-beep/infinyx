@@ -107,6 +107,8 @@ export async function acceptTenantInvitation(
   if (
     !assertion ||
     assertion.subject !== principal.subject ||
+    assertion.issuer !== principal.issuer ||
+    !principal.audience.includes(assertion.audience) ||
     (assertion.identityType !== "email" && assertion.identityType !== "phone") ||
     typeof assertion.issuer !== "string" || assertion.issuer.length < 1 ||
     typeof assertion.audience !== "string" || assertion.audience.length < 1 ||
@@ -157,7 +159,7 @@ export async function acceptTenantInvitation(
         await writeAcceptanceAudit(transaction, {
           tenantId,
           invitationId: invitation.invitation_id,
-          actorUserId: principal.subject,
+          actorUserId: principal.userId,
           action: "replay_denied",
           previousStatus: invitation.status,
           newStatus: invitation.status,
@@ -179,7 +181,7 @@ export async function acceptTenantInvitation(
         await writeAcceptanceAudit(transaction, {
           tenantId,
           invitationId: invitation.invitation_id,
-          actorUserId: principal.subject,
+          actorUserId: principal.userId,
           action: "expired",
           previousStatus: "pending",
           newStatus: "expired",
@@ -204,7 +206,7 @@ export async function acceptTenantInvitation(
         await writeAcceptanceAudit(transaction, {
           tenantId,
           invitationId: invitation.invitation_id,
-          actorUserId: principal.subject,
+          actorUserId: principal.userId,
           action: "acceptance_denied",
           previousStatus: "pending",
           newStatus: "pending",
@@ -218,17 +220,17 @@ export async function acceptTenantInvitation(
       const current = await transaction.query<{ membership_id: string }>(
         `SELECT membership_id::text AS membership_id
            FROM tenant_memberships
-          WHERE tenant_id = $1 AND user_id = $2
+          WHERE tenant_id = $1 AND internal_user_id = $2::uuid
             AND status IN ('active', 'suspended')
           LIMIT 1
           FOR UPDATE`,
-        [tenantId, principal.subject]
+        [tenantId, principal.userId]
       );
       if (current.length > 0) {
         await writeAcceptanceAudit(transaction, {
           tenantId,
           invitationId: invitation.invitation_id,
-          actorUserId: principal.subject,
+          actorUserId: principal.userId,
           action: "acceptance_denied",
           previousStatus: "pending",
           newStatus: "pending",
@@ -242,11 +244,11 @@ export async function acceptTenantInvitation(
       const latest = await transaction.query<{ generation: number; status: string }>(
         `SELECT generation, status
            FROM tenant_memberships
-          WHERE tenant_id = $1 AND user_id = $2
+          WHERE tenant_id = $1 AND internal_user_id = $2::uuid
           ORDER BY generation DESC
           LIMIT 1
           FOR UPDATE`,
-        [tenantId, principal.subject]
+        [tenantId, principal.userId]
       );
       const latestMembership = latest[0];
       if (latestMembership && latestMembership.status !== "removed") {
@@ -263,10 +265,10 @@ export async function acceptTenantInvitation(
       }
 
       const memberships = await transaction.query<{ membership_id: string }>(
-        `INSERT INTO tenant_memberships (tenant_id, user_id, role, generation)
-         VALUES ($1, $2, $3, $4)
+        `INSERT INTO tenant_memberships (tenant_id, user_id, internal_user_id, role, generation)
+         VALUES ($1, $2, $2::uuid, $3, $4)
          RETURNING membership_id::text AS membership_id`,
-        [tenantId, principal.subject, role, generation]
+        [tenantId, principal.userId, role, generation]
       );
       const membershipId = memberships[0]?.membership_id;
       if (!membershipId) throw new InvitationAcceptanceUnavailableError();
@@ -277,12 +279,12 @@ export async function acceptTenantInvitation(
                 version = version + 1
           WHERE tenant_id = $2 AND invitation_id = $3
             AND status = 'pending' AND version = $4`,
-        [principal.subject, tenantId, invitation.invitation_id, invitation.version]
+        [principal.userId, tenantId, invitation.invitation_id, invitation.version]
       );
       await writeAcceptanceAudit(transaction, {
         tenantId,
         invitationId: invitation.invitation_id,
-        actorUserId: principal.subject,
+        actorUserId: principal.userId,
         action: "accepted",
         previousStatus: "pending",
         newStatus: "accepted",
