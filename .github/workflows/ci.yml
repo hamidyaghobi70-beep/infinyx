@@ -12,8 +12,25 @@ permissions:
 
 jobs:
   verify:
-    name: Typecheck, tests, build, and migration syntax
+    name: Typecheck and unit tests
     runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: infinyx_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d infinyx_test"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    env:
+      DATABASE_URL: postgresql://postgres:postgres@localhost:5432/infinyx_test
+      INFINYX_TEST_DATABASE_URL: postgresql://infinyx_app:ci-only-password@localhost:5432/infinyx_test
     steps:
       - name: Check out source
         uses: actions/checkout@v4
@@ -21,14 +38,378 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: "22"
-          cache: npm
       - name: Install dependencies
         run: npm ci
-      - name: Check staged database migrations
+      - name: Create a short-lived local TLS certificate for Keycloak
+        run: |
+          mkdir -p .ci/keycloak
+          openssl req -x509 -newkey rsa:2048 -sha256 -days 1 -nodes \
+            -keyout .ci/keycloak/server.key \
+            -out .ci/keycloak/server.crt \
+            -subj "/CN=localhost" \
+            -addext "subjectAltName=DNS:localhost,IP:127.0.0.1"
+          # The official Keycloak image runs as UID 1000 (GID 0); grant it read access
+          # without making the private key world-readable on the runner.
+          chmod 640 .ci/keycloak/server.key
+          chmod 644 .ci/keycloak/server.crt
+          sudo chown 1000:0 .ci/keycloak/server.key .ci/keycloak/server.crt
+          echo "NODE_EXTRA_CA_CERTS=$GITHUB_WORKSPACE/.ci/keycloak/server.crt" >> "$GITHUB_ENV"
+          echo "KEYCLOAK_INTEGRATION_ISSUER=https://localhost:8443/realms/infinyx-ci" >> "$GITHUB_ENV"
+      - name: Start isolated Keycloak test realm over HTTPS
+        run: |
+          docker run --detach --name infinyx-keycloak \
+            --publish 8443:8443 \
+            --volume "$GITHUB_WORKSPACE/.ci/keycloak:/opt/keycloak/conf/tls:ro" \
+            --volume "$GITHUB_WORKSPACE/.github/keycloak/infinyx-ci-realm.json:/opt/keycloak/data/import/infinyx-ci-realm.json:ro" \
+            --env KC_BOOTSTRAP_ADMIN_USERNAME=ci-admin \
+            --env KC_BOOTSTRAP_ADMIN_PASSWORD=ci-only-admin-password \
+            --env KC_HOSTNAME=https://localhost:8443 \
+            --env KC_HTTPS_CERTIFICATE_FILE=/opt/keycloak/conf/tls/server.crt \
+            --env KC_HTTPS_CERTIFICATE_KEY_FILE=/opt/keycloak/conf/tls/server.key \
+            quay.io/keycloak/keycloak:26.3.3 start-dev --https-port=8443 --import-realm
+          for attempt in $(seq 1 60); do
+            if curl --fail --silent --show-error \
+              --cacert .ci/keycloak/server.crt \
+              https://localhost:8443/realms/infinyx-ci/.well-known/openid-configuration >/dev/null; then
+              exit 0
+            fi
+            sleep 2
+          done
+          docker logs infinyx-keycloak
+          exit 1
+      - name: Create least-privilege application role
+        run: |
+          psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -c "CREATE ROLE infinyx_app LOGIN PASSWORD 'ci-only-password' NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT NOBYPASSRLS"
+      - name: Apply base database migrations before identity lifecycle
+        run: npx node-pg-migrate up 7 --migrations-dir migrations
+      - name: Grant application privileges and seed pre-existing identities
+        run: |
+          psql "$DATABASE_URL" -v ON_ERROR_STOP=1 <<'SQL'
+          GRANT USAGE ON SCHEMA public TO infinyx_app;
+          GRANT SELECT, INSERT ON users, user_external_identities TO infinyx_app;
+          GRANT SELECT, INSERT, UPDATE, DELETE ON web_sessions TO infinyx_app;
+          GRANT SELECT, INSERT, UPDATE, DELETE ON web_login_transactions TO infinyx_app;
+          GRANT SELECT, INSERT ON tenants, tenant_memberships TO infinyx_app;
+          GRANT DELETE ON tenants TO infinyx_app;
+          GRANT UPDATE ON tenants TO infinyx_app;
+          GRANT UPDATE (status, status_changed_at, status_changed_by, status_change_correlation_id, version) ON tenant_memberships TO infinyx_app;
+          GRANT SELECT, INSERT ON tenant_membership_audit_events TO infinyx_app;
+          GRANT SELECT, INSERT ON tenant_invitations TO infinyx_app;
+          GRANT UPDATE (status, accepted_by, accepted_at, revoked_by, revoked_at, version) ON tenant_invitations TO infinyx_app;
+          GRANT SELECT, INSERT ON tenant_invitation_audit_events TO infinyx_app;
+          GRANT SELECT, INSERT ON tenant_invitation_delivery_outbox TO infinyx_app;
+          GRANT UPDATE (status, attempts, next_attempt_at, sent_at) ON tenant_invitation_delivery_outbox TO infinyx_app;
+          GRANT EXECUTE ON FUNCTION lookup_tenant_for_invitation_token(bytea) TO infinyx_app;
+          INSERT INTO users (id) VALUES
+            ('10000000-0000-4000-8000-000000000001'),
+            ('10000000-0000-4000-8000-000000000002');
+          INSERT INTO user_external_identities (user_id, issuer, subject) VALUES
+            ('10000000-0000-4000-8000-000000000001', 'https://infinyx.integration.test', 'user-tenant-a'),
+            ('10000000-0000-4000-8000-000000000002', 'https://infinyx.integration.test', 'user-tenant-b');
+          INSERT INTO tenants (id, name) VALUES
+            ('tenant-a', 'Tenant A'),
+            ('tenant-b', 'Tenant B'),
+            ('tenant-c', 'Tenant C');
+          INSERT INTO tenant_memberships (tenant_id, user_id, internal_user_id, role) VALUES
+            ('tenant-a', '10000000-0000-4000-8000-000000000001', '10000000-0000-4000-8000-000000000001', 'owner'),
+            ('tenant-b', '10000000-0000-4000-8000-000000000002', '10000000-0000-4000-8000-000000000002', 'owner'),
+            ('tenant-c', '10000000-0000-4000-8000-000000000001', '10000000-0000-4000-8000-000000000001', 'manager');
+          SQL
+      - name: Apply identity lifecycle and security transaction migrations
+        run: npm run db:migrate:up
+      - name: Grant read-only application access to lifecycle state and events
+        run: |
+          psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -c "GRANT SELECT ON user_external_identity_lifecycle, user_external_identity_lifecycle_events TO infinyx_app" -c "GRANT UPDATE (status, version, updated_at, status_changed_by, status_change_reason, status_change_correlation_id) ON user_external_identity_lifecycle TO infinyx_app"
+      - name: Grant least-privilege account security access
+        run: |
+          psql "$DATABASE_URL" -v ON_ERROR_STOP=1 <<'SQL'
+          GRANT SELECT ON user_account_security, user_account_security_events TO infinyx_app;
+          GRANT UPDATE (status, version, updated_at, status_changed_by, status_change_reason, status_change_correlation_id) ON user_account_security TO infinyx_app;
+          GRANT SELECT ON user_account_session_revocation_outbox TO infinyx_app;
+          GRANT UPDATE (attempts, last_error_code) ON user_account_session_revocation_outbox TO infinyx_app;
+          GRANT EXECUTE ON FUNCTION complete_user_account_session_revocation(uuid, uuid) TO infinyx_app;
+          GRANT SELECT, INSERT, UPDATE (consumed_at) ON user_account_recovery_transactions TO infinyx_app;
+          GRANT SELECT, INSERT ON user_account_recovery_audit_events TO infinyx_app;
+          SQL
+      - name: Verify account security backfill, transitions, and append-only history
+        run: |
+          psql "$INFINYX_TEST_DATABASE_URL" -v ON_ERROR_STOP=1 <<'SQL'
+          DO $block$
+          DECLARE
+            legacy_users bigint;
+            legacy_states bigint;
+            legacy_events bigint;
+            test_user uuid := '10000000-0000-4000-8000-000000000099';
+            current_status text;
+            current_version integer;
+            rejected boolean;
+          BEGIN
+            SELECT count(*) INTO legacy_users FROM users
+             WHERE id IN (
+               '10000000-0000-4000-8000-000000000001',
+               '10000000-0000-4000-8000-000000000002'
+             );
+            SELECT count(*) INTO legacy_states FROM user_account_security
+             WHERE user_id IN (
+               '10000000-0000-4000-8000-000000000001',
+               '10000000-0000-4000-8000-000000000002'
+             ) AND status = 'active' AND version = 1;
+            SELECT count(*) INTO legacy_events FROM user_account_security_events
+             WHERE user_id IN (
+               '10000000-0000-4000-8000-000000000001',
+               '10000000-0000-4000-8000-000000000002'
+             ) AND reason_code = 'legacy_backfill'
+               AND from_status IS NULL AND to_status = 'active';
+            IF legacy_users <> 2 OR legacy_states <> 2 OR legacy_events <> 2 THEN
+              RAISE EXCEPTION 'Existing user account security backfill verification failed';
+            END IF;
+
+            INSERT INTO users (id) VALUES (test_user);
+            SELECT status, version INTO current_status, current_version
+              FROM user_account_security WHERE user_id = test_user;
+            IF current_status <> 'active' OR current_version <> 1 THEN
+              RAISE EXCEPTION 'New user account security initialization failed';
+            END IF;
+
+            UPDATE user_account_security
+               SET status = 'suspended', version = version + 1,
+                   updated_at = clock_timestamp(),
+                   status_changed_by = '10000000-0000-4000-8000-000000000001',
+                   status_change_reason = 'ci_suspend',
+                   status_change_correlation_id = gen_random_uuid()
+             WHERE user_id = test_user;
+            SELECT count(*) INTO legacy_events
+              FROM user_account_session_revocation_outbox
+             WHERE user_id = test_user AND completed_at IS NULL;
+            IF legacy_events <> 1 THEN
+              RAISE EXCEPTION 'Suspension did not create a pending session-revocation request';
+            END IF;
+            rejected := false;
+            BEGIN
+              UPDATE user_account_session_revocation_outbox
+                 SET completed_at = now()
+               WHERE user_id = test_user AND completed_at IS NULL;
+            EXCEPTION WHEN insufficient_privilege THEN
+              rejected := true;
+            END;
+            IF NOT rejected THEN
+              RAISE EXCEPTION 'Application role can bypass database-owned account session revocation completion';
+            END IF;
+            PERFORM complete_user_account_session_revocation(outbox_id, test_user)
+              FROM user_account_session_revocation_outbox
+             WHERE user_id = test_user AND completed_at IS NULL;
+            UPDATE user_account_security
+               SET status = 'active', version = version + 1,
+                   updated_at = clock_timestamp(),
+                   status_changed_by = '10000000-0000-4000-8000-000000000001',
+                   status_change_reason = 'ci_reactivate',
+                   status_change_correlation_id = gen_random_uuid()
+             WHERE user_id = test_user;
+            SELECT count(*) INTO legacy_events
+              FROM user_account_session_revocation_outbox
+             WHERE user_id = test_user AND completed_at IS NULL;
+            IF legacy_events <> 1 THEN
+              RAISE EXCEPTION 'Recovery transition did not create a fresh session-revocation barrier';
+            END IF;
+            UPDATE user_account_security
+               SET status = 'disabled', version = version + 1,
+                   updated_at = clock_timestamp(),
+                   status_changed_by = '10000000-0000-4000-8000-000000000001',
+                   status_change_reason = 'ci_disable',
+                   status_change_correlation_id = gen_random_uuid()
+             WHERE user_id = test_user;
+
+            rejected := false;
+            BEGIN
+              UPDATE user_account_security
+                 SET status = 'active', version = version + 1,
+                     updated_at = clock_timestamp(),
+                     status_changed_by = '10000000-0000-4000-8000-000000000001',
+                     status_change_reason = 'ci_invalid',
+                     status_change_correlation_id = gen_random_uuid()
+               WHERE user_id = test_user;
+            EXCEPTION WHEN raise_exception THEN
+              rejected := true;
+            END;
+            IF NOT rejected THEN
+              RAISE EXCEPTION 'Disabled account was incorrectly reactivated';
+            END IF;
+
+            rejected := false;
+            BEGIN
+              UPDATE user_account_security_events
+                 SET reason_code = 'tampered'
+               WHERE user_id = test_user;
+            EXCEPTION WHEN insufficient_privilege OR raise_exception THEN
+              rejected := true;
+            END;
+            IF NOT rejected THEN
+              RAISE EXCEPTION 'Application role unexpectedly mutated account security event history';
+            END IF;
+
+            SELECT count(*) INTO legacy_events
+              FROM user_account_security_events
+             WHERE user_id = test_user;
+            IF legacy_events <> 4 THEN
+              RAISE EXCEPTION 'Account security transition audit count mismatch';
+            END IF;
+          END;
+          $block$;
+          SQL
+      - name: Grant least-privilege access to identity security transaction stores
+        run: |
+          psql "$DATABASE_URL" -v ON_ERROR_STOP=1 <<'SQL'
+          GRANT SELECT, INSERT, DELETE ON identity_security_transactions, identity_step_up_grants TO infinyx_app;
+          GRANT UPDATE (consumed_at) ON identity_security_transactions, identity_step_up_grants TO infinyx_app;
+          GRANT SELECT, INSERT ON identity_security_audit_events TO infinyx_app;
+          GRANT SELECT, INSERT ON identity_session_revocation_outbox TO infinyx_app;
+          GRANT UPDATE (attempts, last_error_code) ON identity_session_revocation_outbox TO infinyx_app;
+          GRANT EXECUTE ON FUNCTION complete_identity_session_revocation(uuid, uuid) TO infinyx_app;
+          SQL
+      - name: Verify legacy identity backfill preserved existing bindings
+        run: |
+          psql "$INFINYX_TEST_DATABASE_URL" -v ON_ERROR_STOP=1 <<'SQL'
+          DO $block$
+          DECLARE
+            identity_count integer;
+            active_count integer;
+            backfill_event_count integer;
+          BEGIN
+            SELECT count(*) INTO identity_count
+              FROM user_external_identities
+             WHERE issuer = 'https://infinyx.integration.test'
+               AND subject IN ('user-tenant-a', 'user-tenant-b');
+            SELECT count(*) INTO active_count
+              FROM user_external_identities AS identity
+              INNER JOIN user_external_identity_lifecycle AS lifecycle
+                ON lifecycle.identity_id = identity.identity_id
+             WHERE identity.issuer = 'https://infinyx.integration.test'
+               AND identity.subject IN ('user-tenant-a', 'user-tenant-b')
+               AND lifecycle.status = 'active';
+            SELECT count(*) INTO backfill_event_count
+              FROM user_external_identities AS identity
+              INNER JOIN user_external_identity_lifecycle_events AS event
+                ON event.identity_id = identity.identity_id
+             WHERE identity.issuer = 'https://infinyx.integration.test'
+               AND identity.subject IN ('user-tenant-a', 'user-tenant-b')
+               AND event.reason_code = 'legacy_backfill'
+               AND event.from_status IS NULL
+               AND event.to_status = 'active';
+            IF identity_count <> 2 OR active_count <> 2 OR backfill_event_count <> 2 THEN
+              RAISE EXCEPTION 'Legacy identity lifecycle backfill verification failed';
+            END IF;
+          END;
+          $block$;
+          SQL
+      - name: Verify database-level account security immutability guards
+        run: |
+          psql "$DATABASE_URL" -v ON_ERROR_STOP=1 <<'SQL'
+          DO $block$
+          DECLARE
+            rejected boolean := false;
+          BEGIN
+            BEGIN
+              UPDATE user_account_security_events
+                 SET reason_code = 'tampered'
+               WHERE user_id = '10000000-0000-4000-8000-000000000099';
+            EXCEPTION WHEN raise_exception THEN
+              rejected := true;
+            END;
+            IF NOT rejected THEN
+              RAISE EXCEPTION 'Database allowed account security event history mutation';
+            END IF;
+
+            rejected := false;
+            BEGIN
+              DELETE FROM user_account_security
+               WHERE user_id = '10000000-0000-4000-8000-000000000099';
+            EXCEPTION WHEN raise_exception THEN
+              rejected := true;
+            END;
+            IF NOT rejected THEN
+              RAISE EXCEPTION 'Database allowed account security state deletion';
+            END IF;
+          END;
+          $block$;
+          SQL
+      - name: Check migration file syntax
         run: npm run db:migrate:check
+      - name: Audit dependency vulnerabilities
+        run: |
+          npm audit --json > npm-audit.json || true
+          node -e 'const a=require("./npm-audit.json"); const v=a.metadata?.vulnerabilities ?? {}; console.log(JSON.stringify({metadata:v, vulnerabilities:Object.entries(a.vulnerabilities ?? {}).map(([name,x])=>({name,severity:x.severity,isDirect:x.isDirect,range:x.range,fixAvailable:x.fixAvailable,via:x.via}))},null,2)); if ((v.total ?? 0) > 0) process.exit(1)'
       - name: Typecheck
         run: npm run typecheck
-      - name: Run unit tests
-        run: npm test
-      - name: Build
+      - name: Build Web BFF runtime
         run: npm run build
+      - name: Create an ephemeral PostgreSQL TLS fixture
+        run: |
+          mkdir -p .ci/postgres-tls
+          openssl req -x509 -newkey rsa:2048 -sha256 -days 2 -nodes \
+            -keyout .ci/postgres-tls/ca.key \
+            -out .ci/postgres-tls/ca.crt \
+            -subj "/CN=INFINYX CI PostgreSQL CA" \
+            -addext "basicConstraints=critical,CA:TRUE" \
+            -addext "keyUsage=critical,keyCertSign,cRLSign"
+          openssl req -newkey rsa:2048 -nodes \
+            -keyout .ci/postgres-tls/server.key \
+            -out .ci/postgres-tls/server.csr \
+            -subj "/CN=localhost"
+          printf '%s\n' \
+            "subjectAltName=DNS:localhost" \
+            "extendedKeyUsage=serverAuth" \
+            "keyUsage=digitalSignature,keyEncipherment" \
+            "basicConstraints=CA:FALSE" > .ci/postgres-tls/server.ext
+          openssl x509 -req -in .ci/postgres-tls/server.csr \
+            -CA .ci/postgres-tls/ca.crt -CAkey .ci/postgres-tls/ca.key \
+            -CAcreateserial -out .ci/postgres-tls/server.crt \
+            -days 2 -sha256 -extfile .ci/postgres-tls/server.ext
+          openssl req -x509 -newkey rsa:2048 -sha256 -days 2 -nodes \
+            -keyout .ci/postgres-tls/wrong-ca.key \
+            -out .ci/postgres-tls/wrong-ca.crt \
+            -subj "/CN=INFINYX CI Untrusted PostgreSQL CA" \
+            -addext "basicConstraints=critical,CA:TRUE" \
+            -addext "keyUsage=critical,keyCertSign,cRLSign"
+          printf '%s\n' \
+            "local all all trust" \
+            "hostnossl all all all reject" \
+            "hostssl all all all scram-sha-256" > .ci/postgres-tls/pg_hba.conf
+          chmod 600 .ci/postgres-tls/server.key
+          chmod 644 .ci/postgres-tls/server.crt .ci/postgres-tls/ca.crt \
+            .ci/postgres-tls/wrong-ca.crt .ci/postgres-tls/pg_hba.conf
+          sudo chown 999:999 .ci/postgres-tls/server.key .ci/postgres-tls/pg_hba.conf
+          docker run --detach --name infinyx-postgres-tls \
+            --publish 5433:5432 \
+            --volume "$GITHUB_WORKSPACE/.ci/postgres-tls:/tls:ro" \
+            --env POSTGRES_USER=postgres \
+            --env POSTGRES_PASSWORD=ci-only-postgres-password \
+            --env POSTGRES_DB=infinyx_tls_test \
+            postgres:16 \
+            -c ssl=on \
+            -c ssl_cert_file=/tls/server.crt \
+            -c ssl_key_file=/tls/server.key \
+            -c hba_file=/tls/pg_hba.conf
+          for attempt in $(seq 1 30); do
+            if pg_isready -h 127.0.0.1 -p 5433 -U postgres -d infinyx_tls_test; then
+              exit 0
+            fi
+            sleep 2
+          done
+          docker logs infinyx-postgres-tls
+          exit 1
+      - name: Verify real pg strict TLS and fail-closed behavior
+        env:
+          TLS_TEST_DATABASE_URL: postgresql://postgres:ci-only-postgres-password@localhost:5433/infinyx_tls_test
+          TLS_TEST_CA_FILE: .ci/postgres-tls/ca.crt
+          TLS_TEST_WRONG_CA_FILE: .ci/postgres-tls/wrong-ca.crt
+        run: node scripts/verify-postgres-strict-tls-ci.mjs
+      - name: Run unit and PostgreSQL integration tests
+        run: npm test -- --no-file-parallelism
+      - name: Verify live Keycloak discovery and JWKS over HTTPS
+        env:
+          KEYCLOAK_INTEGRATION_CLIENT_ID: infinyx-web
+          KEYCLOAK_INTEGRATION_CLIENT_SECRET: ci-only-infinyx-web-secret
+        run: npm run test:keycloak
+      - name: Stop temporary PostgreSQL and Keycloak test containers
+        if: always()
+        run: docker rm --force infinyx-postgres-tls infinyx-keycloak || true
