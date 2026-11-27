@@ -43,9 +43,9 @@ function fakePool(row: ReturnType<typeof sessionRow>) {
         return { rows: [stored], rowCount: 1 };
       }
       if (sql.includes("UPDATE web_sessions") && sql.includes("SET encrypted_token_bundle")) {
-        const updatedAt = new Date(values?.[3] as Date).getTime();
-        if (updatedAt >= new Date(stored.idle_expires_at).getTime() ||
-            updatedAt >= new Date(stored.absolute_expires_at).getTime()) {
+        const updatedAt = (values?.[3] as Date).getTime();
+        if (updatedAt >= stored.idle_expires_at.getTime() ||
+            updatedAt >= stored.absolute_expires_at.getTime()) {
           return { rows: [], rowCount: 0 };
         }
         stored = { ...stored, encrypted_token_bundle: values?.[2] as Buffer };
