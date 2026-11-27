@@ -28,6 +28,42 @@ export interface TenantTransaction {
   ): Promise<readonly Row[]>;
 }
 
+export interface TenantPrincipal extends AuthenticatedPrincipal {
+  readonly tenantId: string;
+  readonly membershipId: string;
+  readonly role: "owner" | "admin" | "manager" | "editor" | "viewer";
+  readonly generation: number;
+  readonly membershipVersion: string;
+}
+
+const tenantPrincipals = new WeakSet<object>();
+
+export class TenantAuthorizationError extends Error {
+  constructor() {
+    super("Tenant authorization failed.");
+    this.name = "TenantAuthorizationError";
+  }
+}
+
+export function isTenantPrincipal(value: unknown): value is TenantPrincipal {
+  return !!value && typeof value === "object" && tenantPrincipals.has(value);
+}
+
+export function createTenantMemoryScope(principal: TenantPrincipal, moduleId: string) {
+  if (!isTenantPrincipal(principal) || typeof moduleId !== "string" ||
+      moduleId.trim().length === 0 || moduleId.length > 128 ||
+      /[\\u0000-\\u001f\\u007f-\\u009f]/u.test(moduleId)) {
+    throw new AuthenticationError();
+  }
+  return Object.freeze({
+    scope: "tenant" as const,
+    tenantId: principal.tenantId,
+    userId: principal.userId,
+    membershipId: principal.membershipId,
+    moduleId
+  });
+}
+
 export class TenantPersistenceError extends Error {
   constructor() {
     super("Tenant persistence operation failed.");
@@ -45,10 +81,15 @@ export class TenantPersistenceError extends Error {
 export async function withTenantTransaction<Result>(
   pool: TenantSqlPool,
   principal: AuthenticatedPrincipal,
-  work: (transaction: TenantTransaction) => Promise<Result>
+  tenantId: string,
+  work: (transaction: TenantTransaction, tenantPrincipal: TenantPrincipal) => Promise<Result>
 ): Promise<Result> {
   if (!isAuthenticatedPrincipal(principal)) {
     throw new AuthenticationError();
+  }
+  if (typeof tenantId !== "string" || tenantId.trim().length === 0 ||
+      tenantId.length > 256 || /[\\u0000-\\u001f\\u007f-\\u009f]/u.test(tenantId)) {
+    throw new TenantAuthorizationError();
   }
 
   let client: TenantSqlClient;
@@ -79,8 +120,52 @@ export async function withTenantTransaction<Result>(
     transactionOpen = true;
     await controlQuery(
       "SELECT set_config('app.tenant_id', $1, true)",
-      [principal.tenantId]
+      [tenantId]
     );
+
+    let membership: {
+      membership_id: string;
+      role: string;
+      generation: number;
+      version: string | number;
+    } | undefined;
+    try {
+      const result = await client.query<{
+        membership_id: string;
+        role: string;
+        generation: number;
+        version: string | number;
+      }>(
+        `SELECT membership_id::text AS membership_id, role, generation, version
+           FROM tenant_memberships
+          WHERE tenant_id = $1
+            AND internal_user_id = $2::uuid
+            AND status = 'active'
+          ORDER BY generation DESC
+          LIMIT 1`,
+        [tenantId, principal.userId]
+      );
+      membership = result.rows[0];
+    } catch {
+      transactionFailed = true;
+      throw new TenantPersistenceError();
+    }
+    if (!membership ||
+        !["owner", "admin", "manager", "editor", "viewer"].includes(membership.role) ||
+        !Number.isSafeInteger(membership.generation) ||
+        membership.generation < 1) {
+      throw new TenantAuthorizationError();
+    }
+
+    const tenantPrincipal = Object.freeze({
+      ...principal,
+      tenantId,
+      membershipId: membership.membership_id,
+      role: membership.role as TenantPrincipal["role"],
+      generation: membership.generation,
+      membershipVersion: String(membership.version)
+    });
+    tenantPrincipals.add(tenantPrincipal);
 
     transactionActive = true;
     const transaction: TenantTransaction = Object.freeze({
@@ -101,7 +186,7 @@ export async function withTenantTransaction<Result>(
       }
     });
 
-    const result = await work(transaction);
+    const result = await work(transaction, tenantPrincipal);
     transactionActive = false;
     if (transactionFailed) {
       throw new TenantPersistenceError();
