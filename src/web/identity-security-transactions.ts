@@ -13,7 +13,8 @@ const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3
 
 export type IdentitySecurityTransactionPurpose =
   | "reauth_identity_link"
-  | "reauth_identity_unlink";
+  | "reauth_identity_unlink"
+  | "identity_link";
 
 export type IdentityStepUpPurpose = "identity_link" | "identity_unlink";
 
@@ -81,6 +82,85 @@ export class PostgresIdentitySecurityTransactionStore {
       );
     } catch {
       throw new IdentitySecurityTransactionStoreError();
+    }
+  }
+
+  async createLinkTransactionFromStepUpGrant(
+    grant: string,
+    state: string,
+    browserBinding: string,
+    userId: string,
+    sessionId: string,
+    payload: IdentitySecurityTransactionPayload,
+    expiresAt: Date
+  ): Promise<void> {
+    const createdAt = this.now();
+    if (!validUuid(userId) || !validOpaqueDate(expiresAt) ||
+        expiresAt.getTime() <= createdAt.getTime() ||
+        expiresAt.getTime() > createdAt.getTime() + MAX_TRANSACTION_LIFETIME_MS) {
+      throw new TypeError("Invalid identity link transaction.");
+    }
+
+    let grantHash: Buffer;
+    let stateHash: Buffer;
+    let browserBindingHash: Buffer;
+    let sessionIdHash: Buffer;
+    let encryptedPayload: Buffer;
+    try {
+      grantHash = hashOpaqueSecret(grant);
+      stateHash = hashOpaqueSecret(state);
+      browserBindingHash = hashOpaqueSecret(browserBinding);
+      sessionIdHash = hashOpaqueSecret(sessionId);
+      encryptedPayload = encryptIdentitySecurityTransactionPayload(payload, this.encryptionKey);
+    } catch {
+      throw new TypeError("Invalid identity link transaction.");
+    }
+
+    let client: import("pg").PoolClient;
+    try {
+      client = await this.pool.connect();
+    } catch {
+      throw new IdentitySecurityTransactionStoreError();
+    }
+    let open = false;
+    let discard = false;
+    try {
+      await client.query("BEGIN");
+      open = true;
+      const consumed = await client.query(
+        `UPDATE identity_step_up_grants
+            SET consumed_at = $5
+          WHERE grant_hash = $1
+            AND user_id = $2::uuid
+            AND session_id_hash = $3
+            AND purpose = 'identity_link'
+            AND consumed_at IS NULL
+            AND expires_at > $5`,
+        [grantHash, userId, sessionIdHash, "identity_link", createdAt]
+      );
+      if (consumed.rowCount !== 1) {
+        await client.query("ROLLBACK");
+        open = false;
+        throw new IdentitySecurityTransactionStoreError();
+      }
+      await client.query(
+        `INSERT INTO identity_security_transactions
+           (state_hash, user_id, session_id_hash, browser_binding_hash,
+            purpose, encrypted_payload, created_at, expires_at)
+         VALUES ($1, $2::uuid, $3, $4, 'identity_link', $5, $6, $7)`,
+        [stateHash, userId, sessionIdHash, browserBindingHash,
+          encryptedPayload, createdAt, expiresAt]
+      );
+      await client.query("COMMIT");
+      open = false;
+    } catch {
+      if (open) {
+        try { await client.query("ROLLBACK"); }
+        catch { discard = true; }
+      }
+      throw new IdentitySecurityTransactionStoreError();
+    } finally {
+      client.release(discard ? new Error("Discarding failed identity-link transaction.") : undefined);
     }
   }
 
@@ -260,7 +340,7 @@ function validOpaqueDate(value: unknown): value is Date {
 }
 
 function isTransactionPurpose(value: unknown): value is IdentitySecurityTransactionPurpose {
-  return value === "reauth_identity_link" || value === "reauth_identity_unlink";
+  return value === "reauth_identity_link" || value === "reauth_identity_unlink" || value === "identity_link";
 }
 
 function isStepUpPurpose(value: unknown): value is IdentityStepUpPurpose {
