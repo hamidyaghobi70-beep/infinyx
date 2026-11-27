@@ -76,7 +76,7 @@ exports.up = (pgm) => {
     CREATE FUNCTION enforce_membership_lifecycle_update()
     RETURNS trigger
     LANGUAGE plpgsql
-    AS $
+    AS $function$
     BEGIN
       IF NEW.membership_id IS DISTINCT FROM OLD.membership_id
          OR NEW.tenant_id IS DISTINCT FROM OLD.tenant_id
@@ -112,7 +112,7 @@ exports.up = (pgm) => {
 
       RETURN NEW;
     END;
-    $;
+    $function$;
 
     CREATE TRIGGER tenant_membership_lifecycle_update_guard
       BEFORE UPDATE ON tenant_memberships
@@ -121,7 +121,7 @@ exports.up = (pgm) => {
     CREATE FUNCTION require_membership_lifecycle_audit()
     RETURNS trigger
     LANGUAGE plpgsql
-    AS $
+    AS $function$
     BEGIN
       IF OLD.status IS DISTINCT FROM NEW.status AND NOT EXISTS (
         SELECT 1
@@ -138,7 +138,7 @@ exports.up = (pgm) => {
       END IF;
       RETURN NULL;
     END;
-    $;
+    $function$;
 
     CREATE CONSTRAINT TRIGGER tenant_membership_lifecycle_audit_required
       AFTER UPDATE ON tenant_memberships
