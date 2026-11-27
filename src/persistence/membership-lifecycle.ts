@@ -184,15 +184,17 @@ export async function transitionTenantMembership(
           SET status = $1,
               status_changed_at = now(),
               status_changed_by = $2,
+              status_change_correlation_id = $3,
               version = version + 1
-        WHERE tenant_id = $3
-          AND membership_id = $4
-          AND status = $5
-          AND version = $6
+        WHERE tenant_id = $4
+          AND membership_id = $5
+          AND status = $6
+          AND version = $7
         RETURNING membership_id::text AS membership_id`,
       [
         requestedStatus,
         principal.subject,
+        correlationId,
         principal.tenantId,
         target.membership_id,
         target.status,
