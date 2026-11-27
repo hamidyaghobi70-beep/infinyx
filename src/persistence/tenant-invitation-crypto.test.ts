@@ -55,8 +55,6 @@ describe("tenant invitation cryptographic primitives", () => {
     expect(() => normalizeInvitationIdentity("email", "not-an-email")).toThrow();
     expect(() => hashInvitationToken("short", keys.tokenKey)).toThrow();
   });
-});
-
   it("encrypts outbox payloads and binds ciphertext to tenant and invitation", () => {
     const encrypted = encryptInvitationDelivery({
       invitationId: "00000000-0000-4000-8000-000000000001",
@@ -84,3 +82,4 @@ describe("tenant invitation cryptographic primitives", () => {
       keys.deliveryKey
     )).toThrow();
   });
+});
