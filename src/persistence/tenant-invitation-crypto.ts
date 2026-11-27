@@ -1,4 +1,4 @@
-import { createHmac, randomBytes, timingSafeEqual } from "node:crypto";
+import { createCipheriv, createDecipheriv, createHmac, randomBytes, timingSafeEqual } from "node:crypto";
 
 export type InvitationIdentityType = "email" | "phone";
 
@@ -7,6 +7,8 @@ export interface InvitationKeyMaterial {
   readonly tokenKeyVersion: number;
   readonly identityKey: Buffer;
   readonly identityKeyVersion: number;
+  readonly deliveryKey: Buffer;
+  readonly deliveryKeyVersion: number;
 }
 
 export interface InvitationSecrets {
@@ -28,6 +30,8 @@ function assertKeyMaterial(keys: InvitationKeyMaterial): void {
   if (
     !Buffer.isBuffer(keys.tokenKey) || keys.tokenKey.length < 32 ||
     !Buffer.isBuffer(keys.identityKey) || keys.identityKey.length < 32 ||
+    !Buffer.isBuffer(keys.deliveryKey) || keys.deliveryKey.length !== 32 ||
+    !Number.isSafeInteger(keys.deliveryKeyVersion) || keys.deliveryKeyVersion < 1 ||
     !Number.isSafeInteger(keys.tokenKeyVersion) || keys.tokenKeyVersion < 1 ||
     !Number.isSafeInteger(keys.identityKeyVersion) || keys.identityKeyVersion < 1
   ) {
@@ -117,4 +121,91 @@ export function invitationTokenMatches(
   return Buffer.isBuffer(candidate) && Buffer.isBuffer(stored) &&
     candidate.length === 32 && stored.length === 32 &&
     timingSafeEqual(candidate, stored);
+}
+
+
+export interface EncryptedInvitationDelivery {
+  readonly keyVersion: number;
+  readonly nonce: Buffer;
+  readonly ciphertext: Buffer;
+  readonly authTag: Buffer;
+}
+
+export interface InvitationDeliveryPayload {
+  readonly invitationId: string;
+  readonly tenantId: string;
+  readonly identityType: InvitationIdentityType;
+  readonly normalizedIdentity: string;
+  readonly rawToken: string;
+}
+
+export function encryptInvitationDelivery(
+  payload: InvitationDeliveryPayload,
+  keys: InvitationKeyMaterial
+): EncryptedInvitationDelivery {
+  assertKeyMaterial(keys);
+  const nonce = randomBytes(12);
+  const aad = Buffer.from(
+    `infinyx-invitation-delivery-v1:${payload.tenantId}:${payload.invitationId}:${keys.deliveryKeyVersion}`,
+    "utf8"
+  );
+  const cipher = createCipheriv("aes-256-gcm", keys.deliveryKey, nonce);
+  cipher.setAAD(aad);
+  const plaintext = Buffer.from(JSON.stringify(payload), "utf8");
+  const ciphertext = Buffer.concat([cipher.update(plaintext), cipher.final()]);
+  return Object.freeze({
+    keyVersion: keys.deliveryKeyVersion,
+    nonce,
+    ciphertext,
+    authTag: cipher.getAuthTag()
+  });
+}
+
+export function decryptInvitationDelivery(
+  encrypted: EncryptedInvitationDelivery,
+  tenantId: string,
+  invitationId: string,
+  deliveryKey: Buffer
+): InvitationDeliveryPayload {
+  if (
+    !Buffer.isBuffer(deliveryKey) || deliveryKey.length !== 32 ||
+    !Number.isSafeInteger(encrypted.keyVersion) || encrypted.keyVersion < 1 ||
+    !Buffer.isBuffer(encrypted.nonce) || encrypted.nonce.length !== 12 ||
+    !Buffer.isBuffer(encrypted.authTag) || encrypted.authTag.length !== 16 ||
+    !Buffer.isBuffer(encrypted.ciphertext)
+  ) {
+    throw new InvitationInputError();
+  }
+  try {
+    const aad = Buffer.from(
+      `infinyx-invitation-delivery-v1:${tenantId}:${invitationId}:${encrypted.keyVersion}`,
+      "utf8"
+    );
+    const decipher = createDecipheriv("aes-256-gcm", deliveryKey, encrypted.nonce);
+    decipher.setAAD(aad);
+    decipher.setAuthTag(encrypted.authTag);
+    const plaintext = Buffer.concat([
+      decipher.update(encrypted.ciphertext),
+      decipher.final()
+    ]);
+    const parsed: unknown = JSON.parse(plaintext.toString("utf8"));
+    if (
+      !parsed || typeof parsed !== "object" ||
+      (parsed as Record<string, unknown>).tenantId !== tenantId ||
+      (parsed as Record<string, unknown>).invitationId !== invitationId
+    ) {
+      throw new Error();
+    }
+    const value = parsed as InvitationDeliveryPayload;
+    if (
+      (value.identityType !== "email" && value.identityType !== "phone") ||
+      typeof value.normalizedIdentity !== "string" ||
+      typeof value.rawToken !== "string"
+    ) {
+      throw new Error();
+    }
+    return Object.freeze(value);
+  } catch {
+    throw new InvitationInputError();
+  }
 }
