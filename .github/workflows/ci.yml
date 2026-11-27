@@ -126,7 +126,8 @@ jobs:
           GRANT SELECT ON user_account_security, user_account_security_events TO infinyx_app;
           GRANT UPDATE (status, version, updated_at, status_changed_by, status_change_reason, status_change_correlation_id) ON user_account_security TO infinyx_app;
           GRANT SELECT ON user_account_session_revocation_outbox TO infinyx_app;
-          GRANT UPDATE (completed_at, attempts, last_error_code) ON user_account_session_revocation_outbox TO infinyx_app;
+          GRANT UPDATE (attempts, last_error_code) ON user_account_session_revocation_outbox TO infinyx_app;
+          GRANT EXECUTE ON FUNCTION complete_user_account_session_revocation(uuid, uuid) TO infinyx_app;
           GRANT SELECT, INSERT, UPDATE (consumed_at) ON user_account_recovery_transactions TO infinyx_app;
           GRANT SELECT, INSERT ON user_account_recovery_audit_events TO infinyx_app;
           SQL
@@ -183,8 +184,8 @@ jobs:
             IF legacy_events <> 1 THEN
               RAISE EXCEPTION 'Suspension did not create a pending session-revocation request';
             END IF;
-            UPDATE user_account_session_revocation_outbox
-               SET completed_at = now(), attempts = attempts + 1
+            PERFORM complete_user_account_session_revocation(outbox_id, test_user)
+              FROM user_account_session_revocation_outbox
              WHERE user_id = test_user AND completed_at IS NULL;
             UPDATE user_account_security
                SET status = 'active', version = version + 1,
@@ -251,7 +252,8 @@ jobs:
           GRANT UPDATE (consumed_at) ON identity_security_transactions, identity_step_up_grants TO infinyx_app;
           GRANT SELECT, INSERT ON identity_security_audit_events TO infinyx_app;
           GRANT SELECT, INSERT ON identity_session_revocation_outbox TO infinyx_app;
-          GRANT UPDATE (completed_at, attempts, last_error_code) ON identity_session_revocation_outbox TO infinyx_app;
+          GRANT UPDATE (attempts, last_error_code) ON identity_session_revocation_outbox TO infinyx_app;
+          GRANT EXECUTE ON FUNCTION complete_identity_session_revocation(uuid, uuid) TO infinyx_app;
           SQL
       - name: Verify legacy identity backfill preserved existing bindings
         run: |
