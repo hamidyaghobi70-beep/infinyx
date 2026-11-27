@@ -23,6 +23,7 @@
   },
   "dependencies": {
     "node-pg-migrate": "7.6.1",
+    "openid-client": "6.9.1",
     "pg": "8.23.1"
   }
 }
