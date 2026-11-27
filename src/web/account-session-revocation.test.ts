@@ -15,7 +15,7 @@ describe("account session revocation outbox", () => {
     const pool = {
       query: vi.fn(async (sql: string) => {
         calls.push(sql);
-        return { rows: [], rowCount: 1 };
+        return { rows: [{ completed: true }], rowCount: 1 };
       })
     } as unknown as Pool;
     const sessions = {
@@ -47,7 +47,9 @@ describe("account session revocation outbox", () => {
     const pool = {
       query: vi.fn(async (sql: string) => sql.includes("SELECT outbox_id")
         ? { rows: [{ outbox_id: outboxId, user_id: userId }], rowCount: 1 }
-        : { rows: [], rowCount: 1 })
+        : sql.includes("complete_user_account_session_revocation")
+          ? { rows: [{ completed: true }], rowCount: 1 }
+          : { rows: [], rowCount: 1 })
     } as unknown as Pool;
     const sessions = {
       revokeAllForUser: vi.fn(async () => undefined)
