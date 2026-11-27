@@ -12,6 +12,9 @@ export interface BffRouteHandlers {
   readonly logout: BffRouteHandler;
   readonly startReauth: BffRouteHandler;
   readonly handleReauthCallback: BffRouteHandler;
+  readonly startUnlinkReauth: BffRouteHandler;
+  readonly handleUnlinkReauthCallback: BffRouteHandler;
+  readonly unlinkIdentity: BffRouteHandler;
   readonly startLink: BffRouteHandler;
   readonly handleLinkCallback: BffRouteHandler;
 }
@@ -23,6 +26,8 @@ const ROUTES = new Map<string, keyof BffRouteHandlers>([
   ["POST /auth/logout", "logout"],
   ["POST /account/security/reauth", "startReauth"],
   ["GET /auth/reauth/callback", "handleReauthCallback"],
+  ["POST /account/security/reauth-unlink", "startUnlinkReauth"],
+  ["GET /auth/reauth-unlink/callback", "handleUnlinkReauthCallback"],
   ["POST /account/identities/link", "startLink"],
   ["GET /auth/identity-link/callback", "handleLinkCallback"]
 ]);
@@ -48,8 +53,16 @@ async function dispatch(
     return;
   }
 
-  const handlerName = ROUTES.get(`${method} ${pathname}`);
+  const identityUnlinkPath = /^\\/account\\/identities\\/[0-9a-f-]{36}\\/unlink$/iu.test(pathname);
+  const handlerName = ROUTES.get(`${method} ${pathname}`) ??
+    (method === "POST" && identityUnlinkPath ? "unlinkIdentity" : undefined);
   if (!handlerName) {
+    if (identityUnlinkPath) {
+      response.setHeader("Allow", "POST");
+      sendError(response, 405, "method_not_allowed");
+      request.resume();
+      return;
+    }
     const allowed = [...ROUTES.entries()]
       .filter(([route]) => route.endsWith(` ${pathname}`))
       .map(([route]) => route.split(" ", 1)[0]);
@@ -63,7 +76,7 @@ async function dispatch(
     return;
   }
 
-  if ((handlerName === "logout" || handlerName === "startReauth" || handlerName === "startLink") &&
+  if ((handlerName === "logout" || handlerName === "startReauth" || handlerName === "startUnlinkReauth" || handlerName === "startLink" || handlerName === "unlinkIdentity") &&
       ((request.headers["content-length"] !== undefined &&
         request.headers["content-length"] !== "0") ||
        request.headers["transfer-encoding"] !== undefined)) {

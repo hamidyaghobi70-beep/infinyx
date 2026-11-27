@@ -12,7 +12,7 @@
     "typecheck": "tsc --noEmit",
     "db:migrate:up": "node-pg-migrate up --migrations-dir migrations",
     "db:migrate:down": "node-pg-migrate down --migrations-dir migrations",
-    "db:migrate:check": "node --check migrations/001_initial_tenant_schema.cjs && node --check migrations/002_membership_lifecycle.cjs && node --check migrations/003_tenant_invitations.cjs && node --check migrations/004_internal_identity_foundation.cjs && node --check migrations/005_internal_user_membership_mapping.cjs && node --check migrations/006_web_sessions.cjs && node --check migrations/007_web_login_transactions.cjs && node --check migrations/008_external_identity_lifecycle.cjs && node --check migrations/009_identity_security_transactions.cjs && node --check migrations/010_external_identity_link_workflow.cjs",
+    "db:migrate:check": "node --check migrations/001_initial_tenant_schema.cjs && node --check migrations/002_membership_lifecycle.cjs && node --check migrations/003_tenant_invitations.cjs && node --check migrations/004_internal_identity_foundation.cjs && node --check migrations/005_internal_user_membership_mapping.cjs && node --check migrations/006_web_sessions.cjs && node --check migrations/007_web_login_transactions.cjs && node --check migrations/008_external_identity_lifecycle.cjs && node --check migrations/009_identity_security_transactions.cjs && node --check migrations/010_external_identity_link_workflow.cjs && node --check migrations/011_external_identity_unlink_audit.cjs",
     "build": "tsc -p tsconfig.build.json",
     "start:web": "node dist/web/main.js",
     "test:keycloak": "vitest run src/web/keycloak.integration.test.ts"

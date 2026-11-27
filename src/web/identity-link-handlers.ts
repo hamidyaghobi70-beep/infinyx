@@ -22,6 +22,7 @@ import {
   completeIdentitySessionRevocation,
   registerVerifiedIdentityLink
 } from "./identity-link-workflow.js";
+import { unlinkVerifiedIdentity } from "./identity-unlink-workflow.js";
 
 interface Dependencies {
   readonly configuration: OidcBffConfiguration;
@@ -73,7 +74,7 @@ export function createIdentityLinkHandlers(deps: Dependencies) {
 
   async function beginAuthorization(
     response: ServerResponse,
-    purpose: "reauth_identity_link" | "identity_link",
+    purpose: "reauth_identity_link" | "reauth_identity_unlink" | "identity_link",
     userId: string,
     sessionId: string,
     grant?: string
@@ -86,7 +87,7 @@ export function createIdentityLinkHandlers(deps: Dependencies) {
     const payload: IdentitySecurityTransactionPayload = { codeVerifier, nonce };
     const expiresAt = new Date(now().getTime() + 5 * 60 * 1000);
 
-    if (purpose === "reauth_identity_link") {
+    if (purpose === "reauth_identity_link" || purpose === "reauth_identity_unlink") {
       await deps.securityTransactions.createTransaction(
         state, browserBinding, userId, sessionId, purpose, payload, expiresAt
       );
@@ -99,13 +100,15 @@ export function createIdentityLinkHandlers(deps: Dependencies) {
 
     const callbackPath = purpose === "reauth_identity_link"
       ? "/auth/reauth/callback"
-      : "/auth/identity-link/callback";
+      : purpose === "reauth_identity_unlink"
+        ? "/auth/reauth-unlink/callback"
+        : "/auth/identity-link/callback";
     const authorizationUrl = clientApi.buildAuthorizationUrl(deps.client, {
       redirect_uri: `${deps.configuration.publicOrigin}${callbackPath}`,
       response_type: "code",
       scope: "openid",
       prompt: "login",
-      ...(purpose === "reauth_identity_link" ? { max_age: "0" } : {}),
+      ...(purpose === "reauth_identity_link" || purpose === "reauth_identity_unlink" ? { max_age: "0" } : {}),
       code_challenge: codeChallenge,
       code_challenge_method: "S256",
       state,
@@ -192,6 +195,120 @@ export function createIdentityLinkHandlers(deps: Dependencies) {
       response.setHeader("Set-Cookie", [
         createIdentitySecurityCookie(grant, "stepup"),
         createExpiredIdentitySecurityCookie()
+      ]);
+      response.setHeader("Location", "/account/security");
+      response.end();
+    },
+
+    startUnlinkReauth: async (request: IncomingMessage, response: ServerResponse): Promise<void> => {
+      const sessionId = readSessionCookie(request.headers.cookie);
+      if (!sessionId) return sendJson(response, 401, { error: "authentication_required" });
+      const session = await deps.sessions.findActive(sessionId);
+      if (!session) return sendJson(response, 401, { error: "authentication_required" });
+      if (!validateBffCsrf(request, session, deps.configuration.publicOrigin).ok) {
+        return sendJson(response, 403, { error: "csrf_rejected" });
+      }
+      await beginAuthorization(response, "reauth_identity_unlink", session.userId, sessionId);
+    },
+
+    handleUnlinkReauthCallback: async (request: IncomingMessage, response: ServerResponse): Promise<void> => {
+      const incoming = requestUrl(request, deps.configuration.publicOrigin);
+      const binding = readIdentitySecurityCookie(request.headers.cookie);
+      const sessionId = readSessionCookie(request.headers.cookie);
+      if (!incoming || incoming.pathname !== "/auth/reauth-unlink/callback" || !binding || !sessionId) {
+        return sendJson(response, 401, { error: "reauthentication_failed" }, [createExpiredIdentitySecurityCookie()]);
+      }
+      const session = await deps.sessions.findActive(sessionId);
+      const params = callbackParameters(incoming, deps.configuration.issuer);
+      if (!session || !params) {
+        return sendJson(response, 401, { error: "reauthentication_failed" }, [createExpiredIdentitySecurityCookie()]);
+      }
+      const pending = await deps.securityTransactions.consumeTransaction(
+        params.state, binding, session.userId, sessionId, "reauth_identity_unlink"
+      );
+      if (!pending) {
+        return sendJson(response, 401, { error: "reauthentication_failed" }, [createExpiredIdentitySecurityCookie()]);
+      }
+      const callbackUrl = new URL(`${deps.configuration.publicOrigin}/auth/reauth-unlink/callback`);
+      callbackUrl.search = incoming.search;
+      let tokenResponse: Awaited<ReturnType<typeof oidc.authorizationCodeGrant>>;
+      try {
+        tokenResponse = await clientApi.authorizationCodeGrant(deps.client, callbackUrl, {
+          expectedState: params.state,
+          expectedNonce: pending.payload.nonce,
+          pkceCodeVerifier: pending.payload.codeVerifier,
+          idTokenExpected: true
+        });
+      } catch {
+        return sendJson(response, 401, { error: "reauthentication_failed" }, [createExpiredIdentitySecurityCookie()]);
+      }
+      const claims = tokenResponse.claims();
+      if (!validClaims(claims, deps.configuration.issuer)) {
+        return sendJson(response, 401, { error: "reauthentication_failed" }, [createExpiredIdentitySecurityCookie()]);
+      }
+      const current = await deps.sessions.findActive(sessionId);
+      if (!current || current.userId !== session.userId) {
+        return sendJson(response, 401, { error: "reauthentication_failed" }, [createExpiredIdentitySecurityCookie()]);
+      }
+      const owned = await deps.database.query(
+        `SELECT 1
+           FROM user_external_identities AS identity
+           INNER JOIN user_external_identity_lifecycle AS lifecycle
+             ON lifecycle.identity_id = identity.identity_id AND lifecycle.status = 'active'
+          WHERE identity.user_id = $1::uuid AND identity.issuer = $2 AND identity.subject = $3
+          LIMIT 1`,
+        [session.userId, claims.iss, claims.sub]
+      );
+      if (owned.rowCount !== 1) {
+        return sendJson(response, 401, { error: "reauthentication_failed" }, [createExpiredIdentitySecurityCookie()]);
+      }
+      const grant = await deps.securityTransactions.issueVerifiedStepUpGrant(
+        pending.transactionId, session.userId, sessionId, "identity_unlink",
+        new Date(now().getTime() + 5 * 60 * 1000)
+      );
+      if (!grant) return sendJson(response, 401, { error: "reauthentication_failed" }, [createExpiredIdentitySecurityCookie()]);
+      response.statusCode = 303;
+      response.setHeader("Set-Cookie", [
+        createIdentitySecurityCookie(grant, "stepup"),
+        createExpiredIdentitySecurityCookie()
+      ]);
+      response.setHeader("Location", "/account/security");
+      response.end();
+    },
+
+    unlinkIdentity: async (request: IncomingMessage, response: ServerResponse): Promise<void> => {
+      const incoming = requestUrl(request, deps.configuration.publicOrigin);
+      const match = incoming?.pathname.match(/^\\/account\\/identities\\/([0-9a-f-]{36})\\/unlink$/iu);
+      const sessionId = readSessionCookie(request.headers.cookie);
+      const grant = readIdentitySecurityCookie(request.headers.cookie, "stepup");
+      if (!sessionId || !grant || !match) {
+        return sendJson(response, 401, { error: "identity_unlink_failed" }, [createExpiredStepUpCookie()]);
+      }
+      const session = await deps.sessions.findActive(sessionId);
+      if (!session) return sendJson(response, 401, { error: "authentication_required" }, [createExpiredSessionCookie()]);
+      if (!validateBffCsrf(request, session, deps.configuration.publicOrigin).ok) {
+        return sendJson(response, 403, { error: "csrf_rejected" });
+      }
+      const result = await unlinkVerifiedIdentity(
+        deps.database, session.userId, sessionId, grant, match[1]!, randomUUID()
+      );
+      if (result.outcome === "step_up_required") {
+        return sendJson(response, 401, { error: "step_up_required" }, [createExpiredStepUpCookie()]);
+      }
+      if (result.outcome === "denied") {
+        return sendJson(response, 409, { error: "identity_unlink_failed" }, [createExpiredStepUpCookie()]);
+      }
+      const revoked = await completeIdentitySessionRevocation(
+        deps.database, deps.sessions, session.userId, result.outboxId
+      );
+      if (!revoked) {
+        return sendJson(response, 503, { error: "identity_change_pending" }, [
+          createExpiredSessionCookie(), createExpiredStepUpCookie(), createExpiredIdentitySecurityCookie()
+        ]);
+      }
+      response.statusCode = 303;
+      response.setHeader("Set-Cookie", [
+        createExpiredSessionCookie(), createExpiredStepUpCookie(), createExpiredIdentitySecurityCookie()
       ]);
       response.setHeader("Location", "/account/security");
       response.end();
