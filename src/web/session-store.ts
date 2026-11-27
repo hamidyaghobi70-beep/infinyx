@@ -96,6 +96,10 @@ export class PostgresWebSessionStore {
             AND revoked_at IS NULL
             AND idle_expires_at > $2
             AND absolute_expires_at > $2
+             AND NOT EXISTS (
+               SELECT 1 FROM identity_session_revocation_outbox AS pending
+                WHERE pending.user_id = web_sessions.user_id AND pending.completed_at IS NULL
+             )
           LIMIT 1`,
         [sessionHash, this.now()]
       );
@@ -131,7 +135,11 @@ export class PostgresWebSessionStore {
           WHERE session_id_hash = $1
             AND revoked_at IS NULL
             AND idle_expires_at > $2
-            AND absolute_expires_at > $2`,
+            AND absolute_expires_at > $2
+             AND NOT EXISTS (
+               SELECT 1 FROM identity_session_revocation_outbox AS pending
+                WHERE pending.user_id = web_sessions.user_id AND pending.completed_at IS NULL
+             )`,
         [sessionHash, this.now(), idleExpiresAt]
       );
       return result.rowCount === 1;
@@ -173,6 +181,10 @@ export class PostgresWebSessionStore {
             AND revoked_at IS NULL
             AND idle_expires_at > $2
             AND absolute_expires_at > $2
+             AND NOT EXISTS (
+               SELECT 1 FROM identity_session_revocation_outbox AS pending
+                WHERE pending.user_id = web_sessions.user_id AND pending.completed_at IS NULL
+             )
           LIMIT 1
           FOR UPDATE`,
         [sessionHash, now]
