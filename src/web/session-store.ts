@@ -290,14 +290,15 @@ export class PostgresWebSessionStore {
       }
 
       const leaseId = randomUUID();
-      const leaseStartedAt = this.now();
-      const leaseExpiresAt = new Date(leaseStartedAt.getTime() + REFRESH_LEASE_MS);
       const lease = await client.query(
         `UPDATE web_sessions
-            SET refresh_lease_id = $3::uuid, refresh_lease_expires_at = $4
+            SET refresh_lease_id = $3::uuid,
+                refresh_lease_expires_at = clock_timestamp() + ($4::integer * interval '1 millisecond')
           WHERE session_id_hash = $1 AND encrypted_token_bundle = $2
-            AND revoked_at IS NULL AND idle_expires_at > $5 AND absolute_expires_at > $5
-            AND (refresh_lease_expires_at IS NULL OR refresh_lease_expires_at <= $5)
+            AND revoked_at IS NULL
+            AND idle_expires_at > clock_timestamp()
+            AND absolute_expires_at > clock_timestamp()
+            AND (refresh_lease_expires_at IS NULL OR refresh_lease_expires_at <= clock_timestamp())
             AND EXISTS (
               SELECT 1 FROM user_account_security s
                WHERE s.user_id = web_sessions.user_id AND s.status = 'active'
@@ -316,7 +317,7 @@ export class PostgresWebSessionStore {
               SELECT 1 FROM identity_session_revocation_outbox o
                WHERE o.user_id = web_sessions.user_id AND o.completed_at IS NULL
             )`,
-        [sessionHash, row.encrypted_token_bundle, leaseId, leaseExpiresAt, leaseStartedAt]
+        [sessionHash, row.encrypted_token_bundle, leaseId, REFRESH_LEASE_MS]
       );
       if (lease.rowCount !== 1) return null;
 
