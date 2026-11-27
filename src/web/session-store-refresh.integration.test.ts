@@ -38,27 +38,10 @@ integrationDescribe("PostgreSQL web-session refresh advisory lock", () => {
     const csrfToken = createCsrfToken();
     const now = new Date();
     const store = new PostgresWebSessionStore(pool, encryptionKey);
-    await adminPool.query("INSERT INTO users (id) VALUES ($1::uuid)", [userId]);
-    await adminPool.query(
-      "INSERT INTO user_external_identities (user_id, issuer, subject) VALUES ($1::uuid, $2, $3)",
-      [userId, issuer, subject]
-    );
-
-    await store.create({
-      sessionId, csrfToken, userId, issuer, subject,
-      tokenBundle: {
-        accessToken: "expired-access-token",
-        refreshToken: "single-use-refresh-token",
-        accessTokenExpiresAt: now.getTime() - 1,
-        csrfToken
-      },
-      idleExpiresAt: new Date(now.getTime() + 1_800_000),
-      absoluteExpiresAt: new Date(now.getTime() + 28_800_000)
-    });
 
     let signalRefreshStarted!: () => void;
     const refreshStarted = new Promise<void>(resolve => { signalRefreshStarted = resolve; });
-    let finishRefresh!: () => void;
+    let finishRefresh: () => void = () => {};
     const refreshGate = new Promise<void>(resolve => { finishRefresh = resolve; });
     let refreshCalls = 0;
     const refresh = async (token: string) => {
@@ -74,11 +57,32 @@ integrationDescribe("PostgreSQL web-session refresh advisory lock", () => {
     };
 
     try {
+      await adminPool.query("INSERT INTO users (id) VALUES ($1::uuid)", [userId]);
+      await adminPool.query(
+        "INSERT INTO user_external_identities (user_id, issuer, subject) VALUES ($1::uuid, $2, $3)",
+        [userId, issuer, subject]
+      );
+
+      await store.create({
+      sessionId, csrfToken, userId, issuer, subject,
+      tokenBundle: {
+        accessToken: "expired-access-token",
+        refreshToken: "single-use-refresh-token",
+        accessTokenExpiresAt: now.getTime() - 1,
+        csrfToken
+      },
+      idleExpiresAt: new Date(now.getTime() + 1_800_000),
+      absoluteExpiresAt: new Date(now.getTime() + 28_800_000)
+    });
+
       const first = store.getUsableAccessToken(sessionId, refresh);
       await refreshStarted;
       const second = await store.getUsableAccessToken(sessionId, refresh);
       expect(second).toBeNull();
       expect(refreshCalls).toBe(1);
+      // The first refresh is still blocked in its provider callback, so the
+      // second call must have checked out a distinct PostgreSQL connection.
+      expect(pool.totalCount).toBeGreaterThanOrEqual(2);
 
       finishRefresh();
       await expect(first).resolves.toBe("rotated-access-token");
@@ -95,6 +99,8 @@ integrationDescribe("PostgreSQL web-session refresh advisory lock", () => {
     } finally {
       finishRefresh();
       await adminPool.query("DELETE FROM web_sessions WHERE user_id = $1::uuid", [userId]);
+      // External-identity lifecycle and audit rows are intentionally append-only
+      // (their schema rejects deletion); use unique fixture identifiers per run.
     }
   });
 });
