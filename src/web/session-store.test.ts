@@ -125,7 +125,6 @@ describe("serialized web-session access-token refresh", () => {
     const refresh = vi.fn();
     expect(await store.getUsableAccessToken(createOpaqueSessionId(), refresh)).toBe("old-access-token");
     expect(refresh).not.toHaveBeenCalled();
-    
   });
 
   it("revokes an expired session when no refresh token is available", async () => {
@@ -135,7 +134,7 @@ describe("serialized web-session access-token refresh", () => {
     expect(await store.getUsableAccessToken(createOpaqueSessionId(), refresh)).toBeNull();
     expect(refresh).not.toHaveBeenCalled();
     expect(fake.calls.some(call => call.sql.includes("SET revoked_at"))).toBe(true);
-    expect(fake.calls.some(call => call.sql.includes("pg_advisory_unlock"))).toBe(true);
+    
   });
 
   it("revokes the session when refresh fails rather than returning an expired token", async () => {

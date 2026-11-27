@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { createPostgresPool } from "../persistence/postgres-pool.js";
-import { createCsrfToken, createOpaqueSessionId } from "./session-crypto.js";
+import { createCsrfToken, createOpaqueSessionId, hashOpaqueSecret } from "./session-crypto.js";
 import { PostgresWebSessionStore, WebSessionStoreError } from "./session-store.js";
 
 const databaseUrl = process.env.INFINYX_TEST_DATABASE_URL;
@@ -12,6 +12,7 @@ integrationDescribe("PostgreSQL durable web-session refresh reservation", () => 
   let appPool: ReturnType<typeof createPostgresPool>;
   let adminPool: ReturnType<typeof createPostgresPool>;
   let recoveryPool: ReturnType<typeof createPostgresPool> | undefined;
+  let appPoolEnded = false;
 
   beforeAll(() => {
     appPool = createPostgresPool({
@@ -27,7 +28,7 @@ integrationDescribe("PostgreSQL durable web-session refresh reservation", () => 
   });
 
   afterAll(async () => {
-    if (appPool) await appPool.end();
+    if (appPool && !appPoolEnded) await appPool.end();
     if (recoveryPool) await recoveryPool.end();
     if (adminPool) await adminPool.end();
   });
@@ -85,6 +86,7 @@ integrationDescribe("PostgreSQL durable web-session refresh reservation", () => 
       // The provider request is still pending. Ending the pool simulates the
       // PostgreSQL connection becoming unavailable during the external call.
       await appPool.end();
+      appPoolEnded = true;
       recoveryPool = createPostgresPool({
         DATABASE_URL: databaseUrl!, DATABASE_SSL: "disable",
         DATABASE_POOL_MAX: "2", DATABASE_CONNECTION_TIMEOUT_MS: "5000",
@@ -102,8 +104,8 @@ integrationDescribe("PostgreSQL durable web-session refresh reservation", () => 
       await expect(first).rejects.toBeInstanceOf(WebSessionStoreError);
 
       const persisted = await adminPool.query<{ refresh_attempt_id: string | null; revoked_at: Date | null }>(
-        "SELECT refresh_attempt_id, revoked_at FROM web_sessions WHERE session_id_hash = digest($1, 'sha256')",
-        [sessionId]
+        "SELECT refresh_attempt_id, revoked_at FROM web_sessions WHERE session_id_hash = $1",
+        [hashOpaqueSecret(sessionId)]
       );
       expect(persisted.rows).toHaveLength(1);
       expect(persisted.rows[0]?.refresh_attempt_id).toMatch(
