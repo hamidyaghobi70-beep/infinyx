@@ -24,7 +24,6 @@ exports.up = (pgm) => {
       CONSTRAINT user_external_identities_subject_check
         CHECK (
           char_length(subject) BETWEEN 1 AND 512
-          AND subject = btrim(subject)
           AND subject !~ '[[:cntrl:]]'
         ),
       CONSTRAINT user_external_identities_issuer_subject_unique
