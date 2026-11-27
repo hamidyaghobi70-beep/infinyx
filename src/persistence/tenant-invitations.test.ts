@@ -61,6 +61,13 @@ function fakePool(options: { targetAlreadyMember?: boolean } = {}) {
         } as Row], rowCount: 1 };
       }
       if (sql.startsWith("SELECT id FROM tenants")) return { rows: [{ id: "tenant-a" } as Row], rowCount: 1 };
+      if (sql.includes("FROM tenant_memberships") &&
+          sql.includes("SELECT membership_id::text AS membership_id, generation, role, status")) {
+        return { rows: [{
+          membership_id: "00000000-0000-4000-8000-000000000010",
+          generation: 1, role: "owner", status: "active", version: "1"
+        } as Row], rowCount: 1 };
+      }
       if (sql.includes("FROM tenant_memberships") && sql.includes("internal_user_id = $2::uuid")) {
         return { rows: options.targetAlreadyMember ? [{ membership_id: "existing" } as Row] : [], rowCount: options.targetAlreadyMember ? 1 : 0 };
       }
