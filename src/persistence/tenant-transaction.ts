@@ -14,7 +14,7 @@ export interface TenantSqlClient {
     sql: string,
     values?: readonly unknown[]
   ): Promise<SqlQueryResult<Row>>;
-  release(): void;
+  release(destroy?: boolean): void;
 }
 
 export interface TenantSqlPool {
@@ -59,10 +59,13 @@ export async function withTenantTransaction<Result>(
   }
 
   let transactionOpen = false;
+  let transactionFailed = false;
+  let destroyClient = false;
   const controlQuery = async (sql: string, values?: readonly unknown[]) => {
     try {
       await client.query(sql, values);
     } catch {
+      transactionFailed = true;
       throw new TenantPersistenceError();
     }
   };
@@ -84,12 +87,16 @@ export async function withTenantTransaction<Result>(
           const result = await client.query<Row>(sql, values);
           return result.rows;
         } catch {
+          transactionFailed = true;
           throw new TenantPersistenceError();
         }
       }
     });
 
     const result = await work(transaction);
+    if (transactionFailed) {
+      throw new TenantPersistenceError();
+    }
     await controlQuery("COMMIT");
     transactionOpen = false;
     return result;
@@ -98,13 +105,14 @@ export async function withTenantTransaction<Result>(
       try {
         await client.query("ROLLBACK");
       } catch {
-        // Preserve the original failure; the client is still released below.
+        // Do not return a connection with uncertain transaction state to the pool.
+        destroyClient = true;
       }
     }
     throw error;
   } finally {
     try {
-      client.release();
+      client.release(destroyClient);
     } catch {
       // A release failure must not replace the operation's original outcome.
     }
