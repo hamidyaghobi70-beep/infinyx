@@ -33,14 +33,14 @@ function sessionRow(expiry: number, refreshToken?: string) {
 
 function fakePool(
   row: ReturnType<typeof sessionRow>,
-  options: { readonly unlockResult?: boolean; readonly unlockError?: boolean } = {}
+  options: { readonly lockResult?: boolean; readonly unlockResult?: boolean; readonly unlockError?: boolean } = {}
 ) {
   let stored = row;
   const calls: Array<{ sql: string; values?: readonly unknown[] }> = [];
   const client = {
     async query(sql: string, values?: readonly unknown[]) {
       calls.push({ sql, values });
-      if (sql.includes("pg_try_advisory_lock")) return { rows: [{ acquired: true }], rowCount: 1 };
+      if (sql.includes("pg_try_advisory_lock")) return { rows: [{ acquired: options.lockResult ?? true }], rowCount: 1 };
       if (sql.includes("pg_advisory_unlock")) {
         if (options.unlockError) throw new Error("simulated advisory unlock failure");
         return { rows: [{ unlocked: options.unlockResult ?? true }], rowCount: 1 };
@@ -226,6 +226,24 @@ describe("serialized web-session access-token refresh", () => {
       idleExpiresAt: new Date(now.getTime() + 1_800_000),
       absoluteExpiresAt: new Date(now.getTime() + 28_800_000)
     })).rejects.toThrow("Web session operation failed");
+  });
+
+  it("releases every checked-out client when concurrent refresh attempts cannot acquire the lock", async () => {
+    const fake = fakePool(
+      sessionRow(now.getTime() - 1, "refresh-token"),
+      { lockResult: false }
+    );
+    const store = new PostgresWebSessionStore(fake.pool, key, () => now);
+
+    const results = await Promise.all(
+      Array.from({ length: 10 }, () => store.getUsableAccessToken(createOpaqueSessionId(), vi.fn()))
+    );
+
+    expect(results).toEqual(Array(10).fill(null));
+    expect(fake.connect).toHaveBeenCalledTimes(10);
+    expect(fake.client.release).toHaveBeenCalledTimes(10);
+    expect(fake.calls.filter(call => call.sql.includes("pg_try_advisory_lock"))).toHaveLength(10);
+    expect(fake.calls.some(call => call.sql.includes("pg_advisory_unlock"))).toBe(false);
   });
 
   it("fails closed when another request already owns the refresh lock", async () => {
