@@ -156,10 +156,17 @@ describe("tenant invitation creation", () => {
   });
 
   it("revokes only pending invitations and writes audit in the same transaction", async () => {
-    const { tx, calls } = fakeTransaction();
+    const calls: Array<{ sql: string; values: readonly unknown[] }> = [];
     const revocationTx: TenantTransaction = {
       async query<Row = Record<string, unknown>>(sql: string, values: readonly unknown[] = []) {
         calls.push({ sql, values });
+        if (sql.includes("SELECT id FROM tenants")) return [{ id: "tenant-a" }] as unknown as readonly Row[];
+        if (sql.includes("generation, role, status, version")) {
+          return [{
+            membership_id: "00000000-0000-4000-8000-000000000001",
+            generation: 1, role: "owner", status: "active", version: "1"
+          }] as unknown as readonly Row[];
+        }
         if (sql.includes("SELECT action, outcome, invitation_id")) return [] as unknown as readonly Row[];
         if (sql.includes("SELECT invitation_id::text AS invitation_id, status")) {
           return [{
@@ -173,7 +180,6 @@ describe("tenant invitation creation", () => {
         return [] as unknown as readonly Row[];
       }
     };
-    void tx;
     await expect(revokeTenantInvitation(
       revocationTx,
       principal,
