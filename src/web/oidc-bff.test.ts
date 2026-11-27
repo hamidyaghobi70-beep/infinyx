@@ -31,6 +31,9 @@ async function openServer(handlers: ReturnType<typeof createOidcBffHandlers>) {
     ...handlers,
     startReauth: (_request, response) => { response.statusCode = 404; response.end(); },
     handleReauthCallback: (_request, response) => { response.statusCode = 404; response.end(); },
+    startUnlinkReauth: (_request, response) => { response.statusCode = 404; response.end(); },
+    handleUnlinkReauthCallback: (_request, response) => { response.statusCode = 404; response.end(); },
+    unlinkIdentity: (_request, response) => { response.statusCode = 404; response.end(); },
     startLink: (_request, response) => { response.statusCode = 404; response.end(); },
     handleLinkCallback: (_request, response) => { response.statusCode = 404; response.end(); }
   });
