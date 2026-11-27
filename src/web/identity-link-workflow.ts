@@ -184,7 +184,7 @@ export async function completeIdentitySessionRevocation(
 export async function retryPendingIdentitySessionRevocations(
   pool: Pool,
   sessions: PostgresWebSessionStore
-): Promise<void> {
+): Promise<number> {
   const pending = await pool.query<{ outbox_id: string; user_id: string }>(
     `SELECT outbox_id::text AS outbox_id, user_id::text AS user_id
        FROM identity_session_revocation_outbox
@@ -192,7 +192,11 @@ export async function retryPendingIdentitySessionRevocations(
       ORDER BY requested_at
       LIMIT 100`
   );
+  let failures = 0;
   for (const item of pending.rows) {
-    await completeIdentitySessionRevocation(pool, sessions, item.user_id, item.outbox_id);
+    if (!await completeIdentitySessionRevocation(pool, sessions, item.user_id, item.outbox_id)) {
+      failures += 1;
+    }
   }
+  return failures;
 }
