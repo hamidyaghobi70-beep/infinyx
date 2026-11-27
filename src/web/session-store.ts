@@ -121,7 +121,6 @@ export class PostgresWebSessionStore {
            FROM web_sessions
           WHERE session_id_hash = $1
             AND revoked_at IS NULL
-            AND refresh_attempt_id IS NULL
             AND idle_expires_at > $2
             AND absolute_expires_at > $2
             AND EXISTS (
