@@ -222,12 +222,12 @@ function validSubject(value: unknown): value is string {
   return typeof value === "string" &&
     value.trim().length > 0 &&
     value.length <= 512 &&
-    !/[\\u0000-\\u001f\\u007f-\\u009f]/u.test(value);
+    !/[\u0000-\u001f\u007f-\u009f]/u.test(value);
 }
 
 function validModuleId(value: unknown): value is string {
   return typeof value === "string" &&
     value.trim().length > 0 &&
     value.length <= 128 &&
-    !/[\\u0000-\\u001f\\u007f-\\u009f]/u.test(value);
+    !/[\u0000-\u001f\u007f-\u009f]/u.test(value);
 }
