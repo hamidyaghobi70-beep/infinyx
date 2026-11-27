@@ -79,7 +79,8 @@ export async function createWebBffApplication(
       pool,
       runtime.sessionEncryptionKey
     );
-    const recoveryTransactions = new PostgresAccountRecoveryTransactionStore(pool, runtime.sessionEncryptionKey);\n    const securityTransactions = new PostgresIdentitySecurityTransactionStore(
+    const recoveryTransactions = new PostgresAccountRecoveryTransactionStore(pool, runtime.sessionEncryptionKey);
+    const securityTransactions = new PostgresIdentitySecurityTransactionStore(
       pool,
       runtime.sessionEncryptionKey
     );
