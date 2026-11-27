@@ -120,6 +120,111 @@ jobs:
       - name: Grant read-only application access to lifecycle state and events
         run: |
           psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -c "GRANT SELECT ON user_external_identity_lifecycle, user_external_identity_lifecycle_events TO infinyx_app" -c "GRANT UPDATE (status, version, updated_at, status_changed_by, status_change_reason, status_change_correlation_id) ON user_external_identity_lifecycle TO infinyx_app"
+      - name: Grant least-privilege account security access
+        run: |
+          psql "$DATABASE_URL" -v ON_ERROR_STOP=1 <<'SQL'
+          GRANT SELECT ON user_account_security, user_account_security_events TO infinyx_app;
+          GRANT UPDATE (status, version, updated_at, status_changed_by, status_change_reason, status_change_correlation_id) ON user_account_security TO infinyx_app;
+          SQL
+      - name: Verify account security backfill, transitions, and append-only history
+        run: |
+          psql "$INFINYX_TEST_DATABASE_URL" -v ON_ERROR_STOP=1 <<'SQL'
+          DO $block$
+          DECLARE
+            legacy_users bigint;
+            legacy_states bigint;
+            legacy_events bigint;
+            test_user uuid := '10000000-0000-4000-8000-000000000099';
+            current_status text;
+            current_version integer;
+            rejected boolean;
+          BEGIN
+            SELECT count(*) INTO legacy_users FROM users
+             WHERE id IN (
+               '10000000-0000-4000-8000-000000000001',
+               '10000000-0000-4000-8000-000000000002'
+             );
+            SELECT count(*) INTO legacy_states FROM user_account_security
+             WHERE user_id IN (
+               '10000000-0000-4000-8000-000000000001',
+               '10000000-0000-4000-8000-000000000002'
+             ) AND status = 'active' AND version = 1;
+            SELECT count(*) INTO legacy_events FROM user_account_security_events
+             WHERE user_id IN (
+               '10000000-0000-4000-8000-000000000001',
+               '10000000-0000-4000-8000-000000000002'
+             ) AND reason_code = 'legacy_backfill'
+               AND from_status IS NULL AND to_status = 'active';
+            IF legacy_users <> 2 OR legacy_states <> 2 OR legacy_events <> 2 THEN
+              RAISE EXCEPTION 'Existing user account security backfill verification failed';
+            END IF;
+
+            INSERT INTO users (id) VALUES (test_user);
+            SELECT status, version INTO current_status, current_version
+              FROM user_account_security WHERE user_id = test_user;
+            IF current_status <> 'active' OR current_version <> 1 THEN
+              RAISE EXCEPTION 'New user account security initialization failed';
+            END IF;
+
+            UPDATE user_account_security
+               SET status = 'suspended', version = version + 1,
+                   updated_at = clock_timestamp(),
+                   status_changed_by = '10000000-0000-4000-8000-000000000001',
+                   status_change_reason = 'ci_suspend',
+                   status_change_correlation_id = gen_random_uuid()
+             WHERE user_id = test_user;
+            UPDATE user_account_security
+               SET status = 'active', version = version + 1,
+                   updated_at = clock_timestamp(),
+                   status_changed_by = '10000000-0000-4000-8000-000000000001',
+                   status_change_reason = 'ci_reactivate',
+                   status_change_correlation_id = gen_random_uuid()
+             WHERE user_id = test_user;
+            UPDATE user_account_security
+               SET status = 'disabled', version = version + 1,
+                   updated_at = clock_timestamp(),
+                   status_changed_by = '10000000-0000-4000-8000-000000000001',
+                   status_change_reason = 'ci_disable',
+                   status_change_correlation_id = gen_random_uuid()
+             WHERE user_id = test_user;
+
+            rejected := false;
+            BEGIN
+              UPDATE user_account_security
+                 SET status = 'active', version = version + 1,
+                     updated_at = clock_timestamp(),
+                     status_changed_by = '10000000-0000-4000-8000-000000000001',
+                     status_change_reason = 'ci_invalid',
+                     status_change_correlation_id = gen_random_uuid()
+               WHERE user_id = test_user;
+            EXCEPTION WHEN raise_exception THEN
+              rejected := true;
+            END;
+            IF NOT rejected THEN
+              RAISE EXCEPTION 'Disabled account was incorrectly reactivated';
+            END IF;
+
+            rejected := false;
+            BEGIN
+              UPDATE user_account_security_events
+                 SET reason_code = 'tampered'
+               WHERE user_id = test_user;
+            EXCEPTION WHEN raise_exception THEN
+              rejected := true;
+            END;
+            IF NOT rejected THEN
+              RAISE EXCEPTION 'Account security event history was mutable';
+            END IF;
+
+            SELECT count(*) INTO legacy_events
+              FROM user_account_security_events
+             WHERE user_id = test_user;
+            IF legacy_events <> 4 THEN
+              RAISE EXCEPTION 'Account security transition audit count mismatch';
+            END IF;
+          END;
+          $block$;
+          SQL
       - name: Grant least-privilege access to identity security transaction stores
         run: |
           psql "$DATABASE_URL" -v ON_ERROR_STOP=1 <<'SQL'
