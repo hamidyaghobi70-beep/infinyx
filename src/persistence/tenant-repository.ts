@@ -1,4 +1,4 @@
-import type { AuthenticatedPrincipal } from "../core/authenticated-principal.js";
+import type { TenantPrincipal } from "./tenant-transaction.js";
 import {
   requireTenantRole,
   TENANT_ROLES,
@@ -18,7 +18,7 @@ export interface TenantRecord {
  */
 export async function getCurrentTenant(
   transaction: TenantTransaction,
-  principal: AuthenticatedPrincipal
+  principal: TenantPrincipal
 ): Promise<{ tenant: TenantRecord; membership: TenantMembership } | null> {
   const membership = await requireTenantRole(
     transaction,
