@@ -185,8 +185,8 @@ All authorization and mutation must remain inside one `TenantTransaction`. Do no
 The following persistence baseline has been committed on the feature branch:
 
 1. **Schema expansion/backfill:** migration 002 adds membership identity, generation, lifecycle status, status metadata, and version. Existing memberships default to generation 1 and active.
-2. **Audit foundation:** tenant-scoped RLS-protected audit events are added. The CI application role receives SELECT/INSERT only; it receives no UPDATE/DELETE privilege on audit rows.
-3. **Repository enforcement:** membership reads require active status. The lifecycle repository locks the tenant row, locks current actor/target generations, enforces the approved transition and owner safeguards, and writes audit events atomically.
+2. **Audit foundation:** tenant-scoped RLS-protected audit events are added. The CI application role receives SELECT/INSERT only; it receives no UPDATE/DELETE privilege on audit rows. Membership rows cannot be deleted by the CI application role, and its update grant is restricted to lifecycle metadata columns.
+3. **Repository enforcement:** membership reads require active status. The lifecycle repository locks the tenant row, locks current actor/target generations, enforces the approved transition and owner safeguards, and writes audit events atomically. PostgreSQL triggers independently reject self/owner status changes, immutable identity/role changes, invalid transitions, and lifecycle updates without a matching success audit event.
 4. **Idempotency:** tenant-scoped correlation IDs prevent duplicate processing; reuse for a different actor/target/action is rejected.
 5. **Integration verification:** PostgreSQL 16 tests cover transitions, revocation, reactivation, removal history, new generations, owner-target denial, audit isolation, and append-only application grants. CI result must be checked before declaring this baseline verified.
 
