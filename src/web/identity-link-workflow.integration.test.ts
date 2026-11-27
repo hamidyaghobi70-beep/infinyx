@@ -37,13 +37,14 @@ integrationDescribe("PostgreSQL immutable external identity link workflow", () =
   it("adds a new binding without changing any existing identity or lifecycle history", async () => {
     const actor = randomUUID();
     const owner = randomUUID();
+    const stranger = randomUUID();
     const issuer = `https://identity-${randomUUID()}.example.test`;
     const existingIssuer = `https://legacy-${randomUUID()}.example.test`;
     const existingSubject = `legacy-${randomUUID()}`;
     const newSubject = `new-${randomUUID()}`;
     const correlationId = randomUUID();
 
-    await adminPool.query("INSERT INTO users (id) VALUES ($1::uuid), ($2::uuid)", [actor, owner]);
+    await adminPool.query("INSERT INTO users (id) VALUES ($1::uuid), ($2::uuid), ($3::uuid)", [actor, owner, stranger]);
     const oldIdentity = await adminPool.query<{ identity_id: string }>(
       `INSERT INTO user_external_identities (user_id, issuer, subject)
        VALUES ($1::uuid, $2, $3) RETURNING identity_id::text AS identity_id`,
@@ -81,7 +82,7 @@ integrationDescribe("PostgreSQL immutable external identity link workflow", () =
       const again = await registerVerifiedIdentityLink(pool, actor, issuer, newSubject, randomUUID());
       expect(again.outcome).toBe("already_linked");
 
-      const conflict = await registerVerifiedIdentityLink(pool, randomUUID(), existingIssuer, existingSubject, randomUUID());
+      const conflict = await registerVerifiedIdentityLink(pool, stranger, existingIssuer, existingSubject, randomUUID());
       expect(conflict.outcome).toBe("denied");
 
       const oldIdentityAfter = await adminPool.query(
