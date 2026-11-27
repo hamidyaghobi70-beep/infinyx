@@ -12,6 +12,7 @@ exports.up = (pgm) => {
       ADD COLUMN status varchar(16) NOT NULL DEFAULT 'active',
       ADD COLUMN status_changed_at timestamptz NOT NULL DEFAULT now(),
       ADD COLUMN status_changed_by text,
+      ADD COLUMN status_change_correlation_id uuid,
       ADD COLUMN version bigint NOT NULL DEFAULT 1;
 
     ALTER TABLE tenant_memberships
@@ -98,12 +99,14 @@ exports.up = (pgm) => {
         ) THEN
           RAISE EXCEPTION 'Invalid membership lifecycle transition';
         END IF;
-        IF NEW.version <> OLD.version + 1 OR NEW.status_changed_by IS NULL THEN
+        IF NEW.version <> OLD.version + 1 OR NEW.status_changed_by IS NULL
+           OR NEW.status_change_correlation_id IS NULL THEN
           RAISE EXCEPTION 'Membership lifecycle metadata is invalid';
         END IF;
       ELSIF NEW.version <> OLD.version
          OR NEW.status_changed_at IS DISTINCT FROM OLD.status_changed_at
-         OR NEW.status_changed_by IS DISTINCT FROM OLD.status_changed_by THEN
+         OR NEW.status_changed_by IS DISTINCT FROM OLD.status_changed_by
+         OR NEW.status_change_correlation_id IS DISTINCT FROM OLD.status_change_correlation_id THEN
         RAISE EXCEPTION 'Lifecycle metadata may change only with a status transition';
       END IF;
 
@@ -128,6 +131,7 @@ exports.up = (pgm) => {
            AND audit.actor_user_id = NEW.status_changed_by
            AND audit.previous_status = OLD.status
            AND audit.requested_status = NEW.status
+           AND audit.correlation_id = NEW.status_change_correlation_id
            AND audit.outcome = 'succeeded'
       ) THEN
         RAISE EXCEPTION 'Membership lifecycle transition requires an audit event';
@@ -157,6 +161,7 @@ exports.down = (pgm) => {
       IF EXISTS (
         SELECT 1 FROM tenant_memberships
         WHERE status <> 'active' OR generation <> 1 OR version <> 1
+           OR status_change_correlation_id IS NOT NULL
       ) THEN
         RAISE EXCEPTION 'Cannot reverse membership lifecycle migration after lifecycle data has changed';
       END IF;
@@ -187,6 +192,7 @@ exports.down = (pgm) => {
       DROP COLUMN status,
       DROP COLUMN status_changed_at,
       DROP COLUMN status_changed_by,
+      DROP COLUMN status_change_correlation_id,
       DROP COLUMN version;
 
     ALTER TABLE tenant_memberships
