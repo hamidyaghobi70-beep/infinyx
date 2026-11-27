@@ -145,9 +145,7 @@ integrationDescribe("PostgreSQL identity security transaction persistence", () =
         "DELETE FROM identity_security_transactions WHERE user_id IN ($1::uuid, $2::uuid)",
         [userId, otherUserId]
       );
-      await adminPool.query("DELETE FROM users WHERE id IN ($1::uuid, $2::uuid)", [
-        userId, otherUserId
-      ]);
+      // Account security state and audit history are intentionally retained.
     }
   });
 
@@ -202,7 +200,7 @@ integrationDescribe("PostgreSQL identity security transaction persistence", () =
       await adminPool.query(
         "DELETE FROM identity_security_transactions WHERE user_id = $1::uuid", [userId]
       );
-      await adminPool.query("DELETE FROM users WHERE id = $1::uuid", [userId]);
+      // Account security state and audit history are intentionally retained.
     }
   });
 
@@ -234,7 +232,7 @@ integrationDescribe("PostgreSQL identity security transaction persistence", () =
         [Buffer.alloc(32, 1), userId, Buffer.alloc(32), Buffer.alloc(32), Buffer.alloc(64)]
       )).rejects.toThrow();
     } finally {
-      await adminPool.query("DELETE FROM users WHERE id = $1::uuid", [userId]);
+      // Account security state and audit history are intentionally retained.
     }
   });
   it("atomically consumes a step-up grant while creating one purpose-bound link transaction", async () => {
@@ -293,7 +291,7 @@ integrationDescribe("PostgreSQL identity security transaction persistence", () =
     } finally {
       await adminPool.query("DELETE FROM identity_step_up_grants WHERE user_id = $1::uuid", [userId]);
       await adminPool.query("DELETE FROM identity_security_transactions WHERE user_id = $1::uuid", [userId]);
-      await adminPool.query("DELETE FROM users WHERE id = $1::uuid", [userId]);
+      // Account security state and audit history are intentionally retained.
     }
   });
 
