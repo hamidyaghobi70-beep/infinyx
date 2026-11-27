@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { createPostgresPool } from "../persistence/postgres-pool.js";
-import { createCsrfToken, createOpaqueSessionId, hashOpaqueSecret } from "./session-crypto.js";
+import { createCsrfToken, createOpaqueSessionId, decryptSessionTokenBundle, hashOpaqueSecret } from "./session-crypto.js";
 import { PostgresWebSessionStore, WebSessionStoreError } from "./session-store.js";
 
 const databaseUrl = process.env.INFINYX_TEST_DATABASE_URL;
@@ -31,6 +31,78 @@ integrationDescribe("PostgreSQL durable web-session refresh reservation", () => 
     if (appPool && !appPoolEnded) await appPool.end();
     if (recoveryPool) await recoveryPool.end();
     if (adminPool) await adminPool.end();
+  });
+
+  it("persists one rotated token bundle and clears the reservation after successful refresh", async () => {
+    const userId = randomUUID();
+    const issuer = `https://refresh-success-${randomUUID()}.example.test`;
+    const subject = `subject-${randomUUID()}`;
+    const sessionId = createOpaqueSessionId();
+    const csrfToken = createCsrfToken();
+    const now = new Date();
+    let signalRefreshStarted!: () => void;
+    let finishRefresh!: () => void;
+    const refreshStarted = new Promise<void>(resolve => { signalRefreshStarted = resolve; });
+    const refreshGate = new Promise<void>(resolve => { finishRefresh = resolve; });
+    let providerCalls = 0;
+
+    try {
+      await adminPool.query("INSERT INTO users (id) VALUES ($1::uuid)", [userId]);
+      await adminPool.query(
+        "INSERT INTO user_external_identities (user_id, issuer, subject) VALUES ($1::uuid, $2, $3)",
+        [userId, issuer, subject]
+      );
+      await new PostgresWebSessionStore(adminPool, encryptionKey).create({
+        sessionId, csrfToken, userId, issuer, subject,
+        tokenBundle: {
+          accessToken: "expired-access-token",
+          refreshToken: "single-use-refresh-token",
+          accessTokenExpiresAt: now.getTime() - 1
+        },
+        idleExpiresAt: new Date(now.getTime() + 1_800_000),
+        absoluteExpiresAt: new Date(now.getTime() + 28_800_000)
+      });
+
+      const store = new PostgresWebSessionStore(appPool, encryptionKey);
+      const first = store.getUsableAccessToken(sessionId, async token => {
+        providerCalls += 1;
+        expect(token).toBe("single-use-refresh-token");
+        signalRefreshStarted();
+        await refreshGate;
+        return {
+          accessToken: "rotated-access-token",
+          refreshToken: "rotated-refresh-token",
+          accessTokenExpiresAt: Date.now() + 300_000
+        };
+      });
+      await refreshStarted;
+
+      const second = await store.getUsableAccessToken(sessionId, async () => {
+        providerCalls += 1;
+        return { accessToken: "unexpected", accessTokenExpiresAt: Date.now() + 300_000 };
+      });
+      expect(second).toBeNull();
+      expect(providerCalls).toBe(1);
+
+      finishRefresh();
+      await expect(first).resolves.toBe("rotated-access-token");
+
+      const persisted = await adminPool.query<{ encrypted_token_bundle: Buffer; refresh_attempt_id: string | null }>(
+        "SELECT encrypted_token_bundle, refresh_attempt_id FROM web_sessions WHERE session_id_hash = $1",
+        [hashOpaqueSecret(sessionId)]
+      );
+      expect(persisted.rows).toHaveLength(1);
+      expect(persisted.rows[0]?.refresh_attempt_id).toBeNull();
+      expect(decryptSessionTokenBundle(persisted.rows[0]!.encrypted_token_bundle, encryptionKey))
+        .toMatchObject({
+          accessToken: "rotated-access-token",
+          refreshToken: "rotated-refresh-token",
+          csrfToken
+        });
+    } finally {
+      finishRefresh?.();
+      await adminPool.query("DELETE FROM web_sessions WHERE user_id = $1::uuid", [userId]);
+    }
   });
 
   it("keeps a durable reservation when the app pool disconnects mid-refresh", async () => {
