@@ -80,14 +80,13 @@ jobs:
       - name: Create least-privilege application role
         run: |
           psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -c "CREATE ROLE infinyx_app LOGIN PASSWORD 'ci-only-password' NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT NOBYPASSRLS"
-      - name: Apply database migrations
-        run: npm run db:migrate:up
-      - name: Grant application table privileges and seed isolated tenants
+      - name: Apply base database migrations before identity lifecycle
+        run: npx node-pg-migrate up 7 --migrations-dir migrations
+      - name: Grant application privileges and seed pre-existing identities
         run: |
           psql "$DATABASE_URL" -v ON_ERROR_STOP=1 <<'SQL'
           GRANT USAGE ON SCHEMA public TO infinyx_app;
           GRANT SELECT, INSERT ON users, user_external_identities TO infinyx_app;
-          GRANT SELECT ON user_external_identity_lifecycle, user_external_identity_lifecycle_events TO infinyx_app;
           GRANT SELECT, INSERT, UPDATE, DELETE ON web_sessions TO infinyx_app;
           GRANT SELECT, INSERT, UPDATE, DELETE ON web_login_transactions TO infinyx_app;
           GRANT SELECT, INSERT ON tenants, tenant_memberships TO infinyx_app;
@@ -115,6 +114,46 @@ jobs:
             ('tenant-a', '10000000-0000-4000-8000-000000000001', '10000000-0000-4000-8000-000000000001', 'owner'),
             ('tenant-b', '10000000-0000-4000-8000-000000000002', '10000000-0000-4000-8000-000000000002', 'owner'),
             ('tenant-c', '10000000-0000-4000-8000-000000000001', '10000000-0000-4000-8000-000000000001', 'manager');
+          SQL
+      - name: Apply external identity lifecycle migration and legacy backfill
+        run: npm run db:migrate:up
+      - name: Grant read-only application access to lifecycle state and events
+        run: |
+          psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -c "GRANT SELECT ON user_external_identity_lifecycle, user_external_identity_lifecycle_events TO infinyx_app"
+      - name: Verify legacy identity backfill preserved existing bindings
+        run: |
+          psql "$INFINYX_TEST_DATABASE_URL" -v ON_ERROR_STOP=1 <<'SQL'
+          DO $block$
+          DECLARE
+            identity_count integer;
+            active_count integer;
+            backfill_event_count integer;
+          BEGIN
+            SELECT count(*) INTO identity_count
+              FROM user_external_identities
+             WHERE issuer = 'https://infinyx.integration.test'
+               AND subject IN ('user-tenant-a', 'user-tenant-b');
+            SELECT count(*) INTO active_count
+              FROM user_external_identities AS identity
+              INNER JOIN user_external_identity_lifecycle AS lifecycle
+                ON lifecycle.identity_id = identity.identity_id
+             WHERE identity.issuer = 'https://infinyx.integration.test'
+               AND identity.subject IN ('user-tenant-a', 'user-tenant-b')
+               AND lifecycle.status = 'active';
+            SELECT count(*) INTO backfill_event_count
+              FROM user_external_identities AS identity
+              INNER JOIN user_external_identity_lifecycle_events AS event
+                ON event.identity_id = identity.identity_id
+             WHERE identity.issuer = 'https://infinyx.integration.test'
+               AND identity.subject IN ('user-tenant-a', 'user-tenant-b')
+               AND event.reason_code = 'legacy_backfill'
+               AND event.from_status IS NULL
+               AND event.to_status = 'active';
+            IF identity_count <> 2 OR active_count <> 2 OR backfill_event_count <> 2 THEN
+              RAISE EXCEPTION 'Legacy identity lifecycle backfill verification failed';
+            END IF;
+          END;
+          $block$;
           SQL
       - name: Check migration file syntax
         run: npm run db:migrate:check
