@@ -131,7 +131,7 @@ integrationDescribe("PostgreSQL external identity unlink workflow", () => {
 
   it("rejects unlinking the final active sign-in identity", async () => {
     const { userId, identities } = await createUserWithIdentities(1);
-    const sessionId = `session-${randomUUID()}`;
+    const sessionId = createOpaqueSessionId();
     const grant = await createUnlinkGrant(userId, sessionId);
     const result = await unlinkVerifiedIdentity(pool, userId, sessionId, grant, identities[0]!, randomUUID());
     expect(result).toEqual({ outcome: "denied" });
@@ -144,7 +144,7 @@ integrationDescribe("PostgreSQL external identity unlink workflow", () => {
 
   it("serializes concurrent unlink attempts so one active sign-in method always remains", async () => {
     const { userId, identities } = await createUserWithIdentities(2);
-    const sessionId = `session-${randomUUID()}`;
+    const sessionId = createOpaqueSessionId();
     const [grantA, grantB] = await Promise.all([
       createUnlinkGrant(userId, sessionId), createUnlinkGrant(userId, sessionId)
     ]);
@@ -166,7 +166,7 @@ integrationDescribe("PostgreSQL external identity unlink workflow", () => {
 
   it("rejects wrong-purpose, replayed, expired, or another-session step-up grants", async () => {
     const { userId, identities } = await createUserWithIdentities(2);
-    const sessionId = `session-${randomUUID()}`;
+    const sessionId = createOpaqueSessionId();
     const grant = await createUnlinkGrant(userId, sessionId);
     const wrongSession = await unlinkVerifiedIdentity(
       pool, userId, createOpaqueSessionId(), grant, identities[0]!, randomUUID()
@@ -180,7 +180,7 @@ integrationDescribe("PostgreSQL external identity unlink workflow", () => {
 
   it("rolls back lifecycle transition and grant consumption if the required audit write fails", async () => {
     const { userId, identities } = await createUserWithIdentities(2);
-    const sessionId = `session-${randomUUID()}`;
+    const sessionId = createOpaqueSessionId();
     const grant = await createUnlinkGrant(userId, sessionId);
     const correlationId = randomUUID();
     await adminPool.query(
@@ -206,7 +206,7 @@ integrationDescribe("PostgreSQL external identity unlink workflow", () => {
 
   it("keeps failed session revocation pending and only completes after confirmed revocation", async () => {
     const { userId, identities } = await createUserWithIdentities(2);
-    const sessionId = `session-${randomUUID()}`;
+    const sessionId = createOpaqueSessionId();
     const grant = await createUnlinkGrant(userId, sessionId);
     const result = await unlinkVerifiedIdentity(pool, userId, sessionId, grant, identities[0]!, randomUUID());
     expect(result.outcome).toBe("unlinked");
