@@ -23,6 +23,11 @@ jobs:
           node-version: "22"
       - name: Install dependencies
         run: npm install
+      - name: Emit generated lockfile for repository capture
+        run: |
+          echo "INFINYX_LOCKFILE_BEGIN"
+          cat package-lock.json
+          echo "INFINYX_LOCKFILE_END"
       - name: Export generated lockfile
         uses: actions/upload-artifact@v4
         with:
