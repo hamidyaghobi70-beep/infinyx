@@ -46,3 +46,44 @@ export function readSessionCookie(header: string | undefined): string | null {
   }
   return null;
 }
+
+export const LOGIN_TRANSACTION_COOKIE_NAME = "__Host-infinyx_oidc_tx";
+
+export function createLoginTransactionCookie(binding: string): string {
+  if (!/^[A-Za-z0-9_-]{43}$/u.test(binding)) {
+    throw new TypeError("Invalid login transaction binding.");
+  }
+  return [
+    `${LOGIN_TRANSACTION_COOKIE_NAME}=${binding}`,
+    "Path=/",
+    "Secure",
+    "HttpOnly",
+    "SameSite=Lax",
+    "Max-Age=600"
+  ].join("; ");
+}
+
+export function createExpiredLoginTransactionCookie(): string {
+  return [
+    `${LOGIN_TRANSACTION_COOKIE_NAME}=`,
+    "Path=/",
+    "Secure",
+    "HttpOnly",
+    "SameSite=Lax",
+    "Max-Age=0"
+  ].join("; ");
+}
+
+export function readLoginTransactionCookie(header: string | undefined): string | null {
+  if (typeof header !== "string" || Buffer.byteLength(header, "utf8") > MAX_COOKIE_HEADER_BYTES) {
+    return null;
+  }
+  for (const part of header.split(";")) {
+    const separator = part.indexOf("=");
+    if (separator < 0) continue;
+    if (part.slice(0, separator).trim() !== LOGIN_TRANSACTION_COOKIE_NAME) continue;
+    const value = part.slice(separator + 1).trim();
+    return /^[A-Za-z0-9_-]{43}$/u.test(value) ? value : null;
+  }
+  return null;
+}

@@ -32,6 +32,7 @@ export interface StoredWebSession {
   readonly issuer: string;
   readonly subject: string;
   readonly csrfTokenHash: Buffer;
+  readonly csrfToken: string;
   readonly tokenBundle: SessionTokenBundle;
   readonly idleExpiresAt: Date;
   readonly absoluteExpiresAt: Date;
@@ -72,7 +73,7 @@ export class PostgresWebSessionStore {
           input.issuer,
           input.subject,
           hashCsrfToken(input.csrfToken),
-          encryptSessionTokenBundle(input.tokenBundle, this.encryptionKey),
+          encryptSessionTokenBundle({ ...input.tokenBundle, csrfToken: input.csrfToken }, this.encryptionKey),
           input.idleExpiresAt,
           input.absoluteExpiresAt
         ]
@@ -100,12 +101,15 @@ export class PostgresWebSessionStore {
       );
       const row = result.rows[0];
       if (!row) return null;
+      const tokenBundle = decryptSessionTokenBundle(row.encrypted_token_bundle, this.encryptionKey);
+      if (!tokenBundle.csrfToken) throw new WebSessionStoreError();
       return Object.freeze({
         userId: row.user_id,
         issuer: row.issuer,
         subject: row.subject,
         csrfTokenHash: row.csrf_token_hash,
-        tokenBundle: decryptSessionTokenBundle(row.encrypted_token_bundle, this.encryptionKey),
+        csrfToken: tokenBundle.csrfToken,
+        tokenBundle,
         idleExpiresAt: toDate(row.idle_expires_at),
         absoluteExpiresAt: toDate(row.absolute_expires_at)
       });
