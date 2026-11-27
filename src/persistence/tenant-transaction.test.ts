@@ -10,7 +10,8 @@ import {
   withTenantTransaction,
   type SqlQueryResult,
   type TenantSqlClient,
-  type TenantSqlPool
+  type TenantSqlPool,
+  type TenantTransaction
 } from "./tenant-transaction.js";
 
 const { privateKey, publicKey } = generateKeyPairSync("rsa", {
@@ -94,7 +95,7 @@ describe("withTenantTransaction", () => {
 
   it("rejects use of a captured transaction after it has completed", async () => {
     const db = fakeDatabase();
-    let captured: Parameters<Parameters<typeof withTenantTransaction>[2]>[0] | undefined;
+    let captured: TenantTransaction | undefined;
     await withTenantTransaction(db.pool, principal, async (tx) => {
       captured = tx;
       return "complete";
