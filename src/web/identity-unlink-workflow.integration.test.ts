@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { createPostgresPool } from "../persistence/postgres-pool.js";
-import { hashOpaqueSecret } from "./session-crypto.js";
+import { createOpaqueSessionId, hashOpaqueSecret } from "./session-crypto.js";
 import { unlinkVerifiedIdentity } from "./identity-unlink-workflow.js";
 import {
   completeIdentitySessionRevocation
@@ -50,7 +50,7 @@ integrationDescribe("PostgreSQL external identity unlink workflow", () => {
   }
 
   async function createUnlinkGrant(userId: string, sessionId: string) {
-    const grant = `grant-${randomUUID()}-secure`;
+    const grant = createOpaqueSessionId();
     const transactionId = randomUUID();
     const now = new Date();
     const sessionHash = hashOpaqueSecret(sessionId);
@@ -76,7 +76,7 @@ integrationDescribe("PostgreSQL external identity unlink workflow", () => {
 
   it("revokes only the selected lifecycle state and preserves the immutable identity binding and prior history", async () => {
     const { userId, identities } = await createUserWithIdentities(2);
-    const sessionId = `session-${randomUUID()}`;
+    const sessionId = createOpaqueSessionId();
     const grant = await createUnlinkGrant(userId, sessionId);
     const targetId = identities[0]!;
     const before = await adminPool.query(
@@ -169,7 +169,7 @@ integrationDescribe("PostgreSQL external identity unlink workflow", () => {
     const sessionId = `session-${randomUUID()}`;
     const grant = await createUnlinkGrant(userId, sessionId);
     const wrongSession = await unlinkVerifiedIdentity(
-      pool, userId, `other-${sessionId}`, grant, identities[0]!, randomUUID()
+      pool, userId, createOpaqueSessionId(), grant, identities[0]!, randomUUID()
     );
     expect(wrongSession).toEqual({ outcome: "step_up_required" });
     const valid = await unlinkVerifiedIdentity(pool, userId, sessionId, grant, identities[0]!, randomUUID());
