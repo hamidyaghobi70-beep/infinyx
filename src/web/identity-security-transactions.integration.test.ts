@@ -237,4 +237,64 @@ integrationDescribe("PostgreSQL identity security transaction persistence", () =
       await adminPool.query("DELETE FROM users WHERE id = $1::uuid", [userId]);
     }
   });
+  it("atomically consumes a step-up grant while creating one purpose-bound link transaction", async () => {
+    const userId = randomUUID();
+    const sessionId = createOpaqueSessionId();
+    const payload = {
+      codeVerifier: createOpaqueSessionId(),
+      nonce: createOpaqueSessionId()
+    };
+    const store = new PostgresIdentitySecurityTransactionStore(pool, key);
+    const reauthState = createOpaqueSessionId();
+    const reauthBinding = createOpaqueSessionId();
+    const reauth = await adminPool.query(
+      "INSERT INTO users (id) VALUES ($1::uuid)",
+      [userId]
+    );
+    expect(reauth.rowCount).toBe(1);
+    const linkState = createOpaqueSessionId();
+    const linkBinding = createOpaqueSessionId();
+
+    try {
+      await store.createTransaction(
+        reauthState, reauthBinding, userId, sessionId,
+        "reauth_identity_link", payload, new Date(Date.now() + 4 * 60 * 1000)
+      );
+      const consumed = await store.consumeTransaction(
+        reauthState, reauthBinding, userId, sessionId, "reauth_identity_link"
+      );
+      expect(consumed).toBeTruthy();
+      const grant = await store.issueVerifiedStepUpGrant(
+        consumed!.transactionId, userId, sessionId, "identity_link",
+        new Date(Date.now() + 4 * 60 * 1000)
+      );
+      expect(grant).toBeTruthy();
+
+      await store.createLinkTransactionFromStepUpGrant(
+        grant!, linkState, linkBinding, userId, sessionId,
+        payload, new Date(Date.now() + 4 * 60 * 1000)
+      );
+      await expect(store.createLinkTransactionFromStepUpGrant(
+        grant!, createOpaqueSessionId(), createOpaqueSessionId(), userId, sessionId,
+        payload, new Date(Date.now() + 4 * 60 * 1000)
+      )).rejects.toThrow();
+
+      const linkTransactions = await adminPool.query(
+        "SELECT purpose, user_id::text, session_id_hash, browser_binding_hash FROM identity_security_transactions WHERE user_id = $1::uuid AND purpose = 'identity_link'",
+        [userId]
+      );
+      expect(linkTransactions.rows).toHaveLength(1);
+      expect(linkTransactions.rows[0]?.purpose).toBe("identity_link");
+      const grantRows = await adminPool.query(
+        "SELECT consumed_at FROM identity_step_up_grants WHERE user_id = $1::uuid",
+        [userId]
+      );
+      expect(grantRows.rows[0]?.consumed_at).toBeTruthy();
+    } finally {
+      await adminPool.query("DELETE FROM identity_step_up_grants WHERE user_id = $1::uuid", [userId]);
+      await adminPool.query("DELETE FROM identity_security_transactions WHERE user_id = $1::uuid", [userId]);
+      await adminPool.query("DELETE FROM users WHERE id = $1::uuid", [userId]);
+    }
+  });
+
 });
