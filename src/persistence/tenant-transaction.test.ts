@@ -1,11 +1,9 @@
-import { generateKeyPairSync, sign } from "node:crypto";
 import { describe, expect, it, vi } from "vitest";
 import {
   AuthenticationError,
-  createAuthenticatedPrincipalResolver,
-  createJwtPrincipalVerifier,
   type AuthenticatedPrincipal
 } from "../core/authenticated-principal.js";
+import { createTestPrincipal } from "../core/testing/test-principal.js";
 import {
   TenantPersistenceError,
   createTenantMemoryScope,
@@ -16,33 +14,13 @@ import {
   type TenantTransaction
 } from "./tenant-transaction.js";
 
-const { privateKey, publicKey } = generateKeyPairSync("rsa", {
-  modulusLength: 2048,
-  publicKeyEncoding: { type: "spki", format: "pem" },
-  privateKeyEncoding: { type: "pkcs8", format: "pem" }
-});
-const now = 1_800_000_000;
-const verify = createJwtPrincipalVerifier({
+const principal = await createTestPrincipal({
   issuer: "https://identity.infinyx.test",
   audience: "infinyx-api",
-  publicKeyPem: publicKey,
-  now: () => now
+  subject: "user-a",
+  userId: "10000000-0000-4000-8000-000000000001",
+  tenantId: "tenant-a"
 });
-const encode = (value: unknown) => Buffer.from(JSON.stringify(value)).toString("base64url");
-const header = encode({ alg: "RS256", typ: "JWT" });
-const payload = encode({
-  iss: "https://identity.infinyx.test",
-  aud: "infinyx-api",
-  sub: "user-a",
-  tenant_id: "tenant-a",
-  exp: now + 300
-});
-const signingInput = header + "." + payload;
-const principal = createAuthenticatedPrincipalResolver(
-  () => "10000000-0000-4000-8000-000000000001"
-)(verify(
-  signingInput + "." + sign("RSA-SHA256", Buffer.from(signingInput), privateKey).toString("base64url")
-));
 
 function fakeDatabase() {
   const calls: Array<{ sql: string; values?: readonly unknown[] }> = [];
