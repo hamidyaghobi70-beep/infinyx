@@ -146,5 +146,6 @@ describe("PostgreSQL identity security transaction store", () => {
     expect(fake.query.mock.calls[0]?.[0]).toContain("DELETE FROM identity_step_up_grants");
     expect(fake.query.mock.calls[1]?.[0]).toContain("DELETE FROM identity_security_transactions");
     expect(fake.query.mock.calls[1]?.[0]).toContain("NOT EXISTS");
+    expect(fake.query.mock.calls[1]?.[0]).toContain("consumed_at IS NULL");
   });
 });
