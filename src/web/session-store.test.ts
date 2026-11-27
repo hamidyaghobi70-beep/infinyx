@@ -114,7 +114,8 @@ describe("serialized web-session access-token refresh", () => {
     const refresh = vi.fn(async () => { throw new Error("provider details must not escape"); });
     expect(await store.getUsableAccessToken(createOpaqueSessionId(), refresh)).toBeNull();
     expect(fake.calls.some(call => call.sql.includes("SET revoked_at"))).toBe(true);
-    expect(fake.calls.at(-1)?.sql).toBe("COMMIT");
+    expect(fake.calls.at(-1)?.sql).toContain("pg_advisory_unlock");
+    expect(fake.client.release).toHaveBeenCalledOnce();
   });
 
   it("fails closed for malformed session identifiers", async () => {
