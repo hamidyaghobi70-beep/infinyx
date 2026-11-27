@@ -1,10 +1,11 @@
 import type { Request, RequestHandler } from "express";
 import { AuthenticationError } from "./authentication-error.js";
-import type { VerifiedExternalIdentity } from "./oidc-jwks-verifier.js";
+import { isVerifiedExternalIdentity, type VerifiedExternalIdentity } from "./oidc-jwks-verifier.js";
 
 export { AuthenticationError } from "./authentication-error.js";
 export { createOidcJwksPrincipalVerifier } from "./oidc-jwks-verifier.js";
 export type { OidcJwksVerifierOptions } from "./oidc-jwks-verifier.js";
+export { isVerifiedExternalIdentity } from "./oidc-jwks-verifier.js";
 export type { VerifiedExternalIdentity } from "./oidc-jwks-verifier.js";
 
 export interface AuthenticatedPrincipal {
@@ -15,7 +16,6 @@ export interface AuthenticatedPrincipal {
   readonly expiresAt: number;
 }
 
-const verifiedExternalIdentities = new WeakSet<object>();
 const authenticatedPrincipals = new WeakSet<object>();
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu;
 
@@ -57,10 +57,6 @@ export function createAuthenticatedPrincipalResolver(
       throw new AuthenticationError();
     }
   };
-}
-
-export function isVerifiedExternalIdentity(value: unknown): value is VerifiedExternalIdentity {
-  return !!value && typeof value === "object" && verifiedExternalIdentities.has(value);
 }
 
 export function isAuthenticatedPrincipal(value: unknown): value is AuthenticatedPrincipal {
