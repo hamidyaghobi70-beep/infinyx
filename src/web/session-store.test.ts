@@ -228,22 +228,32 @@ describe("serialized web-session access-token refresh", () => {
     })).rejects.toThrow("Web session operation failed");
   });
 
-  it("releases every checked-out client when concurrent refresh attempts cannot acquire the lock", async () => {
-    const fake = fakePool(
-      sessionRow(now.getTime() - 1, "refresh-token"),
-      { lockResult: false }
-    );
-    const store = new PostgresWebSessionStore(fake.pool, key, () => now);
+  it("releases each distinct client when concurrent refresh attempts cannot acquire the lock", async () => {
+    const clients = Array.from({ length: 10 }, () => ({
+      query: vi.fn(async (sql: string) => {
+        if (sql.includes("pg_try_advisory_lock")) {
+          return { rows: [{ acquired: false }], rowCount: 1 };
+        }
+        return { rows: [], rowCount: 0 };
+      }),
+      release: vi.fn()
+    }));
+    let nextClient = 0;
+    const pool = {
+      connect: vi.fn(async () => clients[nextClient++]!)
+    } as unknown as Pool;
+    const store = new PostgresWebSessionStore(pool, key, () => now);
 
     const results = await Promise.all(
-      Array.from({ length: 10 }, () => store.getUsableAccessToken(createOpaqueSessionId(), vi.fn()))
+      Array.from({ length: clients.length }, () => store.getUsableAccessToken(createOpaqueSessionId(), vi.fn()))
     );
 
-    expect(results).toEqual(Array(10).fill(null));
-    expect(fake.connect).toHaveBeenCalledTimes(10);
-    expect(fake.client.release).toHaveBeenCalledTimes(10);
-    expect(fake.calls.filter(call => call.sql.includes("pg_try_advisory_lock"))).toHaveLength(10);
-    expect(fake.calls.some(call => call.sql.includes("pg_advisory_unlock"))).toBe(false);
+    expect(results).toEqual(Array(clients.length).fill(null));
+    expect(pool.connect).toHaveBeenCalledTimes(clients.length);
+    for (const client of clients) {
+      expect(client.query).toHaveBeenCalledOnce();
+      expect(client.release).toHaveBeenCalledOnce();
+    }
   });
 
   it("fails closed when another request already owns the refresh lock", async () => {
