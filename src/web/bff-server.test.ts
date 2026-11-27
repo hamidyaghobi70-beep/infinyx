@@ -17,6 +17,9 @@ async function request(
     logout: (_req, res) => { res.statusCode = 204; res.end(); },
     startReauth: (_req, res) => { res.statusCode = 204; res.end(); },
     handleReauthCallback: (_req, res) => { res.statusCode = 204; res.end(); },
+    startUnlinkReauth: (_req, res) => { res.statusCode = 204; res.end(); },
+    handleUnlinkReauthCallback: (_req, res) => { res.statusCode = 204; res.end(); },
+    unlinkIdentity: (_req, res) => { res.statusCode = 204; res.end(); },
     startLink: (_req, res) => { res.statusCode = 204; res.end(); },
     handleLinkCallback: (_req, res) => { res.statusCode = 204; res.end(); }
   };
@@ -61,6 +64,14 @@ describe("Node BFF HTTP transport", () => {
     const wrongMethod = await request("/auth/login", "POST");
     expect(wrongMethod.status).toBe(405);
     expect(wrongMethod.headers.get("allow")).toBe("GET");
+  });
+
+  it("routes identity unlink and restricts it to POST", async () => {
+    const response = await request("/account/identities/10000000-0000-4000-8000-000000000001/unlink", "POST");
+    expect(response.status).toBe(204);
+    const wrongMethod = await request("/account/identities/10000000-0000-4000-8000-000000000001/unlink", "GET");
+    expect(wrongMethod.status).toBe(405);
+    expect(wrongMethod.headers.get("allow")).toBe("POST");
   });
 
   it("rejects logout request bodies", async () => {

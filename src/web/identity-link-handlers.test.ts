@@ -116,6 +116,27 @@ describe("OIDC external identity link initiation", () => {
     });
   });
 
+  it("starts unlink reauthentication with its own purpose and callback", async () => {
+    const f = setup();
+    const base = await openServer(f.handlers);
+    const response = await fetch(`${base}/account/security/reauth-unlink`, {
+      method: "POST",
+      headers: {
+        cookie: `__Host-infinyx_session=${f.sessionId}`,
+        origin: publicOrigin,
+        "x-infinyx-csrf": f.csrfToken
+      },
+      redirect: "manual"
+    });
+    expect(response.status).toBe(302);
+    expect(f.securityTransactions.createTransaction).toHaveBeenCalledOnce();
+    expect(f.securityTransactions.createTransaction.mock.calls[0]?.[4]).toBe("reauth_identity_unlink");
+    expect(f.authorizationParams[0]).toMatchObject({
+      redirect_uri: `${publicOrigin}/auth/reauth-unlink/callback`,
+      prompt: "login", max_age: "0", code_challenge_method: "S256"
+    });
+  });
+
   it("consumes the step-up grant when starting the independently authenticated new identity flow", async () => {
     const f = setup();
     const base = await openServer(f.handlers);
