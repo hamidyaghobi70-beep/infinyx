@@ -352,6 +352,9 @@ export class PostgresWebSessionStore {
           if (unlocked.rows[0]?.unlocked !== true) destroyClient = true;
         } catch { destroyClient = true; }
       }
+      // node-postgres destroys a checked-out client when release(error) is used.
+      // Closing the physical connection makes PostgreSQL release any session lock
+      // whose explicit unlock could not be confirmed.
       client.release(destroyClient ? new Error("Discarding connection after advisory-lock cleanup failure.") : undefined);
     }
   }
