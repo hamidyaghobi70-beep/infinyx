@@ -18,18 +18,24 @@ describe("StderrSessionRefreshObserver", () => {
       event: "persistence_succeeded"
     });
     expect(Object.keys(record).sort()).toEqual(["component", "event", "timestamp"]);
-    expect(record.timestamp).toMatch(/^\d{4}-\d{2}-\d{2}T.*Z$/u);
+    expect(record.timestamp).toMatch(/^\\d{4}-\\d{2}-\\d{2}T.*Z$/u);
   });
 
-  it("does not add caller-controlled values to the record", () => {
+  it("keeps the serialized record restricted to the fixed, non-sensitive schema", () => {
     const lines: string[] = [];
     const observer = new StderrSessionRefreshObserver(line => lines.push(line));
 
     observer.onEvent("provider_failed");
 
     expect(lines).toHaveLength(1);
-    expect(lines[0]).not.toContain("session");
-    expect(lines[0]).not.toContain("token");
-    expect(lines[0]).not.toContain("provider response");
+    const record = JSON.parse(lines[0]!.trim()) as Record<string, unknown>;
+
+    // The component name intentionally contains the word "session"; test the
+    // actual schema and values rather than banning that harmless substring.
+    expect(Object.keys(record).sort()).toEqual(["component", "event", "timestamp"]);
+    expect(record.component).toBe("web_session_refresh");
+    expect(record.event).toBe("provider_failed");
+    expect(record.timestamp).toEqual(expect.any(String));
+    expect(record.timestamp).toMatch(/^\\d{4}-\\d{2}-\\d{2}T.*Z$/u);
   });
 });
