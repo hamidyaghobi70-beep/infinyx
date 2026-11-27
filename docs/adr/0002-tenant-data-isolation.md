@@ -1,14 +1,14 @@
 # ADR-0002: Tenant Data Isolation and Database Access Boundary
 
-- **Status:** Proposed; persistence implementation is not authorized by this ADR alone.
+- **Status:** Accepted as the tenant-isolation security contract; PostgreSQL target selection is recorded in ADR-0003.
 - **Date:** 2026-11-27
 - **Scope:** Application data access for tenant-owned records.
 
 ## Context
 
-INFINYX currently verifies JWT identity and derives a tenant identifier from the verified principal. That establishes an authenticated tenant context; it does not, by itself, isolate persisted records. Every database read and write must enforce the same tenant boundary, including background jobs and future administrative paths.
+INFINYX verifies JWT identity and derives a tenant identifier from the verified principal. That establishes an authenticated tenant context; it does not, by itself, isolate persisted records. Every database read and write must enforce the same tenant boundary, including background jobs and future administrative paths.
 
-The repository does not yet contain a database driver, schema, migration framework, or an approved persistence-engine decision. Therefore this ADR records the security contract and a candidate design without introducing an unverified database dependency.
+ADR-0003 selects PostgreSQL with a shared database and shared tenant-aware tables as the target persistence architecture. This ADR defines the security contract that the persistence implementation must satisfy. The repository does not yet contain a database driver, schema, migration framework, or implemented database isolation boundary.
 
 ## Security invariants
 
@@ -16,25 +16,21 @@ The repository does not yet contain a database driver, schema, migration framewo
 2. Tenant-owned reads, updates, and deletes are scoped by the authenticated tenant.
 3. Inserts derive or validate the tenant ID against the authenticated scope; callers cannot write into another tenant.
 4. Missing, invalid, or ambiguous tenant context fails closed.
-5. Relationships between tenant-owned records must not permit cross-tenant references. Where supported, use composite keys/foreign keys that include `tenant_id`.
+5. Relationships between tenant-owned records must not permit cross-tenant references. Use composite keys/foreign keys that include `tenant_id` where applicable.
 6. Authorization is enforced at the data-access boundary, not only in HTTP middleware.
 7. Background jobs and administrative operations use explicit, auditable system scopes; they do not silently bypass tenant isolation.
 8. No credentials, access tokens, or tenant data are written to logs.
 
-## Candidate persistence design
+## Required PostgreSQL enforcement
 
-**Preferred candidate for evaluation: PostgreSQL with a shared schema, an explicit `tenant_id` on every tenant-owned table, and Row-Level Security (RLS) as defense in depth.**
-
-If PostgreSQL is selected:
-- Enable and, where appropriate, force RLS on tenant-owned tables.
+The implementation must follow ADR-0003 and:
+- Use PostgreSQL Row-Level Security (RLS) on tenant-owned tables, forced where appropriate.
 - Define policies that compare each row's `tenant_id` with a transaction-local tenant context.
 - Set that context from the verified principal inside each transaction; never from untrusted request input.
 - Ensure the application role does not own protected tables and does not have a privilege that bypasses RLS.
 - Use transaction-scoped context so pooled connections cannot retain a previous request's tenant.
-- Keep explicit tenant predicates in repository queries as an additional, reviewable safeguard.
+- Keep explicit tenant predicates in DAL operations as an additional, reviewable safeguard.
 - Add tenant-aware unique constraints and composite foreign keys where relationships are tenant-local.
-
-This is a candidate, not a final database selection. Before implementation, confirm PostgreSQL availability, deployment model, migration tooling, and operational requirements. If another database is chosen, equivalent isolation guarantees must be demonstrated rather than assumed.
 
 ## Required isolation tests
 
@@ -56,17 +52,17 @@ Tests must exercise the actual persistence adapter and database policies. A unit
 
 ## Rollout and acceptance
 
-1. Select and document the persistence engine and migration strategy.
+1. Ensure dependency installation is reproducible through a committed lockfile and CI uses `npm ci`, as required by ADR-0003.
 2. Implement tenant context propagation at the transaction boundary.
-3. Add tenant-aware schema constraints and database-enforced policies.
-4. Add repository-level tenant scoping.
-5. Run integration tests against the real database, including connection-pool reuse and negative cross-tenant cases.
+3. Add tenant-aware schema constraints and database-enforced RLS policies.
+4. Implement repository-level tenant scoping through the DAL.
+5. Run integration tests against the real PostgreSQL database, including connection-pool reuse and negative cross-tenant cases.
 6. Verify that the application database role cannot bypass the isolation policy.
-7. Only then consider the persistence boundary ready for security review.
+7. Only then consider the persistence boundary ready for independent security review.
 
 ## Consequences and open decisions
 
-- No database package or production data model is added by this ADR.
-- PostgreSQL RLS is the preferred candidate, pending confirmation of the deployment and operational environment.
+- ADR-0003 is authoritative for the PostgreSQL platform decision; this ADR is authoritative for tenant-isolation invariants and acceptance tests.
 - The current JWT principal is necessary input to this design, but is not proof that tenant isolation has been implemented.
+- PostgreSQL hosting provider and deployment topology remain open.
 - Merge and release remain separate approval decisions.
