@@ -49,8 +49,8 @@ function setup() {
     findActive: vi.fn(async () => session)
   };
   const securityTransactions = {
-    createTransaction: vi.fn(async () => undefined),
-    createLinkTransactionFromStepUpGrant: vi.fn(async () => undefined)
+    createTransaction: vi.fn(async (..._args: unknown[]) => undefined),
+    createLinkTransactionFromStepUpGrant: vi.fn(async (..._args: unknown[]) => undefined)
   };
   const authorizationParams: Record<string, string>[] = [];
   const oidcClient = {
