@@ -43,6 +43,11 @@ function fakePool(row: ReturnType<typeof sessionRow>) {
         return { rows: [stored], rowCount: 1 };
       }
       if (sql.includes("UPDATE web_sessions") && sql.includes("SET encrypted_token_bundle")) {
+        const updatedAt = new Date(values?.[3] as Date).getTime();
+        if (updatedAt >= new Date(stored.idle_expires_at).getTime() ||
+            updatedAt >= new Date(stored.absolute_expires_at).getTime()) {
+          return { rows: [], rowCount: 0 };
+        }
         stored = { ...stored, encrypted_token_bundle: values?.[2] as Buffer };
         return { rows: [], rowCount: 1 };
       }
@@ -87,6 +92,27 @@ describe("serialized web-session access-token refresh", () => {
       refreshToken: "rotated-refresh-token",
       csrfToken
     });
+  });
+
+  it("does not persist refreshed credentials if the session expires during the provider request", async () => {
+    let clock = new Date(now);
+    const row = sessionRow(clock.getTime() + 10_000, "refresh-token");
+    row.idle_expires_at = new Date(clock.getTime() + 1_000);
+    const fake = fakePool(row);
+    const store = new PostgresWebSessionStore(fake.pool, key, () => new Date(clock));
+    const refresh = vi.fn(async () => {
+      clock = new Date(clock.getTime() + 2_000);
+      return {
+        accessToken: "late-access-token",
+        refreshToken: "late-rotated-token",
+        accessTokenExpiresAt: clock.getTime() + 300_000
+      };
+    });
+
+    expect(await store.getUsableAccessToken(createOpaqueSessionId(), refresh)).toBeNull();
+    expect(refresh).toHaveBeenCalledOnce();
+    expect(decryptSessionTokenBundle(fake.stored.encrypted_token_bundle, key).accessToken)
+      .toBe("old-access-token");
   });
 
   it("returns an access token that is not near expiry without refreshing", async () => {
