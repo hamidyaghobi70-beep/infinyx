@@ -125,6 +125,8 @@ jobs:
           psql "$DATABASE_URL" -v ON_ERROR_STOP=1 <<'SQL'
           GRANT SELECT ON user_account_security, user_account_security_events TO infinyx_app;
           GRANT UPDATE (status, version, updated_at, status_changed_by, status_change_reason, status_change_correlation_id) ON user_account_security TO infinyx_app;
+          GRANT SELECT ON user_account_session_revocation_outbox TO infinyx_app;
+          GRANT UPDATE (completed_at, attempts, last_error_code) ON user_account_session_revocation_outbox TO infinyx_app;
           SQL
       - name: Verify account security backfill, transitions, and append-only history
         run: |
@@ -173,6 +175,12 @@ jobs:
                    status_change_reason = 'ci_suspend',
                    status_change_correlation_id = gen_random_uuid()
              WHERE user_id = test_user;
+            SELECT count(*) INTO legacy_events
+              FROM user_account_session_revocation_outbox
+             WHERE user_id = test_user AND completed_at IS NULL;
+            IF legacy_events <> 1 THEN
+              RAISE EXCEPTION 'Suspension did not create a pending session-revocation request';
+            END IF;
             UPDATE user_account_security
                SET status = 'active', version = version + 1,
                    updated_at = clock_timestamp(),
