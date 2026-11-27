@@ -118,6 +118,11 @@ export function buildPostgresPoolConfig(
     throw new PostgresConfigurationError();
   }
 
+  // Session refresh holds one checked-out client while the OIDC provider is
+  // contacted (bounded to five seconds). Keep the default conservative, but
+  // allow operators to size the pool for expected concurrent refresh load.
+  // Pool capacity must be budgeted across all application replicas and other
+  // database consumers; raising this value is not a substitute for load testing.
   const config: PoolConfig = {
     connectionString,
     max: boundedInteger(env.DATABASE_POOL_MAX, 5, 1, 20),
