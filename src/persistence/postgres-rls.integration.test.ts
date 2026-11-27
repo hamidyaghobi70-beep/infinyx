@@ -551,4 +551,83 @@ integrationDescribe("PostgreSQL tenant RLS integration", () => {
     )).rejects.toBeInstanceOf(TenantPersistenceError);
   });
 
+
+  it("isolates invitation records and encrypted outbox and restricts token lookup", async () => {
+    const owner = principalFor("tenant-a");
+    const tokenHash = Buffer.alloc(32, 41);
+    const fingerprint = Buffer.alloc(32, 42);
+    const invitationId = await withTenantTransaction(tenantPool, owner, async (transaction) => {
+      const rows = await transaction.query<{ invitation_id: string }>(
+        `INSERT INTO tenant_invitations
+          (tenant_id, identity_type, identity_fingerprint, identity_key_version,
+           token_hash, token_key_version, role, invited_by)
+         VALUES ($1, 'email', $2, 1, $3, 1, 'viewer', $4)
+         RETURNING invitation_id::text AS invitation_id`,
+        ["tenant-a", fingerprint, tokenHash, owner.subject]
+      );
+      const id = rows[0]!.invitation_id;
+      await transaction.query(
+        `INSERT INTO tenant_invitation_audit_events
+          (tenant_id, invitation_id, actor_user_id, action, previous_status,
+           new_status, outcome, reason_code, correlation_id)
+         VALUES ($1, $2, $3, 'created', NULL, 'pending', 'succeeded',
+                 'integration_seed', $4)`,
+        ["tenant-a", id, owner.subject, "50000000-0000-4000-8000-000000000001"]
+      );
+      await transaction.query(
+        `INSERT INTO tenant_invitation_delivery_outbox
+          (tenant_id, invitation_id, key_version, nonce, ciphertext, auth_tag)
+         VALUES ($1, $2, 1, $3, $4, $5)`,
+        ["tenant-a", id, Buffer.alloc(12, 1), Buffer.from("ciphertext"), Buffer.alloc(16, 2)]
+      );
+      return id;
+    });
+
+    const client = await pool.connect();
+    try {
+      const lookup = await client.query<{ tenant_id: string }>(
+        "SELECT lookup_tenant_for_invitation_token($1) AS tenant_id",
+        [tokenHash]
+      );
+      expect(lookup.rows).toEqual([{ tenant_id: "tenant-a" }]);
+    } finally {
+      client.release();
+    }
+
+    const tenantA = await withTenantTransaction(tenantPool, owner, async (transaction) => ({
+      invitations: await transaction.query<{ invitation_id: string }>(
+        "SELECT invitation_id::text AS invitation_id FROM tenant_invitations"
+      ),
+      outbox: await transaction.query<{ invitation_id: string }>(
+        "SELECT invitation_id::text AS invitation_id FROM tenant_invitation_delivery_outbox"
+      )
+    }));
+    expect(tenantA.invitations).toEqual([{ invitation_id: invitationId }]);
+    expect(tenantA.outbox).toEqual([{ invitation_id: invitationId }]);
+
+    const tenantB = await withTenantTransaction(
+      tenantPool,
+      principalFor("tenant-b"),
+      async (transaction) => ({
+        invitations: await transaction.query("SELECT invitation_id FROM tenant_invitations"),
+        outbox: await transaction.query("SELECT outbox_id FROM tenant_invitation_delivery_outbox")
+      })
+    );
+    expect(tenantB).toEqual({ invitations: [], outbox: [] });
+
+    await expect(withTenantTransaction(tenantPool, owner, (transaction) =>
+      transaction.query(
+        "UPDATE tenant_invitation_audit_events SET outcome = 'denied' WHERE tenant_id = $1 AND invitation_id = $2",
+        ["tenant-a", invitationId]
+      )
+    )).rejects.toBeInstanceOf(TenantPersistenceError);
+
+    await expect(withTenantTransaction(tenantPool, owner, (transaction) =>
+      transaction.query(
+        "UPDATE tenant_invitations SET status = 'revoked', revoked_by = $1, revoked_at = now(), version = version + 1 WHERE tenant_id = $2 AND invitation_id = $3",
+        [owner.subject, "tenant-a", invitationId]
+      )
+    )).rejects.toBeInstanceOf(TenantPersistenceError);
+  });
+
 });
