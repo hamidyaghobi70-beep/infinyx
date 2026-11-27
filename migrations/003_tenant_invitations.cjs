@@ -211,9 +211,11 @@ exports.up = (pgm) => {
            AND audit.new_status = NEW.status
            AND audit.outcome = 'succeeded'
            AND (
-             (NEW.status = 'accepted' AND audit.actor_user_id = NEW.accepted_by)
-             OR (NEW.status = 'revoked' AND audit.actor_user_id = NEW.revoked_by)
-             OR NEW.status = 'expired'
+             (NEW.status = 'accepted' AND audit.action = 'accepted'
+               AND audit.actor_user_id = NEW.accepted_by)
+             OR (NEW.status = 'revoked' AND audit.action = 'revoked'
+               AND audit.actor_user_id = NEW.revoked_by)
+             OR (NEW.status = 'expired' AND audit.action = 'expired')
            )
       ) THEN
         RAISE EXCEPTION 'Invitation transition requires an audit event';
