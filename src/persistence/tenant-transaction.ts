@@ -149,7 +149,8 @@ export async function withTenantTransaction<Result>(
             AND internal_user_id = $2::uuid
             AND status = 'active'
           ORDER BY generation DESC
-          LIMIT 1`,
+          LIMIT 1
+          FOR SHARE`,
         [tenantId, principal.userId]
       );
       membership = result.rows[0];
