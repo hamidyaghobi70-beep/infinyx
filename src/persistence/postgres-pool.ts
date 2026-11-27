@@ -1,3 +1,5 @@
+import { X509Certificate } from "node:crypto";
+import { isIP } from "node:net";
 import { Pool, type PoolConfig } from "pg";
 import type {
   SqlQueryResult,
@@ -29,9 +31,43 @@ function boundedInteger(
   return parsed;
 }
 
+function readStrictTlsConfiguration(
+  env: PostgresEnvironment,
+  hostname: string
+): NonNullable<PoolConfig["ssl"]> {
+  const ca = env.DATABASE_SSL_CA;
+  const servername = env.DATABASE_SSL_SERVERNAME;
+
+  if (
+    !ca ||
+    ca.length > 64 * 1024 ||
+    !servername ||
+    servername.length > 253 ||
+    isIP(servername) !== 0 ||
+    !/^(?=.{1,253}$)(?:[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?)(?:\.(?:[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?))*$/.test(servername)
+  ) {
+    throw new PostgresConfigurationError();
+  }
+
+  try {
+    const certificate = new X509Certificate(ca);
+    if (!certificate.ca) throw new PostgresConfigurationError();
+  } catch {
+    throw new PostgresConfigurationError();
+  }
+
+  // The explicit servername is intentionally independent of the network host:
+  // private endpoints may be addressed by an IP while the certificate identity
+  // is a DNS SAN. The caller must provide the expected DNS identity explicitly.
+  void hostname;
+  return { rejectUnauthorized: true, ca, servername };
+}
+
 /**
- * Builds a safe, non-secret pool configuration. TLS is required by default;
- * local/test databases must opt out explicitly with DATABASE_SSL=disable.
+ * Builds a safe, non-secret pool configuration.
+ * TLS is mandatory outside local development/test and requires an explicit CA
+ * and DNS server identity. SSL query parameters are rejected because
+ * pg-connection-string can replace the separately supplied TLS options.
  */
 export function buildPostgresPoolConfig(
   env: PostgresEnvironment
@@ -58,8 +94,23 @@ export function buildPostgresPoolConfig(
     throw new PostgresConfigurationError();
   }
 
+  // Reject all SSL URL parameters (case-insensitive) so URL parsing cannot
+  // silently replace the application-owned TLS policy object.
+  if ([...parsedUrl.searchParams.keys()].some((key) => key.toLowerCase().startsWith("ssl"))) {
+    throw new PostgresConfigurationError();
+  }
+
   const sslMode = env.DATABASE_SSL ?? "require";
   if (sslMode !== "require" && sslMode !== "disable") {
+    throw new PostgresConfigurationError();
+  }
+
+  const nodeEnvironment = env.NODE_ENV;
+  if (
+    sslMode === "disable" &&
+    nodeEnvironment !== "test" &&
+    nodeEnvironment !== "development"
+  ) {
     throw new PostgresConfigurationError();
   }
 
@@ -85,7 +136,10 @@ export function buildPostgresPoolConfig(
       30000
     ),
     application_name: "infinyx-api",
-    ssl: sslMode === "require" ? { rejectUnauthorized: true } : false
+    ssl:
+      sslMode === "require"
+        ? readStrictTlsConfiguration(env, parsedUrl.hostname)
+        : false
   };
 
   return config;
