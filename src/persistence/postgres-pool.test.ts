@@ -166,7 +166,7 @@ describe("buildPostgresPoolConfig", () => {
   const strictTlsEnvironment = () => ({
     DATABASE_URL: databaseUrl,
     DATABASE_SSL_CA: certificates.ca,
-    DATABASE_SSL_SERVERNAME: "localhost"
+    DATABASE_SSL_SERVERNAME: "example.test"
   });
 
   it("requires a PostgreSQL connection URL", () => {
@@ -186,7 +186,7 @@ describe("buildPostgresPoolConfig", () => {
     expect(config.ssl).toEqual({
       rejectUnauthorized: true,
       ca: certificates.ca,
-      servername: "localhost"
+      servername: "example.test"
     });
     expect(config.application_name).toBe("infinyx-api");
   });
@@ -227,6 +227,15 @@ describe("buildPostgresPoolConfig", () => {
       buildPostgresPoolConfig({
         ...strictTlsEnvironment(),
         DATABASE_SSL_SERVERNAME: "bad name"
+      })
+    ).toThrow(PostgresConfigurationError);
+  });
+
+  it("rejects a DNS TLS identity that differs from a DNS database host", () => {
+    expect(() =>
+      buildPostgresPoolConfig({
+        ...strictTlsEnvironment(),
+        DATABASE_SSL_SERVERNAME: "another.example.test"
       })
     ).toThrow(PostgresConfigurationError);
   });
