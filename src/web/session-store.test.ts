@@ -28,8 +28,8 @@ function sessionRow(expiry: number, refreshToken?: string) {
     }, key),
     idle_expires_at: new Date(now.getTime() + 1_800_000),
     absolute_expires_at: new Date(now.getTime() + 28_800_000),
-    refresh_lease_id: null,
-    refresh_lease_expires_at: null
+    refresh_lease_id: null as string | null,
+    refresh_lease_expires_at: null as Date | null
   };
 }
 
