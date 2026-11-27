@@ -20,7 +20,7 @@ The current persistence layer has:
 - Tenant-scoped RLS using transaction-local `app.tenant_id`.
 - `getTenantMembership` and `requireTenantRole`, which resolve membership inside a supplied tenant transaction.
 
-The current membership table has no active/suspended status or membership lifecycle timestamps. A missing membership row is currently treated as no membership. Do not assume soft suspension is already supported.
+The current membership table has no active/suspended/removed status or membership lifecycle timestamps. A missing membership row is currently treated as no membership. The founder has approved a three-state membership lifecycle for the target design: `active`, `suspended`, and `removed`. This lifecycle is a design decision only; the current schema and code do not yet implement it.
 
 ## 3. Approved branch visibility policy
 
@@ -86,14 +86,17 @@ For manager/editor/viewer, visibility comes only from explicit assignment rows.
 
 The approved policy requires suspended or removed membership to end branch access. The current schema models removal by the absence of a membership row; it does not model suspension.
 
-Before implementation, decide whether membership lifecycle should use:
+The founder has approved a three-state membership lifecycle:
 
-- **Hard removal:** delete the membership row; dependent assignment rows may be removed by a defined FK action, while audit history is stored separately.
-- **Soft suspension:** add explicit membership status and lifecycle timestamps; every authorization query must require an active membership.
+- **`active`:** membership is active; access is evaluated using the member's role and branch assignments.
+- **`suspended`:** membership is retained but all tenant and branch access is denied until it is reactivated.
+- **`removed`:** membership has ended and all tenant and branch access is denied. Historical audit records must remain available according to the eventual retention policy.
 
-Do not rely solely on stale assignment rows to authorize access. Every protected operation must first establish current tenant membership in the same transaction. An inactive or missing membership must deny access regardless of any assignment record.
+This is a target design decision, not an implemented schema or behavior. The current membership table has no status column, and the current authorization helper does not yet check lifecycle state.
 
-Assignment retention and audit-history behavior must be designed together. Avoid silently cascading away the only record of who granted or revoked access. If assignments are deleted, preserve the security audit event independently.
+Every protected operation must verify that the membership is currently `active` inside the same transaction as the protected operation. Missing, `suspended`, or `removed` membership must fail closed, regardless of any surviving branch-assignment row.
+
+Do not physically erase audit history when a membership is removed. Assignment retention and audit-history behavior must be designed together. The implementation must decide whether assignments are retained as historical/inert records or deleted while preserving independent audit events; retained assignment rows must never authorize suspended or removed members.
 
 ## 6. Visibility resolution and transaction boundary
 
@@ -161,21 +164,23 @@ Use real PostgreSQL integration tests with the least-privilege application role 
 4. A branch belonging to another tenant cannot be resolved, even if its ID is supplied.
 5. A branch created after a member's assignments does not become visible automatically.
 6. Revoking an assignment immediately prevents subsequent branch access.
-7. Missing or inactive membership denies access even if an assignment row exists.
+7. Missing, suspended, or removed membership denies access even if an assignment row exists.
+8. Reactivating a suspended membership restores only the access permitted by its current role and still-valid branch assignments; it does not silently grant new branches.
+9. A removed membership cannot regain access merely because a stale assignment row remains.
 8. A user who belongs to another tenant cannot use that membership to access this tenant's branch.
-9. A branch ID supplied by the client never bypasses membership or assignment checks.
-10. Transaction-local tenant context does not leak across pooled connections.
-11. Authorization and protected data access occur in the same transaction.
-12. The application database role is not superuser and does not have `BYPASSRLS`.
-13. RLS is enabled and forced on all new tenant-scoped tables.
-14. Cross-tenant assignment rows are rejected by composite foreign keys.
-15. Generic authorization failures do not reveal whether another tenant's branch or member exists.
+11. A branch ID supplied by the client never bypasses membership or assignment checks.
+12. Transaction-local tenant context does not leak across pooled connections.
+13. Authorization and protected data access occur in the same transaction.
+14. The application database role is not superuser and does not have `BYPASSRLS`.
+15. RLS is enabled and forced on all new tenant-scoped tables.
+16. Cross-tenant assignment rows are rejected by composite foreign keys.
+17. Generic authorization failures do not reveal whether another tenant's branch or member exists.
 
 ## 11. Implementation gates
 
 Do not implement the migration or runtime resolver until the following are settled:
 
-- membership removal versus suspension lifecycle and assignment/audit retention;
+- assignment retention behavior after membership suspension/removal, including the independent audit retention policy;
 - editor/viewer write permissions, if any, for branch-scoped resources;
 - exact branch identifier and naming constraints, if different from the proposed defaults.
 
