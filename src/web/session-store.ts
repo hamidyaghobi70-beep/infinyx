@@ -72,6 +72,16 @@ export class PostgresWebSessionStore {
              WHERE account_security.user_id = $2::uuid
                AND account_security.status = 'active'
           )
+            AND EXISTS (
+              SELECT 1
+                FROM user_external_identities AS external_identity
+                INNER JOIN user_external_identity_lifecycle AS lifecycle
+                  ON lifecycle.identity_id = external_identity.identity_id
+               WHERE external_identity.user_id = $2::uuid
+                 AND external_identity.issuer = $3
+                 AND external_identity.subject = $4
+                 AND lifecycle.status = 'active'
+            )
             AND NOT EXISTS (
               SELECT 1 FROM user_account_session_revocation_outbox AS account_pending
                WHERE account_pending.user_id = $2::uuid
@@ -115,6 +125,16 @@ export class PostgresWebSessionStore {
               SELECT 1 FROM user_account_security AS account_security
                WHERE account_security.user_id = web_sessions.user_id
                  AND account_security.status = 'active'
+            )
+            AND EXISTS (
+              SELECT 1
+                FROM user_external_identities AS external_identity
+                INNER JOIN user_external_identity_lifecycle AS lifecycle
+                  ON lifecycle.identity_id = external_identity.identity_id
+               WHERE external_identity.user_id = web_sessions.user_id
+                 AND external_identity.issuer = web_sessions.issuer
+                 AND external_identity.subject = web_sessions.subject
+                 AND lifecycle.status = 'active'
             )
             AND NOT EXISTS (
               SELECT 1 FROM user_account_session_revocation_outbox AS account_pending
@@ -165,6 +185,16 @@ export class PostgresWebSessionStore {
               SELECT 1 FROM user_account_security AS account_security
                WHERE account_security.user_id = web_sessions.user_id
                  AND account_security.status = 'active'
+            )
+            AND EXISTS (
+              SELECT 1
+                FROM user_external_identities AS external_identity
+                INNER JOIN user_external_identity_lifecycle AS lifecycle
+                  ON lifecycle.identity_id = external_identity.identity_id
+               WHERE external_identity.user_id = web_sessions.user_id
+                 AND external_identity.issuer = web_sessions.issuer
+                 AND external_identity.subject = web_sessions.subject
+                 AND lifecycle.status = 'active'
             )
             AND NOT EXISTS (
               SELECT 1 FROM user_account_session_revocation_outbox AS account_pending
@@ -220,6 +250,16 @@ export class PostgresWebSessionStore {
               SELECT 1 FROM user_account_security AS account_security
                WHERE account_security.user_id = web_sessions.user_id
                  AND account_security.status = 'active'
+            )
+            AND EXISTS (
+              SELECT 1
+                FROM user_external_identities AS external_identity
+                INNER JOIN user_external_identity_lifecycle AS lifecycle
+                  ON lifecycle.identity_id = external_identity.identity_id
+               WHERE external_identity.user_id = web_sessions.user_id
+                 AND external_identity.issuer = web_sessions.issuer
+                 AND external_identity.subject = web_sessions.subject
+                 AND lifecycle.status = 'active'
             )
             AND NOT EXISTS (
               SELECT 1 FROM user_account_session_revocation_outbox AS account_pending
