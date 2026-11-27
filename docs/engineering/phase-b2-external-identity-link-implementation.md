@@ -78,7 +78,7 @@ Verified in the isolated CI environment:
 - Web BFF production build passed.
 - 25 test files passed; 158 tests passed.
 - PostgreSQL integration tests covered:
-  - Existing identity bindings and Lifecycle records remain byte-for-byte/value-for-value unchanged across B2 linking.
+  - Existing identity bindings and Lifecycle records remain field-for-field unchanged across B2 linking.
   - Concurrent attempts for the same external identity produce one owner only.
   - A required audit-write failure rolls back the new identity and its trigger-created Lifecycle records.
   - Failed session revocation remains pending; successful retry completes the outbox.
