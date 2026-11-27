@@ -87,6 +87,15 @@ describe("tenant membership authorization", () => {
     ).rejects.toBeInstanceOf(TenantAuthorizationError);
   });
 
+  it("does not authorize suspended or removed memberships", async () => {
+    await expect(
+      getTenantMembership(transactionWithRole("manager", "suspended"), principal())
+    ).resolves.toBeNull();
+    await expect(
+      getTenantMembership(transactionWithRole("manager", "removed"), principal())
+    ).resolves.toBeNull();
+  });
+
   it("does not treat an unrecognized database role as membership", async () => {
     await expect(
       getTenantMembership(transactionWithRole("unexpected" as TenantRole), principal())
