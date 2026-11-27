@@ -180,3 +180,18 @@ building age-based alerts or automated recovery. Any future recovery design must
 distinguish a provider-confirmed failure from an ambiguous outcome and must never
 replay a potentially consumed refresh token. This runbook does not authorize
 manual database edits, merging, or deployment.
+
+### Secret-free refresh lifecycle events
+
+The session store accepts an optional `SessionRefreshObserver`. Its events are
+limited to fixed lifecycle labels: reservation claimed/conflicted, provider
+failure/response rejection, and persistence success/conflict/failure. Events
+carry no session, user, attempt, provider-error, or token values. Observer
+exceptions are swallowed so telemetry outages cannot change authentication
+behavior. The default observer is a no-op; deployments must explicitly supply
+a sink if they want these events exported.
+
+Do not attach raw request context, provider response bodies, exception messages,
+cookies, or identifiers to an observer implementation. A future production
+sink should add its own timestamp and aggregate dimensions only after a separate
+privacy and retention review.
