@@ -10,13 +10,21 @@ export interface BffRouteHandlers {
   readonly handleCallback: BffRouteHandler;
   readonly getSession: BffRouteHandler;
   readonly logout: BffRouteHandler;
+  readonly startReauth: BffRouteHandler;
+  readonly handleReauthCallback: BffRouteHandler;
+  readonly startLink: BffRouteHandler;
+  readonly handleLinkCallback: BffRouteHandler;
 }
 
 const ROUTES = new Map<string, keyof BffRouteHandlers>([
   ["GET /auth/login", "startLogin"],
   ["GET /auth/callback", "handleCallback"],
   ["GET /api/session", "getSession"],
-  ["POST /auth/logout", "logout"]
+  ["POST /auth/logout", "logout"],
+  ["POST /account/security/reauth", "startReauth"],
+  ["GET /auth/reauth/callback", "handleReauthCallback"],
+  ["POST /account/identities/link", "startLink"],
+  ["GET /auth/identity-link/callback", "handleLinkCallback"]
 ]);
 
 export function createBffHttpServer(handlers: BffRouteHandlers): Server {
@@ -55,7 +63,7 @@ async function dispatch(
     return;
   }
 
-  if (handlerName === "logout" &&
+  if ((handlerName === "logout" || handlerName === "startReauth" || handlerName === "startLink") &&
       ((request.headers["content-length"] !== undefined &&
         request.headers["content-length"] !== "0") ||
        request.headers["transfer-encoding"] !== undefined)) {
