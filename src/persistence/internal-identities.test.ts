@@ -54,9 +54,11 @@ describe("internal identity persistence", () => {
       subject
     });
     expect(calls[0].values).toEqual([issuer, subject]);
+    expect(calls[0].sql).toContain("INNER JOIN user_external_identity_lifecycle");
+    expect(calls[0].sql).toContain("lifecycle.status = 'active'");
   });
 
-  it("returns null for an unknown external identity", async () => {
+  it("returns null for an unknown or inactive external identity", async () => {
     const { tx } = transaction(() => []);
     await expect(resolveExternalIdentity(tx, issuer, "unknown-subject")).resolves.toBeNull();
   });
