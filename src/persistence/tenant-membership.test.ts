@@ -62,22 +62,22 @@ describe("tenant membership authorization", () => {
 
   it("returns null when the user has no membership", async () => {
     await expect(
-      getTenantMembership(poolWithRole(null), principal())
+      getTenantMembership(transactionWithRole(null), principal())
     ).resolves.toBeNull();
   });
 
   it("allows only explicitly permitted roles", async () => {
     await expect(
-      requireTenantRole(poolWithRole("editor"), principal(), ["owner", "admin", "editor"])
+      requireTenantRole(transactionWithRole("editor"), principal(), ["owner", "admin", "editor"])
     ).resolves.toMatchObject({ role: "editor" });
     await expect(
-      requireTenantRole(poolWithRole("viewer"), principal(), ["owner", "admin", "editor"])
+      requireTenantRole(transactionWithRole("viewer"), principal(), ["owner", "admin", "editor"])
     ).rejects.toBeInstanceOf(TenantAuthorizationError);
   });
 
   it("does not treat an unrecognized database role as membership", async () => {
     await expect(
-      getTenantMembership(poolWithRole("unexpected" as TenantRole), principal())
+      getTenantMembership(transactionWithRole("unexpected" as TenantRole), principal())
     ).resolves.toBeNull();
   });
 });
