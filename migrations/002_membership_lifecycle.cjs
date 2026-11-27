@@ -128,6 +128,7 @@ exports.up = (pgm) => {
           FROM tenant_membership_audit_events AS audit
          WHERE audit.tenant_id = NEW.tenant_id
            AND audit.target_membership_id = NEW.membership_id
+           AND audit.target_user_id = NEW.user_id
            AND audit.actor_user_id = NEW.status_changed_by
            AND audit.previous_status = OLD.status
            AND audit.requested_status = NEW.status
