@@ -17,6 +17,8 @@ export interface BffRouteHandlers {
   readonly unlinkIdentity: BffRouteHandler;
   readonly startLink: BffRouteHandler;
   readonly handleLinkCallback: BffRouteHandler;
+  readonly startAccountRecovery: BffRouteHandler;
+  readonly handleAccountRecoveryCallback: BffRouteHandler;
 }
 
 const ROUTES = new Map<string, keyof BffRouteHandlers>([
@@ -29,7 +31,9 @@ const ROUTES = new Map<string, keyof BffRouteHandlers>([
   ["POST /account/security/reauth-unlink", "startUnlinkReauth"],
   ["GET /auth/reauth-unlink/callback", "handleUnlinkReauthCallback"],
   ["POST /account/identities/link", "startLink"],
-  ["GET /auth/identity-link/callback", "handleLinkCallback"]
+  ["GET /auth/identity-link/callback", "handleLinkCallback"],
+  ["POST /account/recovery/start", "startAccountRecovery"],
+  ["GET /auth/account-recovery/callback", "handleAccountRecoveryCallback"]
 ]);
 
 export function createBffHttpServer(handlers: BffRouteHandlers): Server {
@@ -76,7 +80,7 @@ async function dispatch(
     return;
   }
 
-  if ((handlerName === "logout" || handlerName === "startReauth" || handlerName === "startUnlinkReauth" || handlerName === "startLink" || handlerName === "unlinkIdentity") &&
+  if ((handlerName === "logout" || handlerName === "startReauth" || handlerName === "startUnlinkReauth" || handlerName === "startLink" || handlerName === "unlinkIdentity" || handlerName === "startAccountRecovery") &&
       ((request.headers["content-length"] !== undefined &&
         request.headers["content-length"] !== "0") ||
        request.headers["transfer-encoding"] !== undefined)) {
