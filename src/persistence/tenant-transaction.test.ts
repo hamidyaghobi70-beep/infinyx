@@ -120,10 +120,13 @@ describe("withTenantTransaction", () => {
     await expect(
       withTenantTransaction(db.pool, principal, (tx) => tx.query("SELECT private_data"))
     ).rejects.toBeInstanceOf(TenantPersistenceError);
-    await expect(
-      withTenantTransaction(db.pool, principal, async () => "not reached")
-    ).resolves.toBe("not reached");
-    expect(db.releaseCount).toBe(2);
+    expect(db.calls.map((call) => call.sql)).toEqual([
+      "BEGIN",
+      "SELECT set_config('app.tenant_id', $1, true)",
+      "SELECT private_data",
+      "ROLLBACK"
+    ]);
+    expect(db.releaseCount).toBe(1);
   });
 
   it("releases the client if tenant context setup fails", async () => {
