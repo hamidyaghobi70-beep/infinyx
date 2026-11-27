@@ -71,6 +71,69 @@ exports.up = (pgm) => {
     CREATE INDEX tenant_membership_audit_target_history_idx
       ON tenant_membership_audit_events (tenant_id, target_user_id, occurred_at DESC);
 
+
+    CREATE FUNCTION enforce_membership_lifecycle_update()
+    RETURNS trigger
+    LANGUAGE plpgsql
+    AS $
+    BEGIN
+      IF NEW.membership_id IS DISTINCT FROM OLD.membership_id
+         OR NEW.tenant_id IS DISTINCT FROM OLD.tenant_id
+         OR NEW.user_id IS DISTINCT FROM OLD.user_id
+         OR NEW.generation IS DISTINCT FROM OLD.generation THEN
+        RAISE EXCEPTION 'Membership identity and generation are immutable';
+      END IF;
+
+      IF OLD.status IS DISTINCT FROM NEW.status THEN
+        IF NOT (
+          (OLD.status = 'active' AND NEW.status IN ('suspended', 'removed'))
+          OR (OLD.status = 'suspended' AND NEW.status IN ('active', 'removed'))
+        ) THEN
+          RAISE EXCEPTION 'Invalid membership lifecycle transition';
+        END IF;
+        IF NEW.version <> OLD.version + 1 OR NEW.status_changed_by IS NULL THEN
+          RAISE EXCEPTION 'Membership lifecycle metadata is invalid';
+        END IF;
+      ELSIF NEW.version <> OLD.version
+         OR NEW.status_changed_at IS DISTINCT FROM OLD.status_changed_at
+         OR NEW.status_changed_by IS DISTINCT FROM OLD.status_changed_by THEN
+        RAISE EXCEPTION 'Lifecycle metadata may change only with a status transition';
+      END IF;
+
+      RETURN NEW;
+    END;
+    $;
+
+    CREATE TRIGGER tenant_membership_lifecycle_update_guard
+      BEFORE UPDATE ON tenant_memberships
+      FOR EACH ROW EXECUTE FUNCTION enforce_membership_lifecycle_update();
+
+    CREATE FUNCTION require_membership_lifecycle_audit()
+    RETURNS trigger
+    LANGUAGE plpgsql
+    AS $
+    BEGIN
+      IF OLD.status IS DISTINCT FROM NEW.status AND NOT EXISTS (
+        SELECT 1
+          FROM tenant_membership_audit_events AS audit
+         WHERE audit.tenant_id = NEW.tenant_id
+           AND audit.target_membership_id = NEW.membership_id
+           AND audit.actor_user_id = NEW.status_changed_by
+           AND audit.previous_status = OLD.status
+           AND audit.requested_status = NEW.status
+           AND audit.outcome = 'succeeded'
+      ) THEN
+        RAISE EXCEPTION 'Membership lifecycle transition requires an audit event';
+      END IF;
+      RETURN NULL;
+    END;
+    $;
+
+    CREATE CONSTRAINT TRIGGER tenant_membership_lifecycle_audit_required
+      AFTER UPDATE ON tenant_memberships
+      DEFERRABLE INITIALLY DEFERRED
+      FOR EACH ROW EXECUTE FUNCTION require_membership_lifecycle_audit();
+
     ALTER TABLE tenant_membership_audit_events ENABLE ROW LEVEL SECURITY;
     ALTER TABLE tenant_membership_audit_events FORCE ROW LEVEL SECURITY;
     CREATE POLICY tenant_membership_audit_tenant_scope
@@ -94,6 +157,11 @@ exports.down = (pgm) => {
         RAISE EXCEPTION 'Cannot reverse membership lifecycle migration while audit history exists';
       END IF;
     END $$;
+
+    DROP TRIGGER tenant_membership_lifecycle_audit_required ON tenant_memberships;
+    DROP TRIGGER tenant_membership_lifecycle_update_guard ON tenant_memberships;
+    DROP FUNCTION require_membership_lifecycle_audit();
+    DROP FUNCTION enforce_membership_lifecycle_update();
 
     DROP TABLE tenant_membership_audit_events;
     DROP INDEX tenant_memberships_user_history_idx;
