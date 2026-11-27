@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import type { AuthenticatedPrincipal } from "../core/authenticated-principal.js";
+import type { TenantPrincipal } from "./tenant-transaction.js";
 import {
   constantTimeEqual32,
   createInvitationSecrets,
@@ -22,7 +22,7 @@ export interface InvitationIdentityDirectory {
    * resolve the exact normalized identity; return null only for a trusted
    * not-found result. Do not implement this with client-supplied data.
    */
-  resolveAccountSubject(
+  resolveInternalUserId(
     identityType: InvitationIdentityType,
     normalizedIdentity: string
   ): Promise<string | null>;
@@ -31,7 +31,7 @@ export interface InvitationIdentityDirectory {
 export interface ResolvedInvitationTarget {
   readonly identityType: InvitationIdentityType;
   readonly normalizedIdentity: string;
-  readonly accountSubject: string | null;
+  readonly internalUserId: string | null;
 }
 
 export class InvitationIntegrationUnavailableError extends Error {
@@ -94,27 +94,27 @@ export async function resolveInvitationTarget(
   if (!directory) throw new InvitationIntegrationUnavailableError();
 
   const normalizedIdentity = normalizeInvitationIdentity(identityType, identity);
-  let accountSubject: string | null;
+  let internalUserId: string | null;
   try {
-    accountSubject = await directory.resolveAccountSubject(identityType, normalizedIdentity);
+    internalUserId = await directory.resolveInternalUserId(identityType, normalizedIdentity);
   } catch {
     throw new InvitationIntegrationUnavailableError();
   }
 
-  if (accountSubject !== null &&
-      (typeof accountSubject !== "string" || accountSubject.length < 1 ||
-       accountSubject.length > 256 || /[\u0000-\u001f\u007f-\u009f]/.test(accountSubject))) {
+  if (internalUserId !== null &&
+      (typeof internalUserId !== "string" ||
+       !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(internalUserId))) {
     throw new InvitationIntegrationUnavailableError();
   }
 
-  const target = Object.freeze({ identityType, normalizedIdentity, accountSubject });
+  const target = Object.freeze({ identityType, normalizedIdentity, internalUserId });
   resolvedTargets.add(target);
   return target;
 }
 
 async function lockAndAuthorizeTenant(
   transaction: TenantTransaction,
-  principal: AuthenticatedPrincipal
+  principal: TenantPrincipal
 ): Promise<void> {
   const tenant = await transaction.query<{ id: string }>(
     "SELECT id FROM tenants WHERE id = $1 FOR UPDATE",
@@ -161,7 +161,7 @@ async function writeInvitationAudit(
  */
 export async function createTenantInvitation(
   transaction: TenantTransaction,
-  principal: AuthenticatedPrincipal,
+  principal: TenantPrincipal,
   target: ResolvedInvitationTarget,
   role: InvitationRole,
   correlationId: string,
@@ -189,7 +189,7 @@ export async function createTenantInvitation(
   );
   if (prior[0]) {
     if (prior[0].action !== "created" ||
-        prior[0].actor_user_id !== principal.subject ||
+        prior[0].actor_user_id !== principal.userId ||
         !prior[0].invitation_id) {
       throw new InvitationConflictError();
     }
@@ -216,15 +216,15 @@ export async function createTenantInvitation(
     return Object.freeze({ invitationId: row.invitation_id, expiresAt: row.expires_at });
   }
 
-  if (target.accountSubject) {
+  if (target.internalUserId) {
     const currentMembership = await transaction.query<{ membership_id: string }>(
       `SELECT membership_id::text AS membership_id
          FROM tenant_memberships
-        WHERE tenant_id = $1 AND user_id = $2
+        WHERE tenant_id = $1 AND internal_user_id = $2::uuid
           AND status IN ('active', 'suspended')
         LIMIT 1
         FOR UPDATE`,
-      [principal.tenantId, target.accountSubject]
+      [principal.tenantId, target.internalUserId]
     );
     if (currentMembership.length > 0) throw new InvitationConflictError();
   }
@@ -253,7 +253,7 @@ export async function createTenantInvitation(
     await writeInvitationAudit(transaction, {
       tenantId: principal.tenantId,
       invitationId: invitation.invitation_id,
-      actorUserId: principal.subject,
+      actorUserId: principal.userId,
       action: "expired",
       previousStatus: "pending",
       newStatus: "expired",
@@ -291,7 +291,7 @@ export async function createTenantInvitation(
       secrets.tokenHash,
       keys.tokenKeyVersion,
       role,
-      principal.subject
+      principal.userId
     ]
   );
   const row = created[0];
@@ -300,7 +300,7 @@ export async function createTenantInvitation(
   await writeInvitationAudit(transaction, {
     tenantId: principal.tenantId,
     invitationId: row.invitation_id,
-    actorUserId: principal.subject,
+    actorUserId: principal.userId,
     action: "created",
     previousStatus: null,
     newStatus: "pending",
@@ -340,7 +340,7 @@ export async function createTenantInvitation(
 /** Revokes only a pending invitation; audit and state change share the caller's transaction. */
 export async function revokeTenantInvitation(
   transaction: TenantTransaction,
-  principal: AuthenticatedPrincipal,
+  principal: TenantPrincipal,
   invitationId: string,
   correlationId: string
 ): Promise<{ readonly outcome: "succeeded" | "denied" | "noop" }> {
@@ -360,7 +360,7 @@ export async function revokeTenantInvitation(
   if (prior[0]) {
     if (prior[0].action !== "revoked" ||
         prior[0].invitation_id !== invitationId ||
-        prior[0].actor_user_id !== principal.subject) {
+        prior[0].actor_user_id !== principal.userId) {
       throw new InvitationConflictError();
     }
     return Object.freeze({ outcome: prior[0].outcome });
@@ -379,7 +379,7 @@ export async function revokeTenantInvitation(
     await writeInvitationAudit(transaction, {
       tenantId: principal.tenantId,
       invitationId: null,
-      actorUserId: principal.subject,
+      actorUserId: principal.userId,
       action: "replay_denied",
       previousStatus: null,
       newStatus: null,
@@ -405,7 +405,7 @@ export async function revokeTenantInvitation(
     await writeInvitationAudit(transaction, {
       tenantId: principal.tenantId,
       invitationId,
-      actorUserId: principal.subject,
+      actorUserId: principal.userId,
       action: "expired",
       previousStatus: "pending",
       newStatus: "expired",
@@ -422,12 +422,12 @@ export async function revokeTenantInvitation(
             version = version + 1
       WHERE tenant_id = $2 AND invitation_id = $3
         AND status = 'pending' AND version = $4`,
-    [principal.subject, principal.tenantId, invitationId, invitation.version]
+    [principal.userId, principal.tenantId, invitationId, invitation.version]
   );
   await writeInvitationAudit(transaction, {
     tenantId: principal.tenantId,
     invitationId,
-    actorUserId: principal.subject,
+    actorUserId: principal.userId,
     action: "revoked",
     previousStatus: "pending",
     newStatus: "revoked",
