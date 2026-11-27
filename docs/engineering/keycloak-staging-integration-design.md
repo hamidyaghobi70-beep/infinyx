@@ -214,3 +214,166 @@ The following must be resolved in the implementation plan or staging approval:
 This document is a design proposal only. The founder approved the Keycloak provider selection and staging-first strategy in ADR-0011, but has not yet authorized staging deployment or implementation code changes.
 
 All subsequent work must remain on feat/adr-platform-foundation. Keep main unchanged. No merge, release, production deployment, public exposure, production credentials, or live message delivery is authorized by this document.
+
+
+---
+
+# Founder-approved design refinement — 2026-11-27
+
+- **Status:** Incorporated into the design; implementation remains unauthorized.
+- **Founder decisions:** Web uses a server-side Backend-for-Frontend (BFF). Future native mobile uses OIDC Authorization Code Flow with PKCE S256. Authenticated identity is independent from tenant context; INFINYX database state remains authoritative for tenant selection, membership, roles, and branch access.
+
+This addendum supersedes any conflicting statements in Sections 3, 5, 7, 12, and 13 above. The original sections remain as historical context for the initial proposal.
+
+## A. Updated logical architecture
+
+    Browser
+       | HTTPS; opaque Secure/HttpOnly session cookie
+       v
+    INFINYX Web BFF (OIDC confidential client)
+       | server-side authorization-code exchange
+       | server-side token/session handling
+       v
+    Keycloak (staging issuer)
+       | OIDC metadata / JWKS / signed tokens
+       v
+    INFINYX Authentication Boundary
+       | validate token; resolve (issuer, subject)
+       | map to stable internal user ID
+       v
+    INFINYX Authenticated Identity
+       | internal user ID; no tenant claim/context
+       v
+    Tenant Selection + Authorization / Tenant DAL
+       | current DB-backed membership and lifecycle
+       | role and branch assignment checks
+       | tenant-scoped transaction and RLS
+
+Authentication establishes who the user is. It does not establish which tenant the user may access. A user may belong to multiple tenants. A selected tenant identifier is only a request selector and never proof of access. For every protected operation, INFINYX must verify current active membership, role, and applicable branch assignment from the database within the same transaction as the protected operation. Keycloak tenant, group, and role claims are not authoritative for INFINYX authorization.
+
+## B. Web BFF — approved topology
+
+The browser is not an OIDC token holder. The BFF is the confidential OIDC client and performs the authorization-code exchange server-side.
+
+- Use Authorization Code Flow with PKCE S256, including for the confidential BFF.
+- Keep access and refresh tokens server-side. Never expose them to browser JavaScript or store them in localStorage/sessionStorage.
+- Give the browser only an opaque session identifier in a cookie configured Secure, HttpOnly, and with an appropriate SameSite policy.
+- Bind the server-side session to the authenticated internal identity and define explicit idle and absolute expiry.
+- Protect state-changing BFF requests against CSRF using a documented token strategy and origin checks.
+- Rotate the session identifier after authentication and privilege changes to prevent session fixation.
+- Bind one-time state, nonce, and PKCE verifier to the initiating browser session. Validate state on callback and nonce in the OIDC login response.
+- Use exact redirect and post-logout redirect allowlists; no broad wildcards or open redirects.
+- Define server-side refresh, revocation, logout, session invalidation, and suspected-compromise behavior before staging tests.
+- Do not log cookies, authorization codes, tokens, client secrets, or CSRF tokens.
+- BFF endpoints must be application-specific, not a generic token proxy. Each endpoint independently performs INFINYX authorization.
+
+Future native mobile should use Authorization Code + PKCE S256 as a public client with no embedded client secret, system-browser authentication, and platform secure credential storage. Mobile implementation is outside this staging design approval and needs its own implementation plan.
+
+## C. OIDC discovery, JWKS, and access-token validation
+
+- Pin the expected issuer URI in trusted server configuration for each environment. Never derive the issuer or discovery URL from a token or user input.
+- Fetch discovery metadata only from that configured issuer over TLS and require an exact metadata issuer match.
+- Fetch keys only from the validated jwks_uri in that metadata.
+- Explicitly allowlist signing algorithms (initially RS256 only if selected realm configuration supports it); reject none, unexpected algorithms, and algorithm/key-type mismatches.
+- Validate signature, exact issuer, API-specific audience, expiry, not-before, subject, and required token-use/type constraints.
+- APIs accept access tokens only, not ID tokens. Define the API audience and, where applicable, expected authorized-party/client identifier (azp) explicitly.
+- Require kid when multiple keys may be published. On unknown kid, perform at most a bounded refresh from the pinned JWKS endpoint; if unresolved, fail closed.
+- Support safe key rotation and bounded cache lifetimes. Never follow token-supplied jku, x5u, or any other key-discovery URL.
+- Define clock-skew tolerance. Malformed, unsigned, expired, not-yet-valid, wrong-issuer, wrong-audience, wrong-token-type, or unsupported tokens are rejected.
+- Metadata/JWKS outage or inability to establish token authenticity fails closed. Staging must not accept development or production realm tokens.
+
+The existing static-PEM verifier is not a completed Keycloak integration. The implementation proposal must introduce a provider-neutral OIDC/JWKS verification boundary with pinned issuer/discovery configuration, algorithm allowlisting, bounded JWKS caching/refresh, and explicit failure behavior.
+
+## D. Identity mapping and account linking
+
+Use a provider-neutral identity record keyed by exact trusted issuer plus exact OIDC subject, mapped to a stable internal INFINYX user ID. Enforce database uniqueness on (issuer, subject). Email and phone are attributes, not primary identity keys; matching values never prove account ownership.
+
+- Validate the token before identity lookup.
+- Resolve the verified (issuer, subject) to an existing internal user.
+- Unknown identities fail closed unless a separately approved, audited provisioning flow exists. Do not silently create or link accounts.
+- Account linking requires an already authenticated target INFINYX account, fresh proof of control of the new identity, and explicit confirmation.
+- Linking/unlinking must be transactional and concurrency-safe: enforce uniqueness, lock or serialize affected identity/user records, re-check mapping and authorization after locks, and make retries idempotent.
+- An identity already linked to another internal user must never be reassigned implicitly. Conflicts fail closed and produce a security audit event.
+- Define recovery and unlink safeguards so a user cannot accidentally lose their only usable sign-in method.
+- Never store tokens, OTPs, or secrets in audit events.
+
+The external identity mapping schema, provisioning flow, and account-linking repositories require a separate implementation proposal and approval.
+
+## E. Updated authentication and tenant authorization lifecycle
+
+1. Browser starts login through the INFINYX BFF.
+2. BFF creates one-time state, nonce, and PKCE verifier/challenge and binds them to the initiating browser session.
+3. Keycloak authenticates the user and redirects the authorization code only to the exact registered BFF callback.
+4. BFF validates state, exchanges the code server-side using the PKCE verifier and confidential-client authentication, and validates the OIDC response, including nonce.
+5. INFINYX resolves verified (issuer, subject) to an existing internal user. Unknown identities fail closed unless a separately approved provisioning flow exists.
+6. BFF rotates the session identifier and establishes an opaque server-side application session bound to the internal user identity.
+7. For a tenant operation, the user selects a tenant (or supplies a previously selected tenant as a selector). INFINYX begins a tenant-scoped database transaction and checks current active membership and role from the database. Branch assignment is checked where applicable. Authorization and protected data operation use the same transaction.
+8. Client-supplied tenant identifiers never grant access. Missing, suspended, or removed membership and missing branch assignment deny the operation.
+9. Logout invalidates the INFINYX server-side session and follows documented Keycloak end-session/revocation behavior. Invalid or expired sessions cannot authorize requests.
+10. Provider, mapping, or authorization uncertainty fails closed. Client errors remain generic and do not reveal whether another user's account or tenant exists.
+
+## F. Additional security and privacy requirements
+
+- Protect BFF endpoints against CSRF, session fixation, open redirects, and cross-origin state-changing requests.
+- Rate-limit login, callback, OTP request/resend, and verification attempts.
+- Define session invalidation for user disablement, credential reset, identity unlinking, and suspected compromise.
+- Log correlation IDs and security events, but never credentials, OTPs, access/refresh tokens, session cookies, authorization codes, or CSRF tokens.
+- Keep tenant RLS and DAL checks. Existing custom tenant GUC RLS is defense-in-depth, not protection against arbitrary SQL execution; parameterized SQL and independent security review remain required.
+- Tenant context must be resolved separately from authenticated identity and checked from current database state in the same transaction as the protected operation.
+
+## G. Expanded staging acceptance criteria
+
+Staging is not validated until evidence exists for all applicable criteria:
+
+1. Discovery metadata issuer exactly matches the configured issuer; discovery and JWKS use only trusted configured endpoints.
+2. Valid access tokens pass; wrong issuer/audience, ID tokens presented to APIs, invalid signature, unsupported algorithm, unknown kid after bounded refresh, expired, not-yet-valid, malformed, and otherwise invalid tokens are rejected.
+3. JWKS rotation works without accepting untrusted keys; JWKS/network failures fail closed.
+4. BFF login validates state, nonce, PKCE S256, exact callback URI, and confidential-client authentication.
+5. Browser receives no access/refresh token; cookie flags, session rotation, CSRF defenses, idle/absolute expiry, and logout invalidation are tested.
+6. Open redirects, login CSRF, session fixation, and cross-origin state-changing requests are rejected.
+7. (issuer, subject) maps deterministically to one internal user; unknown identities fail closed unless approved provisioning exists.
+8. Concurrent account-link attempts, duplicate mappings, linking an identity already owned by another user, retries, unlinking, and recovery safeguards are tested.
+9. A valid identity-provider session without current active membership cannot access tenant data.
+10. A multi-tenant user can select only tenants for which current database-backed membership exists; client tenant identifiers never grant access.
+11. Suspended and removed memberships remain denied even with a valid identity-provider token.
+12. Cross-tenant and unassigned-branch access remains denied by INFINYX authorization and database controls.
+13. Email and phone verification feasibility, adapter behavior, abuse controls, and delivery limitations are documented.
+14. No credential, OTP, access/refresh token, session cookie, authorization code, CSRF token, or client secret appears in logs.
+15. Keycloak, JWKS, and database outages fail closed without granting access.
+16. Encrypted backup restore and upgrade/rollback are exercised, including extension compatibility where applicable.
+17. Monitoring/runbooks cover service health, authentication errors, suspicious OTP activity, session invalidation, and incident escalation.
+18. Future-mobile flow is documented as Authorization Code + PKCE S256 with no embedded client secret; it is not claimed as implemented or validated by web BFF tests.
+
+Any failed criterion blocks a production recommendation unless addressed or explicitly accepted through a separate risk decision.
+
+## H. Repository compatibility gaps
+
+The current repository authentication code must be reconciled before implementation is proposed:
+
+- The existing authenticated-principal model includes a tenant identifier, and the current verifier expects a static PEM key. Neither implements the approved separation of identity from tenant context or trusted OIDC discovery/JWKS rotation.
+- Replace tenant-bearing authentication claims as an authorization source with verified external identity (issuer, subject) mapped to a stable internal user ID.
+- Resolve tenant context separately for each operation from a tenant selector plus current database-backed membership and role checks, within the same tenant-scoped transaction as the protected operation.
+- Review all callers that assume a principal always contains tenantId. Preserve the verified-principal trust boundary and fail-closed behavior; do not allow user-controlled objects to masquerade as authenticated identities.
+- The exact external-identity schema, internal-user provisioning path, BFF session store, and migration strategy remain design items requiring a separate implementation proposal.
+
+No code changes are included in this document revision.
+
+## I. Decisions still required before an implementation proposal
+
+- Staging hosting platform and network boundary.
+- Supported Keycloak version and upgrade policy.
+- BFF deployment boundary, server-side session store, CSRF mechanism, cookie policy, and logout/session invalidation behavior.
+- OIDC client identifiers, API audience, token-use contract, accepted algorithms, JWKS cache policy, and clock-skew tolerance.
+- External-identity mapping schema and internal-user provisioning/recovery flow.
+- Account-linking/unlinking transaction and audit design.
+- Email delivery mechanism and whether Email OTP requires a custom authenticator.
+- SMS adapter interface and test strategy.
+- Secret manager, backup destination, staging test identities, and data-retention policy.
+
+## J. Governance and authorization
+
+This revision records the founder's approval of two design choices: (1) web authentication uses a server-side BFF, while future native mobile uses OIDC Authorization Code + PKCE S256; (2) authenticated identity is independent from tenant context, and tenant selection, membership, role, and branch authorization remain authoritative in INFINYX's current database state.
+
+This document remains a design proposal. Approval of these design refinements does not authorize code changes, Keycloak configuration, staging deployment, public exposure, production credentials, or live message delivery. A separate implementation scope and explicit founder approval are required before any code, infrastructure, or Keycloak configuration changes.
+
+All subsequent work must remain on feat/adr-platform-foundation. Keep main unchanged. No merge, release, deployment, or live message delivery is authorized.
