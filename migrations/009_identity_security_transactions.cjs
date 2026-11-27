@@ -21,9 +21,9 @@ exports.up = (pgm) => {
       consumed_at timestamptz,
       CONSTRAINT identity_security_transactions_id_unique UNIQUE (transaction_id),
       CONSTRAINT identity_security_transactions_expiry_check
-        CHECK (expires_at > created_at),
+        CHECK (expires_at > created_at AND expires_at <= created_at + interval '5 minutes 5 seconds'),
       CONSTRAINT identity_security_transactions_consumed_check
-        CHECK (consumed_at IS NULL OR consumed_at >= created_at)
+        CHECK (consumed_at IS NULL OR (consumed_at >= created_at AND consumed_at < expires_at))
     );
 
     CREATE INDEX identity_security_transactions_expiry_idx
@@ -50,7 +50,7 @@ exports.up = (pgm) => {
       CONSTRAINT identity_step_up_grants_expiry_check
         CHECK (expires_at > created_at AND expires_at <= created_at + interval '5 minutes 5 seconds'),
       CONSTRAINT identity_step_up_grants_consumed_check
-        CHECK (consumed_at IS NULL OR consumed_at >= created_at)
+        CHECK (consumed_at IS NULL OR (consumed_at >= created_at AND consumed_at < expires_at))
     );
 
     CREATE INDEX identity_step_up_grants_user_session_idx
