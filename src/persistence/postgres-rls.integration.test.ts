@@ -416,4 +416,45 @@ integrationDescribe("PostgreSQL tenant RLS integration", () => {
     expect(ownerMembership?.status).toBe("active");
   });
 
-});
+});\n
+  it("requires an audit event for direct lifecycle updates and blocks removed reactivation", async () => {
+    const owner = principalFor("tenant-a");
+    const targetUserId = "user-lifecycle-trigger-guard";
+    const target = principalFor("tenant-a", targetUserId);
+
+    await withTenantTransaction(tenantPool, owner, (transaction) =>
+      transaction.query(
+        "INSERT INTO tenant_memberships (tenant_id, user_id, role) VALUES ($1, $2, $3)",
+        ["tenant-a", targetUserId, "viewer"]
+      )
+    );
+
+    await expect(withTenantTransaction(tenantPool, owner, (transaction) =>
+      transaction.query(
+        "UPDATE tenant_memberships SET status = $1, status_changed_at = now(), status_changed_by = $2, version = version + 1 WHERE tenant_id = $3 AND user_id = $4",
+        ["suspended", owner.subject, "tenant-a", targetUserId]
+      )
+    )).rejects.toBeInstanceOf(TenantPersistenceError);
+
+    await expect(withTenantTransaction(tenantPool, target, (transaction) =>
+      getTenantMembership(transaction, target)
+    )).resolves.toMatchObject({ status: "active" });
+
+    await expect(withTenantTransaction(tenantPool, owner, (transaction) =>
+      transitionTenantMembership(
+        transaction,
+        owner,
+        targetUserId,
+        "removed",
+        "30000000-0000-4000-8000-000000000001"
+      )
+    )).resolves.toEqual({ outcome: "succeeded" });
+
+    await expect(withTenantTransaction(tenantPool, owner, (transaction) =>
+      transaction.query(
+        "UPDATE tenant_memberships SET status = $1, status_changed_at = now(), status_changed_by = $2, version = version + 1 WHERE tenant_id = $3 AND user_id = $4",
+        ["active", owner.subject, "tenant-a", targetUserId]
+      )
+    )).rejects.toBeInstanceOf(TenantPersistenceError);
+  });
+
