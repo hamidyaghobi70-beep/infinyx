@@ -40,7 +40,7 @@ integrationDescribe("PostgreSQL tenant RLS integration", () => {
   });
 
   const pool = createPostgresPool({
-    DATABASE_URL: databaseUrl,
+    DATABASE_URL: databaseUrl!,
     DATABASE_SSL: "disable",
     DATABASE_POOL_MAX: "1",
     DATABASE_CONNECTION_TIMEOUT_MS: "5000",
