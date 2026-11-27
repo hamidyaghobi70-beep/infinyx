@@ -8,6 +8,7 @@ import {
 } from "../core/authenticated-principal.js";
 import {
   TenantPersistenceError,
+  createTenantMemoryScope,
   withTenantTransaction,
   type SqlQueryResult,
   type TenantSqlClient,
@@ -81,6 +82,20 @@ function fakeDatabase() {
 }
 
 describe("withTenantTransaction", () => {
+  it("creates tenant memory scope only from the active authorized transaction", async () => {
+    const db = fakeDatabase();
+    const scope = await withTenantTransaction(db.pool, principal, "tenant-a", (tx) =>
+      createTenantMemoryScope(tx, principal, "assistant")
+    );
+    expect(scope).toEqual({
+      scope: "tenant",
+      tenantId: "tenant-a",
+      userId: principal.userId,
+      membershipId: "00000000-0000-4000-8000-000000000010",
+      moduleId: "assistant"
+    });
+  });
+
   it("binds the verified tenant in a transaction and commits before release", async () => {
     const db = fakeDatabase();
     const result = await withTenantTransaction(db.pool, principal, "tenant-a", async (tx) => {
