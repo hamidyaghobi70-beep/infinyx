@@ -120,7 +120,7 @@ integrationDescribe("PostgreSQL tenant RLS integration", () => {
   });
 
   it("allows a tenant to read only its own tenant and membership rows", async () => {
-    const rows = await withTenantTransaction(tenantPool, principalFor("tenant-a"), "a",
+    const rows = await withTenantTransaction(tenantPool, principalFor("tenant-a"), "tenant-a",
       async (transaction) => {
         const tenants = await transaction.query<TenantRow>(
           "SELECT id, name FROM tenants ORDER BY id"
@@ -137,7 +137,7 @@ integrationDescribe("PostgreSQL tenant RLS integration", () => {
   });
 
   it("prevents cross-tenant reads, updates, deletes, and inserts", async () => {
-    const results = await withTenantTransaction(tenantPool, principalFor("tenant-a"), "a",
+    const results = await withTenantTransaction(tenantPool, principalFor("tenant-a"), "tenant-a",
       async (transaction) => {
         const read = await transaction.query<TenantRow>(
           "SELECT id, name FROM tenants WHERE id = $1",
@@ -160,7 +160,7 @@ integrationDescribe("PostgreSQL tenant RLS integration", () => {
     expect(results.remove).toEqual([]);
 
     await expect(
-      withTenantTransaction(tenantPool, principalFor("tenant-a"), "a",
+      withTenantTransaction(tenantPool, principalFor("tenant-a"), "tenant-a",
         (transaction) =>
           transaction.query(
             "INSERT INTO tenants (id, name) VALUES ($1, $2) RETURNING id",
@@ -183,12 +183,12 @@ integrationDescribe("PostgreSQL tenant RLS integration", () => {
   });
 
   it("does not leak tenant context when a pooled connection is reused", async () => {
-    const tenantA = await withTenantTransaction(tenantPool, principalFor("tenant-a"), "a",
+    const tenantA = await withTenantTransaction(tenantPool, principalFor("tenant-a"), "tenant-a",
       (transaction) => transaction.query<TenantRow>(
         "SELECT id, name FROM tenants"
       )
     );
-    const tenantB = await withTenantTransaction(tenantPool, principalFor("tenant-b"), "b",
+    const tenantB = await withTenantTransaction(tenantPool, principalFor("tenant-b"), "tenant-b",
       (transaction) => transaction.query<TenantRow>(
         "SELECT id, name FROM tenants"
       )
@@ -284,7 +284,7 @@ integrationDescribe("PostgreSQL tenant RLS integration", () => {
 
   it("denies users without a membership and enforces explicit role allowlists", async () => {
     await expect(
-      withTenantTransaction(tenantPool, principalFor("tenant-a", "user-not-a-member"), "a",
+      withTenantTransaction(tenantPool, principalFor("tenant-a", "user-not-a-member"), "tenant-a",
         (transaction) => getTenantMembership(
           transaction,
           principalFor("tenant-a", "user-not-a-member")
@@ -293,7 +293,7 @@ integrationDescribe("PostgreSQL tenant RLS integration", () => {
     ).resolves.toBeNull();
 
     await expect(
-      withTenantTransaction(tenantPool, principalFor("tenant-a"), "a",
+      withTenantTransaction(tenantPool, principalFor("tenant-a"), "tenant-a",
         (transaction) => requireTenantRole(
           transaction,
           principalFor("tenant-a"),
@@ -411,7 +411,7 @@ integrationDescribe("PostgreSQL tenant RLS integration", () => {
     );
     expect(audit).toEqual([{ outcome: "denied" }]);
 
-    const crossTenantAudit = await withTenantTransaction(tenantPool, principalFor("tenant-b"), "b",
+    const crossTenantAudit = await withTenantTransaction(tenantPool, principalFor("tenant-b"), "tenant-b",
       (transaction) => transaction.query<{ outcome: string }>(
         "SELECT outcome FROM tenant_membership_audit_events WHERE tenant_id = $1 AND correlation_id = $2",
         ["tenant-a", "20000000-0000-4000-8000-000000000001"]
@@ -607,7 +607,7 @@ integrationDescribe("PostgreSQL tenant RLS integration", () => {
     expect(tenantA.invitations).toEqual([{ invitation_id: invitationId }]);
     expect(tenantA.outbox).toEqual([{ invitation_id: invitationId }]);
 
-    const tenantB = await withTenantTransaction(tenantPool, principalFor("tenant-b"), "b",
+    const tenantB = await withTenantTransaction(tenantPool, principalFor("tenant-b"), "tenant-b",
       async (transaction) => ({
         invitations: await transaction.query("SELECT invitation_id FROM tenant_invitations"),
         outbox: await transaction.query("SELECT outbox_id FROM tenant_invitation_delivery_outbox")
@@ -709,7 +709,7 @@ integrationDescribe("PostgreSQL tenant RLS integration", () => {
       role: "viewer"
     }]);
 
-    const wrongTenant = await withTenantTransaction(tenantPool, principalFor("tenant-b"), "b", (transaction) =>
+    const wrongTenant = await withTenantTransaction(tenantPool, principalFor("tenant-b"), "tenant-b", (transaction) =>
       transaction.query(
         "SELECT user_id FROM tenant_memberships WHERE tenant_id = $1 AND user_id = $2",
         ["tenant-a", invitee.userId]
