@@ -61,12 +61,18 @@ jobs:
           GRANT SELECT, INSERT ON tenant_invitation_delivery_outbox TO infinyx_app;
           GRANT UPDATE (status, attempts, next_attempt_at, sent_at) ON tenant_invitation_delivery_outbox TO infinyx_app;
           GRANT EXECUTE ON FUNCTION lookup_tenant_for_invitation_token(bytea) TO infinyx_app;
+          INSERT INTO users (id) VALUES
+            ('10000000-0000-4000-8000-000000000001'),
+            ('10000000-0000-4000-8000-000000000002');
+          INSERT INTO user_external_identities (user_id, issuer, subject) VALUES
+            ('10000000-0000-4000-8000-000000000001', 'https://infinyx.integration.test', 'user-tenant-a'),
+            ('10000000-0000-4000-8000-000000000002', 'https://infinyx.integration.test', 'user-tenant-b');
           INSERT INTO tenants (id, name) VALUES
             ('tenant-a', 'Tenant A'),
             ('tenant-b', 'Tenant B');
-          INSERT INTO tenant_memberships (tenant_id, user_id, role) VALUES
-            ('tenant-a', 'user-tenant-a', 'owner'),
-            ('tenant-b', 'user-tenant-b', 'owner');
+          INSERT INTO tenant_memberships (tenant_id, user_id, internal_user_id, role) VALUES
+            ('tenant-a', '10000000-0000-4000-8000-000000000001', '10000000-0000-4000-8000-000000000001', 'owner'),
+            ('tenant-b', '10000000-0000-4000-8000-000000000002', '10000000-0000-4000-8000-000000000002', 'owner');
           SQL
       - name: Check migration file syntax
         run: npm run db:migrate:check
