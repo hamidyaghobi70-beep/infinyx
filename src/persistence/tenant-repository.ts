@@ -1,4 +1,5 @@
-import type { TenantPrincipal } from "./tenant-transaction.js";
+import type { AuthenticatedPrincipal } from "../core/authenticated-principal.js";
+import { getTenantTransactionContext } from "./tenant-transaction.js";
 import {
   requireTenantRole,
   TENANT_ROLES,
@@ -18,8 +19,9 @@ export interface TenantRecord {
  */
 export async function getCurrentTenant(
   transaction: TenantTransaction,
-  principal: TenantPrincipal
+  principal: AuthenticatedPrincipal
 ): Promise<{ tenant: TenantRecord; membership: TenantMembership } | null> {
+  const { tenantId } = getTenantTransactionContext(transaction, principal);
   const membership = await requireTenantRole(
     transaction,
     principal,
@@ -32,7 +34,7 @@ export async function getCurrentTenant(
     created_at: string;
   }>(
     "SELECT id, name, created_at::text AS created_at FROM tenants WHERE id = $1 LIMIT 1",
-    [principal.tenantId]
+    [tenantId]
   );
 
   const row = rows[0];
