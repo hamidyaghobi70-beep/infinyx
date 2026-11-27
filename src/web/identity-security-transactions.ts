@@ -179,7 +179,7 @@ export class PostgresIdentitySecurityTransactionStore {
             AND session_id_hash = $4
             AND purpose = $8
             AND consumed_at IS NOT NULL
-            AND consumed_at > $6 - interval '5 minutes'
+            AND consumed_at > ($6::timestamptz - interval '5 minutes')
          ON CONFLICT DO NOTHING`,
         [grantHash, sourceTransactionId, userId, sessionIdHash, purpose,
           createdAt, expiresAt, transactionPurpose]
