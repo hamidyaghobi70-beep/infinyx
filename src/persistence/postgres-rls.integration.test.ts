@@ -136,6 +136,22 @@ integrationDescribe("PostgreSQL tenant RLS integration", () => {
     expect(rows.memberships).toEqual([{ tenant_id: "tenant-a" }]);
   });
 
+  it("allows one internal user to access multiple tenants only with separate active memberships", async () => {
+    const identity = principalFor("tenant-a");
+    const tenantA = await withTenantTransaction(tenantPool, identity, "tenant-a",
+      (transaction) => transaction.query<{ id: string }>("SELECT id FROM tenants")
+    );
+    const tenantC = await withTenantTransaction(tenantPool, identity, "tenant-c",
+      (transaction) => transaction.query<{ id: string }>("SELECT id FROM tenants")
+    );
+
+    expect(tenantA).toEqual([{ id: "tenant-a" }]);
+    expect(tenantC).toEqual([{ id: "tenant-c" }]);
+    await expect(withTenantTransaction(tenantPool, identity, "tenant-b",
+      (transaction) => transaction.query("SELECT id FROM tenants")
+    )).rejects.toBeInstanceOf(TenantAuthorizationError);
+  });
+
   it("prevents cross-tenant reads, updates, deletes, and inserts", async () => {
     const results = await withTenantTransaction(tenantPool, principalFor("tenant-a"), "tenant-a",
       async (transaction) => {
