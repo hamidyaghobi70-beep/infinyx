@@ -42,14 +42,14 @@ function generateTestCertificates(): TestCertificates {
 
   run([
     "req", "-x509", "-newkey", "rsa:2048", "-nodes",
-    "-keyout", caKey, "-out", ca, "-days", "3",
+    "-keyout", caKey, "-out", ca, "-days", "3650",
     "-subj", "/CN=INFINYX Test CA",
     "-addext", "basicConstraints=critical,CA:TRUE",
     "-addext", "keyUsage=critical,keyCertSign,cRLSign"
   ]);
   run([
     "req", "-x509", "-newkey", "rsa:2048", "-nodes",
-    "-keyout", otherCaKey, "-out", otherCa, "-days", "3",
+    "-keyout", otherCaKey, "-out", otherCa, "-days", "3650",
     "-subj", "/CN=INFINYX Untrusted Test CA",
     "-addext", "basicConstraints=critical,CA:TRUE",
     "-addext", "keyUsage=critical,keyCertSign,cRLSign"
@@ -72,7 +72,7 @@ function generateTestCertificates(): TestCertificates {
   run([
     "x509", "-req", "-in", serverCsr, "-CA", ca, "-CAkey", caKey,
     "-CAcreateserial", "-out", serverCertificate, "-days", "2",
-    "-sha256", "-extfile", extensions
+    "-sha256", "-extfile", extensions, "-days", "3650"
   ]);
 
   writeFileSync(join(directory, "index.txt"), "");
