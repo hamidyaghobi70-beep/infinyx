@@ -72,6 +72,8 @@ describe("serialized web-session access-token refresh", () => {
     expect(accessToken).toBe("new-access-token");
     expect(refresh).toHaveBeenCalledOnce();
     expect(fake.calls.some(call => call.sql.includes("FOR UPDATE"))).toBe(true);
+    expect(fake.calls.find(call => call.sql.includes("SELECT user_id::text AS user_id"))?.sql)
+      .toContain("user_external_identity_lifecycle");
     expect(fake.calls[0]?.sql).toBe("BEGIN");
     expect(fake.calls.at(-1)?.sql).toBe("COMMIT");
     const updated = decryptSessionTokenBundle(fake.stored.encrypted_token_bundle, key);
