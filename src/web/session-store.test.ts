@@ -101,6 +101,7 @@ describe("serialized web-session access-token refresh", () => {
   it("allows only one provider call while a durable reservation is pending", async () => {
     const fake = fakePool(sessionRow(now.getTime() - 1, "single-use-refresh-token"));
     const store = new PostgresWebSessionStore(fake.pool, key, () => now);
+    const sessionId = createOpaqueSessionId();
     let signalStarted!: () => void;
     let finishRefresh!: () => void;
     const started = new Promise<void>(resolve => { signalStarted = resolve; });
@@ -115,9 +116,9 @@ describe("serialized web-session access-token refresh", () => {
       };
     });
 
-    const first = store.getUsableAccessToken(createOpaqueSessionId(), refresh);
+    const first = store.getUsableAccessToken(sessionId, refresh);
     await started;
-    const second = await store.getUsableAccessToken(createOpaqueSessionId(), refresh);
+    const second = await store.getUsableAccessToken(sessionId, refresh);
     expect(second).toBeNull();
     expect(refresh).toHaveBeenCalledOnce();
     finishRefresh();
