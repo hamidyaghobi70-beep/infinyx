@@ -133,7 +133,7 @@ export class PostgresIdentitySecurityTransactionStore {
           WHERE grant_hash = $1
             AND user_id = $2::uuid
             AND session_id_hash = $3
-            AND purpose = 'identity_link'
+            AND purpose = $4
             AND consumed_at IS NULL
             AND expires_at > $5`,
         [grantHash, userId, sessionIdHash, "identity_link", createdAt]
