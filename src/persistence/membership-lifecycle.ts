@@ -1,4 +1,4 @@
-import type { AuthenticatedPrincipal } from "../core/authenticated-principal.js";
+import type { TenantPrincipal } from "./tenant-transaction.js";
 import type { TenantTransaction } from "./tenant-transaction.js";
 import {
   TenantAuthorizationError,
@@ -94,15 +94,14 @@ async function writeAudit(
  */
 export async function transitionTenantMembership(
   transaction: TenantTransaction,
-  principal: AuthenticatedPrincipal,
+  principal: TenantPrincipal,
   targetUserId: string,
   requestedStatus: MembershipLifecycleTargetStatus,
   correlationId: string
 ): Promise<MembershipLifecycleResult> {
   if (
     typeof targetUserId !== "string" ||
-    targetUserId.length < 1 ||
-    targetUserId.length > 256 ||
+    !UUID_PATTERN.test(targetUserId) ||
     !isMembershipStatus(requestedStatus) ||
     !UUID_PATTERN.test(correlationId)
   ) {
@@ -125,7 +124,7 @@ export async function transitionTenantMembership(
   const prior = priorEvents[0];
   if (prior) {
     if (
-      prior.actor_user_id !== principal.subject ||
+      prior.actor_user_id !== principal.userId ||
       prior.target_user_id !== targetUserId ||
       prior.requested_status !== requestedStatus
     ) {
@@ -135,22 +134,22 @@ export async function transitionTenantMembership(
   }
 
   const memberRows = await transaction.query<MembershipRow>(
-    `SELECT membership_id::text AS membership_id, user_id, role, status,
-            generation, version
+    `SELECT membership_id::text AS membership_id, internal_user_id::text AS user_id,
+            role, status, generation, version
        FROM tenant_memberships
       WHERE tenant_id = $1
-        AND user_id = ANY($2::text[])
+        AND internal_user_id = ANY($2::uuid[])
         AND generation = (
           SELECT max(latest.generation)
             FROM tenant_memberships AS latest
            WHERE latest.tenant_id = tenant_memberships.tenant_id
-             AND latest.user_id = tenant_memberships.user_id
+             AND latest.internal_user_id = tenant_memberships.internal_user_id
         )
       ORDER BY user_id
       FOR UPDATE`,
-    [principal.tenantId, [principal.subject, targetUserId]]
+    [principal.tenantId, [principal.userId, targetUserId]]
   );
-  const actor = memberRows.find((row) => row.user_id === principal.subject);
+  const actor = memberRows.find((row) => row.user_id === principal.userId);
   const target = memberRows.find((row) => row.user_id === targetUserId);
 
   let reasonCode = "";
@@ -161,7 +160,7 @@ export async function transitionTenantMembership(
   if (!actor || actor.status !== "active" || !isTenantRole(actor.role) ||
       (actor.role !== "owner" && actor.role !== "admin")) {
     reasonCode = "actor_not_authorized";
-  } else if (targetUserId === principal.subject) {
+  } else if (targetUserId === principal.userId) {
     reasonCode = "self_lifecycle_forbidden";
   } else if (!target || !isTenantRole(target.role) ||
       !isMembershipStatus(target.status)) {
@@ -193,7 +192,7 @@ export async function transitionTenantMembership(
         RETURNING membership_id::text AS membership_id`,
       [
         requestedStatus,
-        principal.subject,
+        principal.userId,
         correlationId,
         principal.tenantId,
         target.membership_id,
@@ -209,7 +208,7 @@ export async function transitionTenantMembership(
 
   await writeAudit(transaction, {
     tenantId: principal.tenantId,
-    actorUserId: principal.subject,
+    actorUserId: principal.userId,
     targetUserId,
     targetMembershipId: target?.membership_id ?? null,
     requestedStatus,
