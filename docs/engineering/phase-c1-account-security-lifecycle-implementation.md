@@ -1,6 +1,6 @@
 # C1 — Internal User Account Security Lifecycle Implementation
 
-**Status:** Implemented on `feat/adr-platform-foundation`; CI verification pending.
+**Status:** Implemented on `feat/adr-platform-foundation`; CI verified.
 
 ## Scope delivered
 
@@ -43,4 +43,5 @@ The available CI database is an ephemeral PostgreSQL 16 database populated with 
 ## Verification
 
 - Migration syntax check, PostgreSQL migration execution, and account-security SQL assertions are added to CI.
-- CI result: pending.
+- CI verification: passed in the full cross-phase run (31 test files, 194 tests; migration checks, typecheck, and build passed).
+- Cross-phase CI run: https://github.com/hamidyaghobi70-beep/infinyx/actions/runs/45958974264
