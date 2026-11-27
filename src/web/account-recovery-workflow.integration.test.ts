@@ -2,6 +2,10 @@ import { randomUUID } from "node:crypto";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { createPostgresPool } from "../persistence/postgres-pool.js";
 import { recoverSuspendedAccount } from "./account-recovery-workflow.js";
+import { createOpaqueSessionId } from "./session-crypto.js";
+import { PostgresAccountRecoveryTransactionStore } from "./account-recovery-transactions.js";
+import { PostgresWebSessionStore } from "./session-store.js";
+import { completeAccountSessionRevocation } from "./account-session-revocation.js";
 
 const databaseUrl = process.env.INFINYX_TEST_DATABASE_URL;
 const integrationDescribe = databaseUrl ? describe : describe.skip;
@@ -73,6 +77,17 @@ integrationDescribe("PostgreSQL safe suspended account recovery", () => {
     return { userId, issuer, subject, identityId };
   }
 
+  it("persists and consumes recovery transactions with the least-privilege application role", async () => {
+    const store = new PostgresAccountRecoveryTransactionStore(pool, Buffer.alloc(32, 23));
+    const state = createOpaqueSessionId();
+    const browserBinding = createOpaqueSessionId();
+    const payload = { codeVerifier: "A".repeat(64), nonce: createOpaqueSessionId() };
+    await store.create(state, browserBinding, payload, new Date(Date.now() + 240_000));
+    await expect(store.consume(state, createOpaqueSessionId())).resolves.toBeNull();
+    await expect(store.consume(state, browserBinding)).resolves.toMatchObject({ payload });
+    await expect(store.consume(state, browserBinding)).resolves.toBeNull();
+  });
+
   it("recovers only through the exact active identity and preserves identity binding and lifecycle history", async () => {
     const account = await createAccount();
     const bindingBefore = await adminPool.query(
@@ -109,6 +124,16 @@ integrationDescribe("PostgreSQL safe suspended account recovery", () => {
       [result.outboxId]
     );
     expect(outbox.rows[0]).toEqual({ user_id: account.userId, completed_at: null });
+
+    const sessions = new PostgresWebSessionStore(pool, Buffer.alloc(32, 31));
+    await expect(completeAccountSessionRevocation(
+      pool, sessions, account.userId, result.outboxId
+    )).resolves.toBe(true);
+    const completedOutbox = await adminPool.query(
+      "SELECT completed_at FROM user_account_session_revocation_outbox WHERE outbox_id = $1::uuid",
+      [result.outboxId]
+    );
+    expect(completedOutbox.rows[0]?.completed_at).not.toBeNull();
 
     const audit = await adminPool.query(
       `SELECT outcome, reason_code, user_id::text, identity_id::text
