@@ -188,10 +188,13 @@ limited to fixed lifecycle labels: reservation claimed/conflicted, provider
 failure/response rejection, and persistence success/conflict/failure. Events
 carry no session, user, attempt, provider-error, or token values. Observer
 exceptions are swallowed so telemetry outages cannot change authentication
-behavior. The default observer is a no-op; deployments must explicitly supply
-a sink if they want these events exported.
+behavior. The default observer remains a no-op for library and test callers. The
+production Web BFF entry point explicitly supplies a structured stderr observer.
+Each line is JSON with only an ISO-8601 timestamp, the fixed component label
+`web_session_refresh`, and one event label. The process supervisor or container
+runtime may collect stderr; external forwarding, access controls, and retention
+remain deployment responsibilities and have not been configured here.
 
 Do not attach raw request context, provider response bodies, exception messages,
-cookies, or identifiers to an observer implementation. A future production
-sink should add its own timestamp and aggregate dimensions only after a separate
-privacy and retention review.
+cookies, or identifiers to an observer implementation. Any future aggregate
+dimensions or external sink require a separate privacy and retention review.
