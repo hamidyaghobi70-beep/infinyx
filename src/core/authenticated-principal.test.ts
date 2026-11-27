@@ -125,14 +125,15 @@ describe("bearer middleware", () => {
     let body: unknown;
     let nextCalled = false;
     const locals: Record<string, unknown> = {};
-    const request = {
-      header: (name: string) => name.toLowerCase() === "authorization" ? header : undefined
-    } as Request;
     const response = {
       locals,
       status(code: number) { statusCode = code; return this; },
       json(value: unknown) { body = value; return this; }
     } as unknown as Response;
+    const request = {
+      header: (name: string) => name.toLowerCase() === "authorization" ? header : undefined,
+      res: response
+    } as Request;
     createBearerAuthMiddleware(verify)(request, response, () => { nextCalled = true; });
     return { statusCode, body, nextCalled, locals, request };
   }
