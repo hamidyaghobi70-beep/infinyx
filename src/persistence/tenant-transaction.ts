@@ -28,15 +28,16 @@ export interface TenantTransaction {
   ): Promise<readonly Row[]>;
 }
 
-export interface TenantPrincipal extends AuthenticatedPrincipal {
+export interface TenantTransactionContext {
   readonly tenantId: string;
+  readonly userId: string;
   readonly membershipId: string;
   readonly role: "owner" | "admin" | "manager" | "editor" | "viewer";
   readonly generation: number;
   readonly membershipVersion: string;
 }
 
-const tenantPrincipals = new WeakSet<object>();
+const tenantContexts = new WeakMap<object, TenantTransactionContext>();
 
 export class TenantAuthorizationError extends Error {
   constructor() {
@@ -45,21 +46,35 @@ export class TenantAuthorizationError extends Error {
   }
 }
 
-export function isTenantPrincipal(value: unknown): value is TenantPrincipal {
-  return !!value && typeof value === "object" && tenantPrincipals.has(value);
+export function getTenantTransactionContext(
+  transaction: TenantTransaction,
+  principal?: AuthenticatedPrincipal
+): TenantTransactionContext {
+  const context = tenantContexts.get(transaction as object);
+  if (!context || (principal && (
+    !isAuthenticatedPrincipal(principal) || principal.userId !== context.userId
+  ))) {
+    throw new TenantAuthorizationError();
+  }
+  return context;
 }
 
-export function createTenantMemoryScope(principal: TenantPrincipal, moduleId: string) {
-  if (!isTenantPrincipal(principal) || typeof moduleId !== "string" ||
-      moduleId.trim().length === 0 || moduleId.length > 128 ||
-      /[\\u0000-\\u001f\\u007f-\\u009f]/u.test(moduleId)) {
+/** Tenant/business/project memory scope can be derived only inside an authorized transaction. */
+export function createTenantMemoryScope(
+  transaction: TenantTransaction,
+  principal: AuthenticatedPrincipal,
+  moduleId: string
+) {
+  const context = getTenantTransactionContext(transaction, principal);
+  if (typeof moduleId !== "string" || moduleId.trim().length === 0 ||
+      moduleId.length > 128 || /[\\u0000-\\u001f\\u007f-\\u009f]/u.test(moduleId)) {
     throw new AuthenticationError();
   }
   return Object.freeze({
     scope: "tenant" as const,
-    tenantId: principal.tenantId,
-    userId: principal.userId,
-    membershipId: principal.membershipId,
+    tenantId: context.tenantId,
+    userId: context.userId,
+    membershipId: context.membershipId,
     moduleId
   });
 }
@@ -72,21 +87,16 @@ export class TenantPersistenceError extends Error {
 }
 
 /**
- * Runs trusted repository work in a transaction bound to a verified principal.
- * The callback must contain application-owned SQL only; never pass client input
- * as SQL text. All values must be supplied through the parameter array.
- *
- * This is a transaction-context primitive, not proof of RLS isolation.
+ * Selects a tenant independently from authentication, establishes RLS context,
+ * and proves an active membership for the internal user before invoking work.
  */
 export async function withTenantTransaction<Result>(
   pool: TenantSqlPool,
   principal: AuthenticatedPrincipal,
   tenantId: string,
-  work: (transaction: TenantTransaction, tenantPrincipal: TenantPrincipal) => Promise<Result>
+  work: (transaction: TenantTransaction) => Promise<Result>
 ): Promise<Result> {
-  if (!isAuthenticatedPrincipal(principal)) {
-    throw new AuthenticationError();
-  }
+  if (!isAuthenticatedPrincipal(principal)) throw new AuthenticationError();
   if (typeof tenantId !== "string" || tenantId.trim().length === 0 ||
       tenantId.length > 256 || /[\\u0000-\\u001f\\u007f-\\u009f]/u.test(tenantId)) {
     throw new TenantAuthorizationError();
@@ -103,14 +113,14 @@ export async function withTenantTransaction<Result>(
   let transactionActive = false;
   let transactionFailed = false;
   let destroyClient = false;
+  let tenantTransaction: TenantTransaction | undefined;
+
   const controlQuery = async (sql: string, values?: readonly unknown[]) => {
     try {
       await client.query(sql, values);
     } catch {
       transactionFailed = true;
-      if (sql === "BEGIN") {
-        destroyClient = true;
-      }
+      if (sql === "BEGIN") destroyClient = true;
       throw new TenantPersistenceError();
     }
   };
@@ -118,10 +128,7 @@ export async function withTenantTransaction<Result>(
   try {
     await controlQuery("BEGIN");
     transactionOpen = true;
-    await controlQuery(
-      "SELECT set_config('app.tenant_id', $1, true)",
-      [tenantId]
-    );
+    await controlQuery("SELECT set_config('app.tenant_id', $1, true)", [tenantId]);
 
     let membership: {
       membership_id: string;
@@ -150,6 +157,7 @@ export async function withTenantTransaction<Result>(
       transactionFailed = true;
       throw new TenantPersistenceError();
     }
+
     if (!membership ||
         !["owner", "admin", "manager", "editor", "viewer"].includes(membership.role) ||
         !Number.isSafeInteger(membership.generation) ||
@@ -157,25 +165,13 @@ export async function withTenantTransaction<Result>(
       throw new TenantAuthorizationError();
     }
 
-    const tenantPrincipal = Object.freeze({
-      ...principal,
-      tenantId,
-      membershipId: membership.membership_id,
-      role: membership.role as TenantPrincipal["role"],
-      generation: membership.generation,
-      membershipVersion: String(membership.version)
-    });
-    tenantPrincipals.add(tenantPrincipal);
-
     transactionActive = true;
-    const transaction: TenantTransaction = Object.freeze({
+    tenantTransaction = Object.freeze({
       query: async <Row = Record<string, unknown>>(
         sql: string,
         values: readonly unknown[] = []
       ): Promise<readonly Row[]> => {
-        if (!transactionActive) {
-          throw new TenantPersistenceError();
-        }
+        if (!transactionActive) throw new TenantPersistenceError();
         try {
           const result = await client.query<Row>(sql, values);
           return result.rows;
@@ -185,41 +181,45 @@ export async function withTenantTransaction<Result>(
         }
       }
     });
+    tenantContexts.set(tenantTransaction as object, Object.freeze({
+      tenantId,
+      userId: principal.userId,
+      membershipId: membership.membership_id,
+      role: membership.role as TenantTransactionContext["role"],
+      generation: membership.generation,
+      membershipVersion: String(membership.version)
+    }));
 
-    const result = await work(transaction, tenantPrincipal);
+    const result = await work(tenantTransaction);
     transactionActive = false;
-    if (transactionFailed) {
-      throw new TenantPersistenceError();
-    }
+    if (transactionFailed) throw new TenantPersistenceError();
     await controlQuery("COMMIT");
     transactionOpen = false;
     return result;
   } catch (error) {
+    transactionActive = false;
     if (transactionOpen) {
       try {
         await client.query("ROLLBACK");
       } catch {
-        // Do not return a connection with uncertain transaction state to the pool.
         destroyClient = true;
       }
     }
     throw error;
   } finally {
     transactionActive = false;
+    if (tenantTransaction) tenantContexts.delete(tenantTransaction as object);
     try {
       client.release(destroyClient);
     } catch {
-      // A release failure must not replace the operation's original outcome.
+      // Preserve the original transaction result.
     }
   }
 }
 
-
 /**
- * Opens a transaction for an invitation only after the database's narrowly
- * privileged token-hash lookup resolves its tenant. The caller cannot supply
- * a tenant ID. The lookup function must be owned by a dedicated, reviewed
- * BYPASSRLS role in production; the ordinary app role receives EXECUTE only.
+ * Invitation acceptance is the only tenant entry path without pre-existing
+ * membership. The tenant is resolved from the token hash, never client input.
  */
 export async function withInvitationTenantTransaction<Result>(
   pool: TenantSqlPool,
@@ -268,15 +268,9 @@ export async function withInvitationTenantTransaction<Result>(
       transactionFailed = true;
       throw new TenantPersistenceError();
     }
-    if (!tenantId || tenantId.length > 256) {
-      throw new TenantPersistenceError();
-    }
+    if (!tenantId || tenantId.length > 256) throw new TenantPersistenceError();
 
-    await controlQuery(
-      "SELECT set_config('app.tenant_id', $1, true)",
-      [tenantId]
-    );
-
+    await controlQuery("SELECT set_config('app.tenant_id', $1, true)", [tenantId]);
     transactionActive = true;
     const transaction: TenantTransaction = Object.freeze({
       query: async <Row = Record<string, unknown>>(
