@@ -7,7 +7,7 @@ import {
   TenantAuthorizationError,
   type TenantRole
 } from "./tenant-membership.js";
-import type { TenantSqlClient, TenantSqlPool } from "./tenant-transaction.js";
+import type { TenantTransaction } from "./tenant-transaction.js";
 
 const issuer = "https://infinyx.membership.test";
 const audience = "infinyx-membership-test";
@@ -36,8 +36,8 @@ function principal() {
   return verifier(`${unsigned}.${signature}`);
 }
 
-function poolWithRole(role: TenantRole | null): TenantSqlPool {
-  const client: TenantSqlClient = {
+function transactionWithRole(role: TenantRole | null): TenantTransaction {
+  return {
     query: vi.fn(async <Row = Record<string, unknown>>(sql: string) => {
       if (sql === "BEGIN" || sql === "COMMIT" || sql === "ROLLBACK" ||
           sql.startsWith("SELECT set_config")) {
@@ -45,16 +45,14 @@ function poolWithRole(role: TenantRole | null): TenantSqlPool {
       }
       const rows = role ? [{ role } as unknown as Row] : [];
       return { rows, rowCount: role ? 1 : 0 };
-    }),
-    release: vi.fn()
+    })
   };
-  return { connect: vi.fn(async () => client) };
 }
 
 describe("tenant membership authorization", () => {
   it("resolves the role from the tenant membership row", async () => {
     await expect(
-      getTenantMembership(poolWithRole("manager"), principal())
+      getTenantMembership(transactionWithRole("manager"), principal())
     ).resolves.toEqual({
       tenantId: "tenant-1",
       userId: "user-1",
