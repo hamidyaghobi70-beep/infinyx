@@ -430,6 +430,24 @@ integrationDescribe("PostgreSQL tenant RLS integration", () => {
     expect(ownerMembership?.status).toBe("active");
   });
 
+
+  it("does not grant membership role changes or hard deletion to the app role", async () => {
+    const owner = principalFor("tenant-a");
+    await expect(withTenantTransaction(tenantPool, owner, (transaction) =>
+      transaction.query(
+        "UPDATE tenant_memberships SET role = $1 WHERE tenant_id = $2 AND user_id = $3",
+        ["admin", "tenant-a", "user-tenant-a"]
+      )
+    )).rejects.toBeInstanceOf(TenantPersistenceError);
+
+    await expect(withTenantTransaction(tenantPool, owner, (transaction) =>
+      transaction.query(
+        "DELETE FROM tenant_memberships WHERE tenant_id = $1 AND user_id = $2",
+        ["tenant-a", "user-tenant-a"]
+      )
+    )).rejects.toBeInstanceOf(TenantPersistenceError);
+  });
+
 });\n
   it("requires an audit event for direct lifecycle updates and blocks removed reactivation", async () => {
     const owner = principalFor("tenant-a");
