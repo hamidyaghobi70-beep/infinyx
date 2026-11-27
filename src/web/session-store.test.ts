@@ -116,4 +116,53 @@ describe("serialized web-session access-token refresh", () => {
     expect(await store.getUsableAccessToken("invalid", vi.fn())).toBeNull();
     expect(fake.connect).not.toHaveBeenCalled();
   });
+
+  it("fails closed when the account is inactive or has pending revocation", async () => {
+    const calls: string[] = [];
+    const pool = {
+      query: vi.fn(async (sql: string) => {
+        calls.push(sql);
+        return { rows: [], rowCount: 0 };
+      })
+    } as unknown as Pool;
+    const store = new PostgresWebSessionStore(pool, key, () => now);
+    const sessionId = createOpaqueSessionId();
+
+    await expect(store.findActive(sessionId)).resolves.toBeNull();
+    await expect(store.touch(sessionId, new Date(now.getTime() + 60_000))).resolves.toBe(false);
+
+    expect(calls).toHaveLength(2);
+    for (const sql of calls) {
+      expect(sql).toContain("user_account_security");
+      expect(sql).toContain("user_account_session_revocation_outbox");
+      expect(sql).toContain("account_security.status = 'active'");
+    }
+  });
+
+  it("refuses to create a session unless the account is active and both revocation barriers are clear", async () => {
+    const pool = {
+      query: vi.fn(async (sql: string) => {
+        expect(sql).toContain("user_account_security");
+        expect(sql).toContain("user_account_session_revocation_outbox");
+        expect(sql).toContain("identity_session_revocation_outbox");
+        return { rows: [], rowCount: 0 };
+      })
+    } as unknown as Pool;
+    const store = new PostgresWebSessionStore(pool, key, () => now);
+
+    await expect(store.create({
+      sessionId: createOpaqueSessionId(),
+      csrfToken: createCsrfToken(),
+      userId,
+      issuer,
+      subject: "subject-1",
+      tokenBundle: {
+        accessToken: "access-token",
+        accessTokenExpiresAt: now.getTime() + 300_000
+      },
+      idleExpiresAt: new Date(now.getTime() + 1_800_000),
+      absoluteExpiresAt: new Date(now.getTime() + 28_800_000)
+    })).rejects.toThrow("Web session operation failed");
+  });
+
 });
