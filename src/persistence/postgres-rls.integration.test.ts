@@ -429,10 +429,24 @@ integrationDescribe("PostgreSQL tenant RLS integration", () => {
       )
     );
 
+    await expect(withTenantTransaction(tenantPool, target, (transaction) =>
+      transaction.query(
+        "UPDATE tenant_memberships SET status = $1, status_changed_at = now(), status_changed_by = $2, version = version + 1 WHERE tenant_id = $3 AND user_id = $4",
+        ["suspended", targetUserId, "tenant-a", targetUserId]
+      )
+    )).rejects.toBeInstanceOf(TenantPersistenceError);
+
     await expect(withTenantTransaction(tenantPool, owner, (transaction) =>
       transaction.query(
         "UPDATE tenant_memberships SET status = $1, status_changed_at = now(), status_changed_by = $2, version = version + 1 WHERE tenant_id = $3 AND user_id = $4",
         ["suspended", owner.subject, "tenant-a", targetUserId]
+      )
+    )).rejects.toBeInstanceOf(TenantPersistenceError);
+
+    await expect(withTenantTransaction(tenantPool, owner, (transaction) =>
+      transaction.query(
+        "UPDATE tenant_memberships SET status = $1, status_changed_at = now(), status_changed_by = $2, version = version + 1 WHERE tenant_id = $3 AND user_id = $4",
+        ["suspended", "user-lifecycle-trigger-guard", "tenant-a", "user-tenant-a"]
       )
     )).rejects.toBeInstanceOf(TenantPersistenceError);
 
