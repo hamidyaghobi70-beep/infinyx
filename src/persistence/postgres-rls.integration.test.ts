@@ -39,15 +39,8 @@ integrationDescribe("PostgreSQL tenant RLS integration", () => {
     publicKeyPem
   });
 
-  const pool = createPostgresPool({
-    DATABASE_URL: databaseUrl!,
-    DATABASE_SSL: "disable",
-    DATABASE_POOL_MAX: "1",
-    DATABASE_CONNECTION_TIMEOUT_MS: "5000",
-    DATABASE_IDLE_TIMEOUT_MS: "1000",
-    DATABASE_STATEMENT_TIMEOUT_MS: "5000"
-  });
-  const tenantPool = createTenantSqlPool(pool);
+  let pool: ReturnType<typeof createPostgresPool>;
+  let tenantPool: ReturnType<typeof createTenantSqlPool>;
 
   function principalFor(tenantId: string) {
     const encode = (value: unknown) =>
@@ -71,6 +64,15 @@ integrationDescribe("PostgreSQL tenant RLS integration", () => {
   }
 
   beforeAll(async () => {
+    pool = createPostgresPool({
+      DATABASE_URL: databaseUrl!,
+      DATABASE_SSL: "disable",
+      DATABASE_POOL_MAX: "1",
+      DATABASE_CONNECTION_TIMEOUT_MS: "5000",
+      DATABASE_IDLE_TIMEOUT_MS: "1000",
+      DATABASE_STATEMENT_TIMEOUT_MS: "5000"
+    });
+    tenantPool = createTenantSqlPool(pool);
     const client = await pool.connect();
     try {
       const result = await client.query<{ current_user: string }>(
@@ -83,7 +85,7 @@ integrationDescribe("PostgreSQL tenant RLS integration", () => {
   });
 
   afterAll(async () => {
-    await pool.end();
+    if (pool) await pool.end();
   });
 
   it("allows a tenant to read only its own tenant and membership rows", async () => {
