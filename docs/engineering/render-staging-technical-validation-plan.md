@@ -47,7 +47,7 @@ Sources:
 INFINYX currently builds a `pg` pool with `ssl: { rejectUnauthorized: true }`. Its current design also requires a private database path. Therefore:
 
 1. The Render **internal URL is not currently proven compatible** with the application's certificate-verification requirement. Do not silently downgrade to `sslmode=require`.
-2. The Render **external URL is out of scope**: although it may support strict certificate validation, it traverses the public internet and violates the owner's mandatory private-database requirement. Do not evaluate it as a fallback.
+2. The Render **external URL is out of scope**: although it may support strict certificate validation, it traverses the public internet and violates the owner's mandatory private-database requirement. Do not retrieve, test, or evaluate it as a fallback.
 3. Render's external URL commonly includes `sslmode=require`. The node-postgres documentation warns that SSL-related URL parameters such as `sslmode` replace the separately supplied `ssl` object. The current code's `rejectUnauthorized: true` therefore cannot be assumed to remain effective merely because it appears in the pool config. The URL parsing/configuration must be tested and, if necessary, sanitized so explicit strict TLS settings are preserved.
 
 Relevant implementation evidence:
@@ -74,7 +74,7 @@ Render Postgres can have an inbound IP allow-list and external access can be dis
 
 Source: https://render.com/docs/postgresql-creating-connecting
 
-Validation must confirm the final database is not reachable over a public external endpoint unless a narrowly justified operator path is explicitly approved. The default allow-all rule must not be left in place.
+Validation must confirm that public/external database access is disabled. The default allow-all rule must not be left in place.
 
 ### 2.4 Public web-service IP restrictions may require a higher plan
 
@@ -175,9 +175,9 @@ Stop condition:
 ### WP3 — PostgreSQL private path and strict TLS
 
 1. Confirm both databases can be placed in the same region as their dependent services.
-2. Obtain the provider's internal and external connection details using synthetic credentials only.
+2. Obtain only the provider's internal/private connection details using synthetic credentials; do not retrieve or test an external database URL.
 3. For the internal URL, verify whether a supported CA/certificate-validation mechanism exists. The documented self-signed internal certificate behavior currently conflicts with standard `verify-ca`/`verify-full` requirements.
-4. For the external URL, inspect the certificate chain and hostname identity and test strict verification using the Node.js runtime trust store.
+4. Test the internal/private endpoint's certificate chain and hostname identity using the Node.js runtime trust store and a synthetic database credential.
 5. Inspect the final connection string for `sslmode`, `sslrootcert`, `sslcert`, and `sslkey`. Ensure these parameters do not silently override the explicit TLS configuration passed to node-postgres.
 6. Test the actual pinned `pg@8.23.1` behavior with `rejectUnauthorized: true`; test both trusted certificate and deliberately untrusted/mismatched-certificate failure cases.
 7. Verify database inbound external access is disabled; do not propose an external URL or public-IP allow-list as an alternative to private connectivity.
