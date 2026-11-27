@@ -1,4 +1,5 @@
 import * as oidc from "openid-client";
+import { randomUUID } from "node:crypto";
 import type { Pool } from "pg";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import {
@@ -58,11 +59,12 @@ function callbackParameters(url: URL, issuer: string): { state: string; code: st
   return { state: states[0], code: codes[0] };
 }
 
-function validClaims(claims: ReturnType<Awaited<ReturnType<typeof oidc.authorizationCodeGrant>>["claims"]>,
-  issuer: string): claims is NonNullable<typeof claims> & { iss: string; sub: string } {
-  return !!claims && claims.iss === issuer &&
-    typeof claims.sub === "string" && claims.sub.length > 0 &&
-    claims.sub.length <= 512 && !/[\u0000-\u001f\u007f-\u009f]/u.test(claims.sub);
+function validClaims(claims: unknown, issuer: string): claims is { iss: string; sub: string } {
+  if (!claims || typeof claims !== "object") return false;
+  const value = claims as { iss?: unknown; sub?: unknown };
+  return value.iss === issuer &&
+    typeof value.sub === "string" && value.sub.length > 0 &&
+    value.sub.length <= 512 && !/[\\u0000-\\u001f\\u007f-\\u009f]/u.test(value.sub);
 }
 
 export function createIdentityLinkHandlers(deps: Dependencies) {
@@ -238,7 +240,7 @@ export function createIdentityLinkHandlers(deps: Dependencies) {
         return sendJson(response, 401, { error: "identity_link_failed" }, [createExpiredIdentitySecurityCookie()]);
       }
 
-      const correlationId = crypto.randomUUID();
+      const correlationId = randomUUID();
       const result = await registerVerifiedIdentityLink(
         deps.database, session.userId, claims.iss, claims.sub, correlationId
       );
