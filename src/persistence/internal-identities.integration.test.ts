@@ -1,44 +1,20 @@
-import { generateKeyPairSync, randomUUID, sign } from "node:crypto";
+import { randomUUID } from "node:crypto";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { createJwtPrincipalVerifier } from "../core/authenticated-principal.js";
-import { createPostgresPool, createTenantSqlPool } from "./postgres-pool.js";
+import { createPostgresPool } from "./postgres-pool.js";
 import {
   createInternalUser,
   ExternalIdentityConflictError,
   linkExternalIdentity,
-  resolveExternalIdentity
+  resolveExternalIdentity,
+  type IdentityTransaction
 } from "./internal-identities.js";
-import { withTenantTransaction } from "./tenant-transaction.js";
 
 const databaseUrl = process.env.INFINYX_TEST_DATABASE_URL;
 const integrationDescribe = databaseUrl ? describe : describe.skip;
 const issuer = "https://infinyx.identity-integration.test";
-const audience = "infinyx-identity-integration";
 
 integrationDescribe("PostgreSQL internal identity integration", () => {
-  const keys = generateKeyPairSync("rsa", { modulusLength: 2048 });
-  const verifier = createJwtPrincipalVerifier({
-    issuer,
-    audience,
-    publicKeyPem: keys.publicKey.export({ type: "spki", format: "pem" }).toString()
-  });
-  const encode = (value: unknown) => Buffer.from(JSON.stringify(value)).toString("base64url");
-  const unsigned = [
-    encode({ alg: "RS256", typ: "JWT" }),
-    encode({
-      iss: issuer,
-      aud: audience,
-      sub: "user-tenant-a",
-      tenant_id: "tenant-a",
-      exp: Math.floor(Date.now() / 1000) + 600
-    })
-  ].join(".");
-  const principal = verifier(
-    unsigned + "." + sign("RSA-SHA256", Buffer.from(unsigned, "ascii"), keys.privateKey).toString("base64url")
-  );
-
   let pool: ReturnType<typeof createPostgresPool>;
-  let tenantPool: ReturnType<typeof createTenantSqlPool>;
 
   beforeAll(async () => {
     pool = createPostgresPool({
@@ -49,27 +25,57 @@ integrationDescribe("PostgreSQL internal identity integration", () => {
       DATABASE_IDLE_TIMEOUT_MS: "1000",
       DATABASE_STATEMENT_TIMEOUT_MS: "5000"
     });
-    tenantPool = createTenantSqlPool(pool);
   });
 
   afterAll(async () => {
     if (pool) await pool.end();
   });
 
+  async function withIdentityTransaction<Result>(
+    work: (transaction: IdentityTransaction) => Promise<Result>
+  ): Promise<Result> {
+    const client = await pool.connect();
+    let open = false;
+    try {
+      await client.query("BEGIN");
+      open = true;
+      const transaction: IdentityTransaction = {
+        query: async <Row = Record<string, unknown>>(
+          sql: string,
+          values: readonly unknown[] = []
+        ): Promise<readonly Row[]> => {
+          try {
+            const result = await client.query(sql, [...values]);
+            return result.rows as Row[];
+          } catch {
+            throw new Error("Identity transaction failed");
+          }
+        }
+      };
+      const result = await work(transaction);
+      await client.query("COMMIT");
+      open = false;
+      return result;
+    } catch (error) {
+      if (open) {
+        try { await client.query("ROLLBACK"); } catch { /* discard on release */ }
+      }
+      throw error;
+    } finally {
+      client.release();
+    }
+  }
+
   it("creates independent internal users and links multiple external identities to one user", async () => {
     const suffix = randomUUID();
-    const result = await withTenantTransaction(tenantPool, principal, async (transaction) => {
+    const result = await withIdentityTransaction(async (transaction) => {
       const user = await createInternalUser(transaction);
       const secondUser = await createInternalUser(transaction);
-      const firstLink = await linkExternalIdentity(
-        transaction, user.id, issuer, `subject-${suffix}`
-      );
+      const firstLink = await linkExternalIdentity(transaction, user.id, issuer, `subject-${suffix}`);
       const secondLink = await linkExternalIdentity(
         transaction, user.id, "https://secondary.identity.test", `secondary-${suffix}`
       );
-      const resolved = await resolveExternalIdentity(
-        transaction, issuer, `subject-${suffix}`
-      );
+      const resolved = await resolveExternalIdentity(transaction, issuer, `subject-${suffix}`);
       return { user, secondUser, firstLink, secondLink, resolved };
     });
 
@@ -81,7 +87,7 @@ integrationDescribe("PostgreSQL internal identity integration", () => {
 
   it("prevents one external identity from being linked to two internal users", async () => {
     const suffix = randomUUID();
-    await withTenantTransaction(tenantPool, principal, async (transaction) => {
+    await withIdentityTransaction(async (transaction) => {
       const first = await createInternalUser(transaction);
       const second = await createInternalUser(transaction);
       await linkExternalIdentity(transaction, first.id, issuer, `shared-${suffix}`);
@@ -93,15 +99,15 @@ integrationDescribe("PostgreSQL internal identity integration", () => {
 
   it("serializes concurrent attempts to claim the same external identity", async () => {
     const suffix = randomUUID();
-    const [first, second] = await withTenantTransaction(tenantPool, principal, async (transaction) => [
+    const [first, second] = await withIdentityTransaction(async (transaction) => [
       await createInternalUser(transaction),
       await createInternalUser(transaction)
     ]);
     const results = await Promise.allSettled([
-      withTenantTransaction(tenantPool, principal, (transaction) =>
+      withIdentityTransaction((transaction) =>
         linkExternalIdentity(transaction, first.id, issuer, `race-${suffix}`)
       ),
-      withTenantTransaction(tenantPool, principal, (transaction) =>
+      withIdentityTransaction((transaction) =>
         linkExternalIdentity(transaction, second.id, issuer, `race-${suffix}`)
       )
     ]);
@@ -116,10 +122,8 @@ integrationDescribe("PostgreSQL internal identity integration", () => {
 
   it("keeps external identity records immutable and non-deletable to the app role", async () => {
     const suffix = randomUUID();
-    const user = await withTenantTransaction(tenantPool, principal, (transaction) =>
-      createInternalUser(transaction)
-    );
-    await withTenantTransaction(tenantPool, principal, (transaction) =>
+    const user = await withIdentityTransaction((transaction) => createInternalUser(transaction));
+    await withIdentityTransaction((transaction) =>
       linkExternalIdentity(transaction, user.id, issuer, `immutable-${suffix}`)
     );
     await expect(pool.query(
@@ -133,7 +137,7 @@ integrationDescribe("PostgreSQL internal identity integration", () => {
   });
 
   it("does not allow links to nonexistent internal users", async () => {
-    await expect(withTenantTransaction(tenantPool, principal, (transaction) =>
+    await expect(withIdentityTransaction((transaction) =>
       linkExternalIdentity(
         transaction,
         "00000000-0000-4000-8000-000000000001",
