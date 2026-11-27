@@ -35,15 +35,30 @@ Source: https://render.com/docs/private-network
 
 ### 2.2 Critical PostgreSQL TLS compatibility question
 
-Render's current Postgres documentation says internal connections may use TLS with self-signed certificates and that these internal connections do not support `verify-ca` or `verify-full`; the documented option to require encryption without certificate verification is `sslmode=require`.
+Render documents two distinct PostgreSQL connection paths:
 
-Source: https://render.com/docs/postgresql-creating-connecting
+- **Internal URL:** available to services in the same Render account/workspace and region. Internal TLS is optional and uses self-signed certificates. Render says these connections do not support `sslmode=verify-ca` or `sslmode=verify-full`; `sslmode=require` encrypts the connection but does not verify the certificate.
+- **External URL:** traverses the public internet, is always TLS-encrypted with Render-managed certificates, and supports external IP allow-lists. Render's connection tutorial states that the external certificate chain is trusted by normal OS/runtime CA stores and that `verify-full` is supported by compatible clients.
 
-INFINYX's current PostgreSQL pool uses `DATABASE_SSL=require` with `rejectUnauthorized: true`. This is intentionally strict certificate validation. Therefore, **do not assume Render's internal Postgres URL will work with the current application TLS settings**. The certificate chain and hostname-verification behavior must be tested against a disposable database before selection.
+Sources:
+- https://render.com/docs/postgresql-creating-connecting
+- https://render.com/tutorials/postgres-on-render/connection-strings
 
-Permitted resolution paths to investigate:
-- a Render-supported connection endpoint with a certificate chain trusted by the Node.js runtime and hostname validation intact; or
-- a separately reviewed application enhancement to support an explicitly provisioned CA bundle while preserving verification.
+INFINYX currently builds a `pg` pool with `ssl: { rejectUnauthorized: true }`. Its current design also requires a private database path. Therefore:
+
+1. The Render **internal URL is not currently proven compatible** with the application's certificate-verification requirement. Do not silently downgrade to `sslmode=require`.
+2. The Render **external URL may be compatible with strict certificate validation**, but it is a public-network route, not a private-network route. It would require a narrowly restricted database IP allow-list and an explicit architecture decision accepting that network trade-off.
+3. Render's external URL commonly includes `sslmode=require`. The node-postgres documentation warns that SSL-related URL parameters such as `sslmode` replace the separately supplied `ssl` object. The current code's `rejectUnauthorized: true` therefore cannot be assumed to remain effective merely because it appears in the pool config. The URL parsing/configuration must be tested and, if necessary, sanitized so explicit strict TLS settings are preserved.
+
+Relevant implementation evidence:
+- `src/persistence/postgres-pool.ts` currently passes both `connectionString` and `ssl: { rejectUnauthorized: true }`.
+- `pg` is pinned to version `8.23.1` in `package.json`.
+- The current implementation has no explicit CA-bundle configuration.
+
+Sources:
+- https://node-postgres.com/features/ssl
+- https://render.com/docs/postgresql-creating-connecting
+- https://render.com/tutorials/postgres-on-render/connection-strings
 
 Not acceptable:
 - setting `rejectUnauthorized: false`;
@@ -51,7 +66,7 @@ Not acceptable:
 - disabling TLS;
 - storing a production credential in a test.
 
-If no verified TLS path exists, Render is a **no-go** for the current BFF/database configuration until a separately approved code change is designed and tested.
+**Decision gate:** If the private-network database requirement remains mandatory and Render cannot provide a private connection with certificate validation, Render is a **no-go** for this design. The external URL is only a possible alternative if the project owner explicitly approves changing the network requirement to a public TLS endpoint restricted by source IP, and the code-level TLS behavior is proven.
 
 ### 2.3 PostgreSQL inbound access must be explicitly restricted
 
@@ -126,41 +141,59 @@ Acceptance:
 ### WP2 — Keycloak public/private route separation
 
 Before any provider selection:
-1. Inventory all Keycloak endpoints required for browser OIDC: discovery, authorization, token callback/back-channel, JWKS, logout, and any required account endpoints.
-2. Inventory all administrative, management, metrics, health, and debug paths for the exact pinned Keycloak version.
-3. Define an explicit allow-list for browser-facing endpoints and deny all other paths at the proxy.
-4. Verify issuer and discovery URLs remain consistent with the public identity hostname.
-5. Verify the BFF can reach required private endpoints without exposing them publicly.
-6. Test negative cases from an unauthenticated external client: admin console, admin REST APIs, management endpoints, metrics, and unknown paths must be denied.
-7. Test normal browser login and logout through the proxy, including redirects and cookie behavior.
+
+1. Pin the Keycloak version. The current ephemeral CI fixture uses Keycloak `26.3.3`; do not assume route behavior is identical across versions.
+2. Inventory all required user-facing endpoints for the dedicated staging realm.
+3. Follow Keycloak's documented reverse-proxy exposure guidance:
+   - expose only the required `/realms/<staging-realm>/` endpoints;
+   - expose `/resources/` and `/.well-known/` only as required by the tested browser/OIDC flows;
+   - do not expose `/admin/`;
+   - keep `/realms/master/` internal;
+   - do not proxy management port `9000` (health/metrics).
+4. Do not assume `hostname-admin` alone protects the Admin REST API. Keycloak explicitly states that the Administration REST API can still be reached through the frontend hostname; enforce restrictions at the reverse proxy.
+5. Use a reverse proxy mode that can inspect/filter HTTP paths. Keycloak recommends TLS re-encryption for production proxying; it allows path filtering and header handling. Restrict Keycloak network access to the trusted proxy, overwrite (not append) forwarded headers, and configure trusted proxy addresses.
+6. Verify issuer and discovery URLs remain consistent with the public identity hostname. The current BFF discovers endpoints from one configured issuer and validates HTTPS for authorization, token, and JWKS URLs; it has no separate private backchannel endpoint configuration. Do not assume BFF token/JWKS traffic will use a private Keycloak address.
+7. Test normal browser login/logout and all required BFF OIDC flows through the public identity origin.
+8. Test negative cases from an unauthenticated external client: `/admin/`, `/realms/master/`, management port `9000`, metrics, health, debug, unknown paths, and non-staging realms must be inaccessible.
+9. Confirm no other service on the same Render private network can bypass the proxy. Render private networking is shared by services in the same workspace and region; it is not automatically a per-service firewall. A dedicated workspace/network boundary or an equivalent verified control may be needed.
+
+Keycloak references:
+- https://www.keycloak.org/server/reverseproxy
+- https://www.keycloak.org/server/hostname
 
 Acceptance:
-- All required OIDC browser flows work.
-- Every administrative/management path is inaccessible from the public internet.
+- Required staging-realm OIDC flows work.
+- Administrative and management paths are inaccessible from the public internet.
+- Direct access to Keycloak bypassing the proxy is blocked or structurally impossible.
+- Forwarded headers are overwritten and accepted only from trusted proxy sources.
 - No wildcard route or wildcard redirect URI is required.
-- The proxy's route policy is version-controlled, reviewed, and independently testable.
+- The proxy route policy is version-controlled, reviewed, and independently testable.
 
 Stop condition:
 - If Keycloak's required endpoints cannot be separated from administrative endpoints with a reliable default-deny policy, Render is not acceptable for this design.
 
 ### WP3 — PostgreSQL private path and strict TLS
 
-1. Confirm both databases can be placed in the same region as the BFF/Keycloak services.
-2. Obtain the provider's exact internal and external connection details without placing credentials in logs or source control.
-3. Inspect the certificate chain and hostname identity for the intended internal connection.
-4. Test with the current Node.js pool settings and `rejectUnauthorized: true`.
-5. Confirm there is no fallback to plaintext or unverified TLS.
-6. Verify database inbound external access can be disabled.
-7. Verify a connection from an unauthorized external network is rejected.
-8. Verify the BFF can connect privately using the intended least-privilege app role.
+1. Confirm both databases can be placed in the same region as their dependent services.
+2. Obtain the provider's internal and external connection details using synthetic credentials only.
+3. For the internal URL, verify whether a supported CA/certificate-validation mechanism exists. The documented self-signed internal certificate behavior currently conflicts with standard `verify-ca`/`verify-full` requirements.
+4. For the external URL, inspect the certificate chain and hostname identity and test strict verification using the Node.js runtime trust store.
+5. Inspect the final connection string for `sslmode`, `sslrootcert`, `sslcert`, and `sslkey`. Ensure these parameters do not silently override the explicit TLS configuration passed to node-postgres.
+6. Test the actual pinned `pg@8.23.1` behavior with `rejectUnauthorized: true`; test both trusted certificate and deliberately untrusted/mismatched-certificate failure cases.
+7. If the external URL is considered, confirm a dedicated outbound IP or sufficiently narrow documented egress range can be allow-listed on the database. Verify the exact plan/cost and the impact of egress IP changes.
+8. Verify database inbound external access is disabled for the private path, or tightly restricted to the approved BFF egress addresses for an explicitly approved external-TLS alternative.
+9. Verify unauthorized external sources are rejected at the database network boundary.
+10. Verify the BFF uses the least-privilege application role and never a database owner/superuser credential.
 
 Acceptance:
-- TLS handshake and certificate verification succeed with the current code, or a separately approved CA-bundle implementation is completed and verified.
-- External database access is disabled or restricted to a separately approved narrow operator path.
+- The selected connection path uses TLS with certificate-chain and hostname validation.
+- The node-postgres configuration is proven to preserve strict verification after parsing the actual provider URL.
+- If the private-network requirement remains in force, the database connection must use a private URL; an external URL is not an equivalent substitute.
 - No superuser/owner credential is used by the BFF.
 
 Stop condition:
-- If the only workable internal TLS mode requires disabling certificate verification, do not proceed with Render using the current implementation.
+- Do not set `rejectUnauthorized: false`, and do not silently downgrade to unverified `sslmode=require`.
+- If Render's internal endpoint cannot satisfy strict certificate validation, stop unless the project owner separately approves evaluating the external TLS + source-IP-allow-list architecture as a change to the private-network requirement.
 
 ### WP4 — Database roles and migrations
 
@@ -252,7 +285,8 @@ Acceptance:
 |---|---|---|
 | G1 Private networking | BFF/Keycloak/DB same-region private paths | No-go |
 | G2 Keycloak admin isolation | External negative tests deny all admin/management routes | No-go |
-| G3 Strict DB TLS | Current code validates trusted certificate chain | No-go until approved fix |
+| G3 Strict DB TLS | Actual `pg@8.23.1` connection proves certificate and hostname validation | No-go until approved fix |
+| G3a Private DB path | Private URL meets TLS policy, or owner separately approves external TLS + source-IP allow-list trade-off | No-go while private-only requirement remains |
 | G4 Database access | External access disabled/restricted; least privilege | No-go |
 | G5 Backup/restore | Successful isolated restore of both DBs | No-go |
 | G6 Secrets | Runtime injection, access boundaries, rotation plan | No-go |
@@ -280,17 +314,23 @@ Each step that creates services, uses a paid plan, or changes provider configura
 
 Render remains a **conditional candidate, not an approved provider**.
 
-Two high-risk technical questions must be resolved first:
-1. Keycloak's public OIDC surface must be separated from admin/management paths using a robust deny-by-default proxy or an equivalently verified platform control.
-2. Render Postgres internal TLS behavior must be proven compatible with INFINYX's strict certificate validation. The documented self-signed internal certificate behavior may conflict with the current `rejectUnauthorized: true` configuration.
+Three high-risk technical questions must be resolved first:
+1. Keycloak's public OIDC surface must be separated from admin/management paths using a robust deny-by-default proxy. Keycloak documents the public/private path split and explicitly warns that `hostname-admin` alone does not block the Administration REST API on the frontend hostname.
+2. Render's internal PostgreSQL URL uses optional self-signed TLS and does not support standard `verify-ca`/`verify-full`. The external URL supports trusted TLS but traverses the public internet. This creates a real trade-off against INFINYX's private-database requirement.
+3. The current node-postgres configuration must be tested with the actual Render connection URL: URL-level SSL parameters can replace the explicit `ssl` object, so strict verification is not proven by reading `rejectUnauthorized: true` in isolation.
 
-If either cannot be resolved without weakening security, stop the Render path and compare another architecture/provider rather than accepting a security exception.
+If any requirement can only be met by weakening TLS verification or leaving administrative routes public, stop the Render path and compare another architecture/provider. The external database URL is not an approved workaround unless the project owner explicitly accepts the network-boundary change.
 
 ## 8. Sources
 
+- Render Postgres create/connect, internal TLS, external TLS, and IP allow-lists: https://render.com/docs/postgresql-creating-connecting
+- Render Postgres connection-string and TLS-mode details: https://render.com/tutorials/postgres-on-render/connection-strings
+- node-postgres TLS configuration and connection-string parsing: https://node-postgres.com/features/ssl
 - Render private networking: https://render.com/docs/private-network
-- Render Postgres create/connect, internal TLS, and external access controls: https://render.com/docs/postgresql-creating-connecting
+- Render outbound IP ranges: https://render.com/docs/outbound-ip-addresses
 - Render inbound IP rules and plan requirements: https://render.com/docs/inbound-ip-rules
+- Keycloak reverse-proxy path exposure, TLS re-encryption, and trusted proxy guidance: https://www.keycloak.org/server/reverseproxy
+- Keycloak hostname/admin endpoint behavior: https://www.keycloak.org/server/hostname
 - Render Postgres backup and recovery: https://render.com/docs/postgresql-backups
 
 ## 9. Explicit non-goals
