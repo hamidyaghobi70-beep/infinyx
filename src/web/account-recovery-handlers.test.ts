@@ -131,7 +131,7 @@ describe("OIDC account recovery handlers", () => {
     expect(f.recoveryTransactions.create.mock.calls[0]?.[0]).toBe(f.state);
     expect(f.recoveryTransactions.create.mock.calls[0]?.[1]).toMatch(/^[A-Za-z0-9_-]{43}$/u);
     expect(new URL(response.headers.get("location")!).origin).toBe("https://idp.example.test");
-    expect(cookies(response)[0]).toContain("__Host-infinyx_identity_tx=");
+    expect(cookies(response)[0]).toContain("__Host-infinyx_account_recovery_tx=");
   });
 
   it("recovers only after a fresh validated OIDC identity and then revokes sessions", async () => {
