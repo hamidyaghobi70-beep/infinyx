@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 import {
   createInvitationSecrets,
+  decryptInvitationDelivery,
+  encryptInvitationDelivery,
   hashInvitationToken,
   invitationTokenMatches,
   normalizeInvitationIdentity,
@@ -11,7 +13,9 @@ const keys: InvitationKeyMaterial = {
   tokenKey: Buffer.alloc(32, 7),
   tokenKeyVersion: 1,
   identityKey: Buffer.alloc(32, 9),
-  identityKeyVersion: 1
+  identityKeyVersion: 1,
+  deliveryKey: Buffer.alloc(32, 11),
+  deliveryKeyVersion: 1
 };
 
 describe("tenant invitation cryptographic primitives", () => {
@@ -52,3 +56,31 @@ describe("tenant invitation cryptographic primitives", () => {
     expect(() => hashInvitationToken("short", keys.tokenKey)).toThrow();
   });
 });
+
+  it("encrypts outbox payloads and binds ciphertext to tenant and invitation", () => {
+    const encrypted = encryptInvitationDelivery({
+      invitationId: "00000000-0000-4000-8000-000000000001",
+      tenantId: "tenant-a",
+      identityType: "email",
+      normalizedIdentity: "person@example.com",
+      rawToken: "a".repeat(43)
+    }, keys);
+
+    expect(encrypted.ciphertext.toString("utf8")).not.toContain("person@example.com");
+    expect(decryptInvitationDelivery(
+      encrypted,
+      "tenant-a",
+      "00000000-0000-4000-8000-000000000001",
+      keys.deliveryKey
+    )).toMatchObject({
+      tenantId: "tenant-a",
+      identityType: "email",
+      normalizedIdentity: "person@example.com"
+    });
+    expect(() => decryptInvitationDelivery(
+      encrypted,
+      "tenant-b",
+      "00000000-0000-4000-8000-000000000001",
+      keys.deliveryKey
+    )).toThrow();
+  });
