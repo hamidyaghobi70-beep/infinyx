@@ -66,6 +66,9 @@ export async function withTenantTransaction<Result>(
       await client.query(sql, values);
     } catch {
       transactionFailed = true;
+      if (sql === "BEGIN") {
+        destroyClient = true;
+      }
       throw new TenantPersistenceError();
     }
   };
