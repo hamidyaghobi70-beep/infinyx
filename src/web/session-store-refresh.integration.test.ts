@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { createPostgresPool } from "../persistence/postgres-pool.js";
-import { createCsrfToken, createOpaqueSessionId } from "./session-crypto.js";
+import { createCsrfToken, createOpaqueSessionId, decryptSessionTokenBundle } from "./session-crypto.js";
 import { PostgresWebSessionStore } from "./session-store.js";
 
 const databaseUrl = process.env.INFINYX_TEST_DATABASE_URL;
@@ -90,6 +90,8 @@ integrationDescribe("PostgreSQL web-session refresh advisory lock", () => {
       );
       expect(persisted.rows).toHaveLength(1);
       expect(persisted.rows[0]?.encrypted_token_bundle).toBeInstanceOf(Buffer);
+      expect(decryptSessionTokenBundle(persisted.rows[0]!.encrypted_token_bundle, encryptionKey))
+        .toMatchObject({ accessToken: "rotated-access-token", refreshToken: "rotated-refresh-token", csrfToken });
     } finally {
       finishRefresh();
       await adminPool.query("DELETE FROM web_sessions WHERE user_id = $1::uuid", [userId]);
