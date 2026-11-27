@@ -75,3 +75,11 @@ Latest verified implementation commit: `5fcb63bd84508580ae56c192ab3aa8dbe579f70f
 - Branch: `feat/adr-platform-foundation`
 - PR #68 remains open and Draft.
 - `main` remains unchanged.
+
+## C4 cross-phase hardening
+
+The final C4 audit also hardened the surrounding session and revocation boundary:
+- Session creation, lookup, touch, and access-token retrieval/refresh require the exact bound identity to remain active in lifecycle state.
+- Account and identity outbox completion is database-owned; the function revokes all persisted sessions and completes the outbox atomically. The application role cannot directly set completed_at.
+- Rollback-safety tests verify that migrations 012–015 refuse to remove state, audit, or outbox history.
+- Cross-phase verification: https://github.com/hamidyaghobi70-beep/infinyx/actions/runs/45958974264 (31 test files, 194 tests).
