@@ -23,20 +23,20 @@ async function start(): Promise<void> {
   const revocationRetryTimer = setInterval(() => {
     void application.retryPendingIdentitySessionRevocations().then(failures => {
       if (failures > 0) {
-        process.stderr.write("INFINYX has pending identity session revocations requiring retry.\\n");
+        process.stderr.write("INFINYX has pending identity session revocations requiring retry.\n");
       }
     }).catch(() => {
-      process.stderr.write("INFINYX identity session revocation retry failed.\\n");
+      process.stderr.write("INFINYX identity session revocation retry failed.\n");
     });
   }, 30_000);
 
   const accountRevocationRetryTimer = setInterval(() => {
     void application.retryPendingAccountSessionRevocations().then(failures => {
       if (failures > 0) {
-        process.stderr.write("INFINYX has pending account session revocations requiring retry.\\n");
+        process.stderr.write("INFINYX has pending account session revocations requiring retry.\n");
       }
     }).catch(() => {
-      process.stderr.write("INFINYX account session revocation retry failed.\\n");
+      process.stderr.write("INFINYX account session revocation retry failed.\n");
     });
   }, 30_000);
 
@@ -57,6 +57,6 @@ async function start(): Promise<void> {
 }
 
 void start().catch(() => {
-  process.stderr.write("INFINYX Web BFF startup failed. Check deployment configuration and service availability.\\n");
+  process.stderr.write("INFINYX Web BFF startup failed. Check deployment configuration and service availability.\n");
   process.exitCode = 1;
 });
