@@ -1,7 +1,7 @@
 import type { Pool } from "pg";
 import {
-  decryptIdentitySecurityTransactionPayload,
-  encryptIdentitySecurityTransactionPayload,
+  decryptAccountRecoveryTransactionPayload,
+  encryptAccountRecoveryTransactionPayload,
   hashOpaqueSecret,
   type IdentitySecurityTransactionPayload
 } from "./session-crypto.js";
@@ -50,7 +50,7 @@ export class PostgresAccountRecoveryTransactionStore {
     try {
       stateHash = hashOpaqueSecret(state);
       browserBindingHash = hashOpaqueSecret(browserBinding);
-      encryptedPayload = encryptIdentitySecurityTransactionPayload(payload, this.encryptionKey);
+      encryptedPayload = encryptAccountRecoveryTransactionPayload(payload, this.encryptionKey);
     } catch {
       throw new TypeError("Invalid account recovery transaction.");
     }
@@ -99,7 +99,7 @@ export class PostgresAccountRecoveryTransactionStore {
       if (!row) return null;
       return Object.freeze({
         transactionId: row.transaction_id,
-        payload: decryptIdentitySecurityTransactionPayload(row.encrypted_payload, this.encryptionKey)
+        payload: decryptAccountRecoveryTransactionPayload(row.encrypted_payload, this.encryptionKey)
       });
     } catch {
       throw new AccountRecoveryTransactionStoreError();
