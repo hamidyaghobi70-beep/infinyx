@@ -115,7 +115,7 @@ jobs:
             ('tenant-b', '10000000-0000-4000-8000-000000000002', '10000000-0000-4000-8000-000000000002', 'owner'),
             ('tenant-c', '10000000-0000-4000-8000-000000000001', '10000000-0000-4000-8000-000000000001', 'manager');
           SQL
-      - name: Apply external identity lifecycle migration and legacy backfill
+      - name: Apply identity lifecycle and security transaction migrations
         run: npm run db:migrate:up
       - name: Grant read-only application access to lifecycle state and events
         run: |
