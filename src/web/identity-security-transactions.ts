@@ -234,13 +234,13 @@ export class PostgresIdentitySecurityTransactionStore {
         [this.now()]
       );
       const transactions = await this.pool.query(
-        `DELETE FROM identity_security_transactions AS transaction
-          WHERE (transaction.expires_at <= $1
-             OR (transaction.consumed_at IS NOT NULL
-                 AND transaction.consumed_at < $1 - interval '1 day'))
+        `DELETE FROM identity_security_transactions AS security_tx
+          WHERE (security_tx.expires_at <= $1
+             OR (security_tx.consumed_at IS NOT NULL
+                 AND security_tx.consumed_at < $1 - interval '1 day'))
             AND NOT EXISTS (
               SELECT 1 FROM identity_step_up_grants AS grant_record
-               WHERE grant_record.source_transaction_id = transaction.transaction_id
+               WHERE grant_record.source_transaction_id = security_tx.transaction_id
             )`,
         [this.now()]
       );
