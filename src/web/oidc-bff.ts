@@ -147,6 +147,7 @@ export type OidcBffClient = Pick<typeof oidc,
   | "buildAuthorizationUrl"
   | "authorizationCodeGrant"
   | "tokenRevocation"
+  | "refreshTokenGrant"
 >;
 
 export interface OidcBffHandlerDependencies {
@@ -397,5 +398,37 @@ export function createOidcBffHandlers(dependencies: OidcBffHandlerDependencies) 
       }
       sendNoContent(response, [createExpiredSessionCookie(), createExpiredLoginTransactionCookie()]);
     }
+  });
+}
+
+/**
+ * Returns a still-valid access token for a server-side session. Refresh is
+ * serialized by the session store's row lock; refresh failures revoke the
+ * local session and never fall back to an expired token.
+ */
+export async function getSessionAccessToken(
+  sessionId: string,
+  dependencies: OidcBffHandlerDependencies
+): Promise<string | null> {
+  const clientApi = dependencies.oidcClient ?? oidc;
+  const now = dependencies.now ?? (() => new Date());
+  return dependencies.sessions.getUsableAccessToken(sessionId, async (refreshToken) => {
+    const response = await clientApi.refreshTokenGrant(dependencies.client, refreshToken);
+    const expiresIn = response.expires_in;
+    if (response.token_type !== "bearer" ||
+        typeof response.access_token !== "string" ||
+        response.access_token.length < 1 || response.access_token.length > 16_384 ||
+        typeof expiresIn !== "number" || !Number.isSafeInteger(expiresIn) ||
+        expiresIn < 1 || expiresIn > 86_400 ||
+        (response.refresh_token !== undefined &&
+          (typeof response.refresh_token !== "string" ||
+           response.refresh_token.length < 1 || response.refresh_token.length > 16_384))) {
+      throw new Error("Token refresh response is invalid.");
+    }
+    return {
+      accessToken: response.access_token,
+      ...(response.refresh_token === undefined ? {} : { refreshToken: response.refresh_token }),
+      accessTokenExpiresAt: now().getTime() + expiresIn * 1000
+    };
   });
 }

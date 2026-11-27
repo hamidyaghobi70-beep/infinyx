@@ -58,6 +58,12 @@ function setup() {
     expires_in: 300,
     claims: () => ({ iss: issuer, sub: "subject-123", aud: "infinyx-web" })
   };
+  const refreshTokenGrant = vi.fn(async () => ({
+    access_token: "refreshed-access-token",
+    refresh_token: "rotated-refresh-token",
+    token_type: "bearer",
+    expires_in: 300
+  }));
   const authorizationCodeGrant = vi.fn(async (_config: unknown, _url: URL, checks: unknown) => {
     expect(checks).toEqual({
       expectedState: state,
@@ -82,6 +88,7 @@ function setup() {
       return new URL("https://idp.example.test/authorize?client_id=infinyx-web");
     },
     authorizationCodeGrant,
+    refreshTokenGrant,
     tokenRevocation: vi.fn(async () => undefined)
   } as unknown as OidcBffClient;
 
@@ -110,7 +117,11 @@ function setup() {
     create: vi.fn(async (value: Record<string, unknown>) => { createdSession = value; }),
     findActive: vi.fn(async () => storedSession),
     touch: vi.fn(async () => true),
-    revoke: vi.fn(async () => undefined)
+    revoke: vi.fn(async () => undefined),
+    getUsableAccessToken: vi.fn(async (_sessionId: string, refresh: (token: string) => Promise<{ accessToken: string }>) => {
+      const result = await refresh("synthetic-refresh-token");
+      return result.accessToken;
+    })
   } as unknown as PostgresWebSessionStore;
 
   const database = {
@@ -125,17 +136,18 @@ function setup() {
     publicOrigin
   };
 
-  const handlers = createOidcBffHandlers({
+  const dependencies = {
     configuration,
     client: {} as oidc.Configuration,
     database,
     sessions,
     loginTransactions: pendingTransactions,
     oidcClient
-  });
+  };
+  const handlers = createOidcBffHandlers(dependencies);
 
   return {
-    handlers, state, nonce, verifier, csrfToken, tokenResponse,
+    handlers, dependencies, state, nonce, verifier, csrfToken, tokenResponse,
     authorizationCodeGrant, oidcClient, pendingTransactions, sessions,
     database, storedSession, get createdSession() { return createdSession; }
   };
@@ -219,6 +231,19 @@ describe("OIDC-backed Node BFF handlers", () => {
     expect(f.sessions.revoke).toHaveBeenCalledWith(sessionId);
     expect(f.oidcClient.tokenRevocation).toHaveBeenCalledWith({}, "synthetic-refresh-token");
     expect(getCookies(allowed).some(cookie => cookie.includes("Max-Age=0"))).toBe(true);
+  });
+
+  it("refreshes access tokens only through the server-side session store", async () => {
+    const f = setup();
+    const accessToken = await (await import("./oidc-bff.js")).getSessionAccessToken(
+      createOpaqueSessionId(),
+      f.dependencies
+    );
+    expect(accessToken).toBe("refreshed-access-token");
+    expect(f.oidcClient.refreshTokenGrant).toHaveBeenCalledWith(
+      f.dependencies.client,
+      "synthetic-refresh-token"
+    );
   });
 
   it("fails closed when the provider identity has no internal-user mapping", async () => {

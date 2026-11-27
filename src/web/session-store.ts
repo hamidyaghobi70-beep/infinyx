@@ -140,6 +140,129 @@ export class PostgresWebSessionStore {
     }
   }
 
+  async getUsableAccessToken(
+    sessionId: string,
+    refresh: (refreshToken: string) => Promise<{
+      readonly accessToken: string;
+      readonly refreshToken?: string;
+      readonly accessTokenExpiresAt: number;
+    }>
+  ): Promise<string | null> {
+    let sessionHash: Buffer;
+    try { sessionHash = hashOpaqueSecret(sessionId); }
+    catch { return null; }
+
+    let client: import("pg").PoolClient;
+    try {
+      client = await this.pool.connect();
+    } catch {
+      throw new WebSessionStoreError();
+    }
+
+    let transactionOpen = false;
+    let destroyClient = false;
+    const now = this.now();
+    try {
+      await client.query("BEGIN");
+      transactionOpen = true;
+      const selected = await client.query<SessionRow>(
+        `SELECT user_id::text AS user_id, issuer, subject, csrf_token_hash,
+                encrypted_token_bundle, idle_expires_at, absolute_expires_at
+           FROM web_sessions
+          WHERE session_id_hash = $1
+            AND revoked_at IS NULL
+            AND idle_expires_at > $2
+            AND absolute_expires_at > $2
+          LIMIT 1
+          FOR UPDATE`,
+        [sessionHash, now]
+      );
+      const row = selected.rows[0];
+      if (!row) {
+        await client.query("ROLLBACK");
+        transactionOpen = false;
+        return null;
+      }
+
+      const current = decryptSessionTokenBundle(row.encrypted_token_bundle, this.encryptionKey);
+      if (!current.csrfToken) throw new WebSessionStoreError();
+
+      if (current.accessTokenExpiresAt > now.getTime() + 60_000) {
+        await client.query("COMMIT");
+        transactionOpen = false;
+        return current.accessToken;
+      }
+
+      const revokeSession = async () => {
+        await client.query(
+          "UPDATE web_sessions SET revoked_at = $2 WHERE session_id_hash = $1 AND revoked_at IS NULL",
+          [sessionHash, now]
+        );
+        await client.query("COMMIT");
+        transactionOpen = false;
+      };
+
+      if (!current.refreshToken) {
+        await revokeSession();
+        return null;
+      }
+
+      let refreshed: {
+        readonly accessToken: string;
+        readonly refreshToken?: string;
+        readonly accessTokenExpiresAt: number;
+      };
+      try {
+        refreshed = await refresh(current.refreshToken);
+      } catch {
+        await revokeSession();
+        return null;
+      }
+
+      if (!refreshed || typeof refreshed.accessToken !== "string" ||
+          refreshed.accessToken.length < 1 || refreshed.accessToken.length > 16_384 ||
+          !Number.isSafeInteger(refreshed.accessTokenExpiresAt) ||
+          refreshed.accessTokenExpiresAt <= now.getTime() ||
+          refreshed.accessTokenExpiresAt > now.getTime() + 86_400_000 ||
+          (refreshed.refreshToken !== undefined &&
+            (typeof refreshed.refreshToken !== "string" ||
+             refreshed.refreshToken.length < 1 || refreshed.refreshToken.length > 16_384))) {
+        await revokeSession();
+        return null;
+      }
+
+      const nextBundle: SessionTokenBundle = Object.freeze({
+        accessToken: refreshed.accessToken,
+        refreshToken: refreshed.refreshToken ?? current.refreshToken,
+        accessTokenExpiresAt: refreshed.accessTokenExpiresAt,
+        csrfToken: current.csrfToken
+      });
+      const updated = await client.query(
+        `UPDATE web_sessions
+            SET encrypted_token_bundle = $2,
+                last_seen_at = $3
+          WHERE session_id_hash = $1
+            AND revoked_at IS NULL`,
+        [sessionHash, encryptSessionTokenBundle(nextBundle, this.encryptionKey), now]
+      );
+      if (updated.rowCount !== 1) throw new WebSessionStoreError();
+      await client.query("COMMIT");
+      transactionOpen = false;
+      return nextBundle.accessToken;
+    } catch {
+      if (transactionOpen) {
+        try {
+          await client.query("ROLLBACK");
+        } catch {
+          destroyClient = true;
+        }
+      }
+      throw new WebSessionStoreError();
+    } finally {
+      client.release(destroyClient ? new Error("Discarding failed session transaction.") : undefined);
+    }
+  }
+
   async revoke(sessionId: string): Promise<void> {
     let sessionHash: Buffer;
     try { sessionHash = hashOpaqueSecret(sessionId); }
