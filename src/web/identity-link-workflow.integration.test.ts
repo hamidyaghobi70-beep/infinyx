@@ -210,6 +210,13 @@ integrationDescribe("PostgreSQL immutable external identity link workflow", () =
     expect(await completeIdentitySessionRevocation(
       pool, failedSessions as never, actor, linked.outboxId
     )).toBe(false);
+    await expect(pool.query(
+      `UPDATE identity_session_revocation_outbox
+          SET completed_at = now()
+        WHERE outbox_id = $1::uuid AND user_id = $2::uuid`,
+      [linked.outboxId, actor]
+    )).rejects.toThrow();
+
     const pending = await adminPool.query(
       "SELECT completed_at, attempts, last_error_code FROM identity_session_revocation_outbox WHERE outbox_id = $1::uuid",
       [linked.outboxId]
@@ -229,6 +236,11 @@ integrationDescribe("PostgreSQL immutable external identity link workflow", () =
     expect(completed.rows[0]?.completed_at).toBeTruthy();
     expect(completed.rows[0]?.attempts).toBe(2);
     expect(completed.rows[0]?.last_error_code).toBeNull();
+    const sessionState = await adminPool.query(
+      "SELECT revoked_at FROM web_sessions WHERE user_id = $1::uuid",
+      [actor]
+    );
+    expect(sessionState.rows.every(row => row.revoked_at !== null)).toBe(true);
   });
 
 });
