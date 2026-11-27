@@ -298,7 +298,15 @@ export function createOidcBffHandlers(dependencies: OidcBffHandlerDependencies) 
              INNER JOIN user_external_identity_lifecycle AS lifecycle
                ON lifecycle.identity_id = identity.identity_id
               AND lifecycle.status = 'active'
+             INNER JOIN user_account_security AS account_security
+               ON account_security.user_id = identity.user_id
+              AND account_security.status = 'active'
             WHERE identity.issuer = $1 AND identity.subject = $2
+              AND NOT EXISTS (
+                SELECT 1 FROM user_account_session_revocation_outbox AS account_pending
+                 WHERE account_pending.user_id = identity.user_id
+                   AND account_pending.completed_at IS NULL
+              )
               AND NOT EXISTS (
                 SELECT 1 FROM identity_session_revocation_outbox AS pending
                  WHERE pending.user_id = identity.user_id AND pending.completed_at IS NULL
