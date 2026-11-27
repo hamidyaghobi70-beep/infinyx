@@ -49,7 +49,8 @@ integrationDescribe("PostgreSQL identity security transaction persistence", () =
     };
     const store = new PostgresIdentitySecurityTransactionStore(pool, key);
     const beforeIdentityBindings = await adminPool.query(
-      "SELECT count(*)::integer AS count FROM user_external_identities"
+      "SELECT count(*)::integer AS count FROM user_external_identities WHERE user_id IN ($1::uuid, $2::uuid)",
+      [userId, otherUserId]
     );
 
     await adminPool.query("INSERT INTO users (id) VALUES ($1::uuid), ($2::uuid)", [
@@ -133,7 +134,8 @@ integrationDescribe("PostgreSQL identity security transaction persistence", () =
       expect(grantConsumes.filter(Boolean)).toHaveLength(1);
 
       const afterIdentityBindings = await adminPool.query(
-        "SELECT count(*)::integer AS count FROM user_external_identities"
+        "SELECT count(*)::integer AS count FROM user_external_identities WHERE user_id IN ($1::uuid, $2::uuid)",
+        [userId, otherUserId]
       );
       expect(afterIdentityBindings.rows[0]?.count).toBe(beforeIdentityBindings.rows[0]?.count);
     } finally {
