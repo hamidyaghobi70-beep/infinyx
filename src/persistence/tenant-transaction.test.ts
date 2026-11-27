@@ -2,6 +2,7 @@ import { generateKeyPairSync, sign } from "node:crypto";
 import { describe, expect, it, vi } from "vitest";
 import {
   AuthenticationError,
+  createAuthenticatedPrincipalResolver,
   createJwtPrincipalVerifier,
   type AuthenticatedPrincipal
 } from "../core/authenticated-principal.js";
@@ -49,6 +50,12 @@ function fakeDatabase() {
     async query<Row>(sql: string, values?: readonly unknown[]): Promise<SqlQueryResult<Row>> {
       calls.push({ sql, values });
       if (failures.has(sql)) throw new Error("sensitive database detail");
+      if (sql.includes("FROM tenant_memberships")) {
+        return { rows: [{
+          membership_id: "00000000-0000-4000-8000-000000000010",
+          role: "owner", generation: 1, version: "1"
+        } as Row], rowCount: 1 };
+      }
       return { rows: [{ value: "ok" } as Row], rowCount: 1 };
     },
     release(destroy?: boolean) {
@@ -74,7 +81,7 @@ function fakeDatabase() {
 describe("withTenantTransaction", () => {
   it("binds the verified tenant in a transaction and commits before release", async () => {
     const db = fakeDatabase();
-    const result = await withTenantTransaction(db.pool, principal, async (tx) => {
+    const result = await withTenantTransaction(db.pool, principal, "tenant-a", async (tx) => {
       const rows = await tx.query<{ value: string }>(
         "SELECT value FROM tenant_records WHERE tenant_id = $1",
         ["tenant-a"]
@@ -86,17 +93,19 @@ describe("withTenantTransaction", () => {
     expect(db.calls.map((call) => call.sql)).toEqual([
       "BEGIN",
       "SELECT set_config('app.tenant_id', $1, true)",
+      "SELECT membership_id::text AS membership_id, role, generation, version\n           FROM tenant_memberships\n          WHERE tenant_id = $1\n            AND internal_user_id = $2::uuid\n            AND status = 'active'\n          ORDER BY generation DESC\n          LIMIT 1",
       "SELECT value FROM tenant_records WHERE tenant_id = $1",
       "COMMIT"
     ]);
     expect(db.calls[1]?.values).toEqual(["tenant-a"]);
+    expect(db.calls[2]?.values).toEqual(["tenant-a", principal.userId]);
     expect(db.releaseCount).toBe(1);
   });
 
   it("rejects use of a captured transaction after it has completed", async () => {
     const db = fakeDatabase();
     let captured: TenantTransaction | undefined;
-    await withTenantTransaction(db.pool, principal, async (tx) => {
+    await withTenantTransaction(db.pool, principal, "tenant-a", async (tx) => {
       captured = tx;
       return "complete";
     });
@@ -121,13 +130,14 @@ describe("withTenantTransaction", () => {
   it("rolls back and releases when repository work fails", async () => {
     const db = fakeDatabase();
     await expect(
-      withTenantTransaction(db.pool, principal, async () => {
+      withTenantTransaction(db.pool, principal, "tenant-a", async () => {
         throw new Error("domain failure");
       })
     ).rejects.toThrow("domain failure");
     expect(db.calls.map((call) => call.sql)).toEqual([
       "BEGIN",
       "SELECT set_config('app.tenant_id', $1, true)",
+      "SELECT membership_id::text AS membership_id, role, generation, version\n           FROM tenant_memberships\n          WHERE tenant_id = $1\n            AND internal_user_id = $2::uuid\n            AND status = 'active'\n          ORDER BY generation DESC\n          LIMIT 1",
       "ROLLBACK"
     ]);
     expect(db.releaseCount).toBe(1);
@@ -137,11 +147,12 @@ describe("withTenantTransaction", () => {
     const db = fakeDatabase();
     db.setFailure("SELECT private_data");
     await expect(
-      withTenantTransaction(db.pool, principal, (tx) => tx.query("SELECT private_data"))
+      withTenantTransaction(db.pool, principal, "tenant-a", (tx) => tx.query("SELECT private_data"))
     ).rejects.toBeInstanceOf(TenantPersistenceError);
     expect(db.calls.map((call) => call.sql)).toEqual([
       "BEGIN",
       "SELECT set_config('app.tenant_id', $1, true)",
+      "SELECT membership_id::text AS membership_id, role, generation, version\n           FROM tenant_memberships\n          WHERE tenant_id = $1\n            AND internal_user_id = $2::uuid\n            AND status = 'active'\n          ORDER BY generation DESC\n          LIMIT 1",
       "SELECT private_data",
       "ROLLBACK"
     ]);
@@ -153,7 +164,7 @@ describe("withTenantTransaction", () => {
     const db = fakeDatabase();
     db.setFailure("SELECT private_data");
     await expect(
-      withTenantTransaction(db.pool, principal, async (tx) => {
+      withTenantTransaction(db.pool, principal, "tenant-a", async (tx) => {
         try {
           await tx.query("SELECT private_data");
         } catch {
@@ -176,7 +187,7 @@ describe("withTenantTransaction", () => {
     const db = fakeDatabase();
     db.setFailure("ROLLBACK");
     await expect(
-      withTenantTransaction(db.pool, principal, async () => {
+      withTenantTransaction(db.pool, principal, "tenant-a", async () => {
         throw new Error("repository failure");
       })
     ).rejects.toThrow("repository failure");
@@ -188,7 +199,7 @@ describe("withTenantTransaction", () => {
     const db = fakeDatabase();
     db.setFailure("SELECT set_config('app.tenant_id', $1, true)");
     await expect(
-      withTenantTransaction(db.pool, principal, async () => "not reached")
+      withTenantTransaction(db.pool, principal, "tenant-a", async () => "not reached")
     ).rejects.toBeInstanceOf(TenantPersistenceError);
     expect(db.calls.map((call) => call.sql)).toEqual([
       "BEGIN",
