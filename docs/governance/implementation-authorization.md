@@ -34,8 +34,9 @@ The Master Strategy V3 statement `Implementation Authorization: NOT GRANTED` ref
 ## Current implementation state
 
 - Reproducible dependency installation: IMPLEMENTED; `npm ci` passed in GitHub Actions.
-- JWT authenticated-principal foundation: IMPLEMENTED; 25 unit tests passed in CI.
+- JWT authenticated-principal foundation: IMPLEMENTED; covered by the current CI test suite.
 - PostgreSQL target and tenant-isolation contract: DESIGNED in ADR-0002 and ADR-0003.
+- Tenant transaction boundary: IMPLEMENTED as a driver-neutral primitive; unit-tested with a fake pool. It is not a PostgreSQL adapter and does not prove database isolation (32 tests passed in the latest recorded CI run).
 - PostgreSQL driver, migration, and tenant transaction decisions: DESIGNED in ADR-0004.
-- PostgreSQL runtime, schema, RLS policies, and real database integration tests: NOT IMPLEMENTED.
+- PostgreSQL driver/pool adapter, migration execution, schema, RLS policies, and real PostgreSQL integration tests: NOT IMPLEMENTED.
 - Merge and release: NOT AUTHORIZED.
