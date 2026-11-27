@@ -17,7 +17,11 @@ async function start(): Promise<void> {
   });
 
   const revocationRetryTimer = setInterval(() => {
-    void application.retryPendingIdentitySessionRevocations().catch(() => {
+    void application.retryPendingIdentitySessionRevocations().then(failures => {
+      if (failures > 0) {
+        process.stderr.write("INFINYX has pending identity session revocations requiring retry.\n");
+      }
+    }).catch(() => {
       process.stderr.write("INFINYX identity session revocation retry failed.\n");
     });
   }, 30_000);
