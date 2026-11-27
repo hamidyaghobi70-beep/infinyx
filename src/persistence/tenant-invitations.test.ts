@@ -5,7 +5,8 @@ import {
   createTenantInvitation,
   InvitationConflictError,
   InvitationIntegrationUnavailableError,
-  resolveInvitationTarget
+  resolveInvitationTarget,
+  revokeTenantInvitation
 } from "./tenant-invitations.js";
 import type { TenantTransaction } from "./tenant-transaction.js";
 import type { InvitationKeyMaterial } from "./tenant-invitation-crypto.js";
@@ -153,4 +154,68 @@ describe("tenant invitation creation", () => {
       keys
     )).rejects.toThrow();
   });
+
+  it("revokes only pending invitations and writes audit in the same transaction", async () => {
+    const { tx, calls } = fakeTransaction();
+    const revocationTx: TenantTransaction = {
+      async query<Row = Record<string, unknown>>(sql: string, values: readonly unknown[] = []) {
+        calls.push({ sql, values });
+        if (sql.includes("SELECT action, outcome, invitation_id")) return [] as unknown as readonly Row[];
+        if (sql.includes("SELECT invitation_id::text AS invitation_id, status")) {
+          return [{
+            invitation_id: "00000000-0000-4000-8000-000000000002",
+            status: "pending",
+            expires_at: "2099-01-01 00:00:00+00",
+            is_expired: false,
+            version: "1"
+          }] as unknown as readonly Row[];
+        }
+        return [] as unknown as readonly Row[];
+      }
+    };
+    void tx;
+    await expect(revokeTenantInvitation(
+      revocationTx,
+      principal,
+      "00000000-0000-4000-8000-000000000002",
+      "10000000-0000-4000-8000-000000000004"
+    )).resolves.toEqual({ outcome: "succeeded" });
+    expect(calls.some((call) => call.sql.includes("SET status = 'revoked'"))).toBe(true);
+    expect(calls.some((call) => call.sql.includes("INSERT INTO tenant_invitation_audit_events"))).toBe(true);
+  });
+
+  it("materializes expiry using the database result rather than the application clock", async () => {
+    const calls: Array<{ sql: string; values: readonly unknown[] }> = [];
+    const expiredTx: TenantTransaction = {
+      async query<Row = Record<string, unknown>>(sql: string, values: readonly unknown[] = []) {
+        calls.push({ sql, values });
+        if (sql.includes("SELECT id FROM tenants")) return [{ id: "tenant-a" }] as unknown as readonly Row[];
+        if (sql.includes("generation, role, status, version")) {
+          return [{
+            membership_id: "00000000-0000-4000-8000-000000000001",
+            generation: 1, role: "owner", status: "active", version: "1"
+          }] as unknown as readonly Row[];
+        }
+        if (sql.includes("SELECT action, outcome, invitation_id")) return [] as unknown as readonly Row[];
+        if (sql.includes("SELECT invitation_id::text AS invitation_id, status")) {
+          return [{
+            invitation_id: "00000000-0000-4000-8000-000000000002",
+            status: "pending",
+            expires_at: "2099-01-01 00:00:00+00",
+            is_expired: true,
+            version: "1"
+          }] as unknown as readonly Row[];
+        }
+        return [] as unknown as readonly Row[];
+      }
+    };
+    await expect(revokeTenantInvitation(
+      expiredTx,
+      principal,
+      "00000000-0000-4000-8000-000000000002",
+      "10000000-0000-4000-8000-000000000005"
+    )).resolves.toEqual({ outcome: "denied" });
+    expect(calls.some((call) => call.sql.includes("SET status = 'expired'"))).toBe(true);
+  });
+
 });
