@@ -53,6 +53,7 @@ Proposed target shape for `tenant_memberships`:
 | `created_at` | timestamptz, not null | Membership acceptance/creation time |
 | `status_changed_at` | timestamptz, not null | Timestamp of latest status transition |
 | `status_changed_by` | text, nullable | Actor subject for latest status transition; null for initial creation/system migration |
+| `status_change_correlation_id` | UUID, nullable | Exact audit operation associated with the latest status transition |
 | `version` | bigint, not null | Monotonic optimistic-concurrency/version marker |
 
 Recommended constraints and indexes:
@@ -97,9 +98,8 @@ Proposed table: `tenant_membership_audit_events`.
 | `actor_user_id` | text, not null | Authenticated actor subject |
 | `target_user_id` | text, not null | Target subject |
 | `target_membership_id` | UUID, nullable | Exact generation, if resolved |
-| `action` | text, not null | suspend/reactivate/remove |
+| `requested_status` | text, not null | suspend/reactivate/remove |
 | `previous_status` | text, nullable | State before attempted operation |
-| `requested_status` | text, not null | Requested state |
 | `outcome` | text, not null | succeeded/denied/noop |
 | `reason_code` | text, not null | Stable internal reason; no raw exception |
 | `correlation_id` | UUID, not null | Retry/idempotency correlation |
@@ -167,7 +167,8 @@ The separate future workflow must lock the tenant row, re-check all relevant mem
 | active | removed | Allowed if actor/target safeguards pass |
 | suspended | active | Allowed if actor/target safeguards pass |
 | suspended | removed | Allowed if actor/target safeguards pass |
-| removed | any | Denied; fresh invitation creates a new generation |
+| removed | active/suspended | Denied; fresh invitation creates a new generation |
+| removed | removed | Stable no-op; no duplicate transition event |
 | same state | same state | Stable no-op; no duplicate transition event |
 
 Every real transition increments `version` exactly once and updates `status_changed_at` and `status_changed_by`. No-op does not increment version.
@@ -192,7 +193,7 @@ The following persistence baseline has been committed on the feature branch:
 
 Branch assignments are not yet implemented; when added, they must reference `membership_id` rather than only a user ID.
 
-The existing tenant foreign key uses `ON DELETE CASCADE`. Before audit history is relied upon, tenant deletion must not cascade away membership/audit history. Prefer a separately governed tenant soft-delete/retention process and a restrictive FK for retained records. Do not implement destructive tenant deletion as part of this scope.
+Migration 002 changes the tenant-membership foreign key to `ON DELETE RESTRICT`; the audit table also restricts tenant deletion. A separately governed tenant soft-delete/retention process is still required. Do not implement destructive tenant deletion as part of this scope.
 
 ## 8. Required PostgreSQL integration tests
 
