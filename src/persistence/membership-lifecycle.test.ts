@@ -115,6 +115,14 @@ describe("membership lifecycle repository", () => {
     expect(db.calls.some((call) => call.sql.startsWith("UPDATE tenant_memberships"))).toBe(false);
   });
 
+  it("denies active members without owner/admin roles", async () => {
+    const db = makeTransaction({ actor: { role: "manager" } });
+    await expect(transitionTenantMembership(
+      db.tx, principal, "target-user", "suspended", correlationId
+    )).resolves.toEqual({ outcome: "denied" });
+    expect(db.calls.some((call) => call.sql.startsWith("UPDATE tenant_memberships"))).toBe(false);
+  });
+
   it("treats a removed membership as terminal", async () => {
     const db = makeTransaction({ target: { status: "removed" } });
     await expect(transitionTenantMembership(
