@@ -1,5 +1,6 @@
 import { createPublicKey, verify as verifySignature, type KeyObject } from "node:crypto";
 import type { VerifiedExternalIdentity } from "./authenticated-principal.js";
+import { AuthenticationError } from "./authentication-error.js";
 
 export interface OidcJwksVerifierOptions {
   readonly issuer: string;
@@ -21,13 +22,6 @@ interface CachedKeys {
   readonly expiresAt: number;
   readonly refreshedAt: number;
   readonly keys: ReadonlyMap<string, KeyObject>;
-}
-
-export class OidcAuthenticationError extends Error {
-  constructor() {
-    super("Authentication failed.");
-    this.name = "AuthenticationError";
-  }
 }
 
 const MAX_TOKEN_LENGTH = 16_384;
@@ -185,7 +179,7 @@ export function createOidcJwksPrincipalVerifier(
       });
       return identity;
     } catch {
-      throw new OidcAuthenticationError();
+      throw new AuthenticationError();
     }
   };
 }
@@ -198,10 +192,10 @@ function validateHttpsUrl(value: string): string {
     throw new TypeError("Invalid trusted OIDC URL.");
   }
   if (parsed.protocol !== "https:" || parsed.username || parsed.password ||
-      parsed.hash || parsed.search || parsed.href !== value) {
-    throw new TypeError("OIDC endpoints must be canonical HTTPS URLs.");
+      parsed.hash || parsed.search || value.trim() !== value) {
+    throw new TypeError("OIDC endpoints must be HTTPS URLs without credentials, query, or fragment.");
   }
-  return value;
+  return parsed.href;
 }
 
 function parseSegment(segment: string): unknown {
