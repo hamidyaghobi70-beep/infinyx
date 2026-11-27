@@ -105,7 +105,7 @@ export function buildPostgresPoolConfig(
     throw new PostgresConfigurationError();
   }
 
-  const nodeEnvironment = env.NODE_ENV;
+  const nodeEnvironment = env.NODE_ENV ?? process.env.NODE_ENV;
   if (
     sslMode === "disable" &&
     nodeEnvironment !== "test" &&
