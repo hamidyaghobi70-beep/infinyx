@@ -54,6 +54,10 @@ jobs:
           GRANT UPDATE ON tenants TO infinyx_app;
           GRANT UPDATE (status, status_changed_at, status_changed_by, status_change_correlation_id, version) ON tenant_memberships TO infinyx_app;
           GRANT SELECT, INSERT ON tenant_membership_audit_events TO infinyx_app;
+          GRANT SELECT, INSERT ON tenant_invitations TO infinyx_app;
+          GRANT UPDATE (status, accepted_by, accepted_at, revoked_by, revoked_at, version) ON tenant_invitations TO infinyx_app;
+          GRANT SELECT, INSERT ON tenant_invitation_audit_events TO infinyx_app;
+          GRANT EXECUTE ON FUNCTION lookup_tenant_for_invitation_token(bytea) TO infinyx_app;
           INSERT INTO tenants (id, name) VALUES
             ('tenant-a', 'Tenant A'),
             ('tenant-b', 'Tenant B');
