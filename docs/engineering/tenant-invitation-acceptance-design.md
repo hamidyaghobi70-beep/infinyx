@@ -10,7 +10,7 @@
 
 This document translates ADR-0010 into an implementation-ready design. It is not a claim that invitation functionality exists. The branch now contains invitation persistence, tenant-scoped audit, encrypted delivery outbox storage, token/identity cryptographic primitives, and domain services for create, revoke, and acceptance. The identity-directory and identity-verifier contracts are provider-neutral and have no production provider implementation. No delivery worker/provider, HTTP endpoint, or UI exists.
 
-All future implementation must remain on `feat/adr-platform-foundation`. Keep `main` unchanged. The founder has approved the bounded implementation scope. Keep `main` unchanged. No merge, release, or deployment is authorized.
+All future implementation must remain on `feat/adr-platform-foundation`. The founder has approved the bounded implementation scope. Keep `main` unchanged. No merge, release, or deployment is authorized.
 
 ## 2. Existing foundations and constraints
 
@@ -28,7 +28,7 @@ Important limitations:
 - Branch tables and branch assignments are not implemented.
 - Current code is not production-ready and has not undergone independent security review.
 
-## 3. Proposed data model
+## 3. Implemented data model
 
 ### 3.1 `tenant_invitations`
 
@@ -79,6 +79,15 @@ Proposed append-only audit table:
 
 Do not store raw invitation tokens, OTPs, passwords, full verification payloads, or unnecessary personal data. The table has RLS ENABLE/FORCE and tenant scope. The application role has SELECT/INSERT only and cannot UPDATE/DELETE audit rows. Define retention and privileged audit access separately.
 
+### 3.3 `tenant_invitation_delivery_outbox`
+
+Implemented columns:
+- `outbox_id`, `tenant_id`, `invitation_id`
+- `key_version`, `nonce`, `ciphertext`, `auth_tag`
+- `status`, `attempts`, `next_attempt_at`, `created_at`, `sent_at`
+
+The payload is encrypted with AES-256-GCM. Tenant/invitation/key-version values are authenticated as associated data. The outbox is tenant-scoped with RLS ENABLE/FORCE. The ordinary application role can insert/read and update only delivery-state columns; it cannot change the encrypted payload.
+
 ## 4. Identity verification contract
 
 Acceptance must receive a trusted, server-validated identity assertion from the selected authentication/identity layer. The future adapter contract should provide:
@@ -97,7 +106,7 @@ If the invitee is new, registration and verification happen before acceptance. I
 ## 5. Token handling
 
 1. Generate a high-entropy random token using a cryptographically secure random generator.
-2. Return the raw token only to the delivery adapter for the intended recipient; never return it in general API responses or logs.
+2. The raw token exists only transiently while its encrypted outbox payload is created; it is never returned in general API responses or written to logs.
 3. Store only a one-way hash using a suitable password/token hashing construction. Since tokens are high entropy, use a cryptographic hash with a server-side pepper or keyed HMAC; store key version metadata for rotation.
 4. Verify candidates using constant-time comparison.
 5. Bind token hash to one invitation and tenant; use unique constraints to prevent reuse.
@@ -222,11 +231,11 @@ These gates must be resolved before production enablement. Missing provider conf
 
 ## 13. Implementation slices and current status
 
-1. **Persistence foundation:** IMPLEMENTED in migration 003; migration/CI verification remains pending.
-2. **Domain service:** create/revoke/acceptance services IMPLEMENTED with tenant-first locking, generation creation, encrypted outbox insertion, and atomic audit. Idempotency and race coverage still require completion.
+1. **Persistence foundation:** IMPLEMENTED in migration 003; migration and CI verification PASS.
+2. **Domain service:** create/revoke/acceptance services IMPLEMENTED with tenant-first locking, generation creation, encrypted outbox insertion, atomic audit, and create/revoke correlation idempotency. Broader race and acceptance replay coverage still require completion.
 3. **Identity proof boundary:** provider-neutral directory/verifier contracts IMPLEMENTED; production adapter BLOCKED on provider selection.
 4. **Delivery boundary:** encrypted transactional outbox schema and encryption primitives IMPLEMENTED; worker/provider adapter NOT IMPLEMENTED.
-5. **Verification:** crypto/service/PostgreSQL integration tests ADDED; CI execution and fixes remain pending.
+5. **Verification:** CI PASS on code commit `b7222e40f1cf031ffa023e624ba440b3f997efae` (9 files, 93 tests; typecheck and dependency audit passed).
 
 No HTTP API or UI should be included unless separately scoped and approved. Implementation must be reviewed against ADR-0010 and the security gates above.
 
