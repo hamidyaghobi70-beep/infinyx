@@ -1,70 +1,78 @@
 import { generateKeyPairSync, sign } from "node:crypto";
 import { describe, expect, it } from "vitest";
-import { createJwtPrincipalVerifier } from "../core/authenticated-principal.js";
+import {
+  createAuthenticatedPrincipalResolver,
+  createJwtPrincipalVerifier
+} from "../core/authenticated-principal.js";
 import {
   getTenantMembership,
   requireTenantRole,
-  TenantAuthorizationError,
-  type TenantRole
+  TenantAuthorizationError
 } from "./tenant-membership.js";
-import type { TenantTransaction } from "./tenant-transaction.js";
+import {
+  withTenantTransaction,
+  type SqlQueryResult,
+  type TenantSqlClient,
+  type TenantSqlPool
+} from "./tenant-transaction.js";
 
 const issuer = "https://infinyx.membership.test";
 const audience = "infinyx-membership-test";
+const userId = "10000000-0000-4000-8000-000000000001";
 const keys = generateKeyPairSync("rsa", { modulusLength: 2048 });
 const verifier = createJwtPrincipalVerifier({
   issuer,
   audience,
   publicKeyPem: keys.publicKey.export({ type: "spki", format: "pem" }).toString()
 });
+const resolver = createAuthenticatedPrincipalResolver(() => userId);
 
 function principal() {
-  const encode = (value: unknown) =>
-    Buffer.from(JSON.stringify(value)).toString("base64url");
+  const encode = (value: unknown) => Buffer.from(JSON.stringify(value)).toString("base64url");
   const unsigned = [
     encode({ alg: "RS256", typ: "JWT" }),
-    encode({
-      iss: issuer,
-      aud: audience,
-      sub: "user-1",
-      tenant_id: "tenant-1",
-      exp: Math.floor(Date.now() / 1000) + 60
-    })
+    encode({ iss: issuer, aud: audience, sub: "provider-subject", exp: Math.floor(Date.now() / 1000) + 60 })
   ].join(".");
-  const signature = sign("RSA-SHA256", Buffer.from(unsigned, "ascii"), keys.privateKey)
-    .toString("base64url");
-  return verifier(`${unsigned}.${signature}`);
+  const signature = sign("RSA-SHA256", Buffer.from(unsigned, "ascii"), keys.privateKey).toString("base64url");
+  return resolver(verifier(`${unsigned}.${signature}`));
 }
 
-function transactionWithRole(role: TenantRole | null, status = "active"): TenantTransaction {
-  return {
-    query: async <Row = Record<string, unknown>>(
+function poolWithMembership(role: string | null, status = "active"): TenantSqlPool {
+  const client: TenantSqlClient = {
+    async query<Row = Record<string, unknown>>(
       sql: string,
       _values?: readonly unknown[]
-    ): Promise<readonly Row[]> => {
-      if (sql === "BEGIN" || sql === "COMMIT" || sql === "ROLLBACK" ||
-          sql.startsWith("SELECT set_config")) {
-        return [];
+    ): Promise<SqlQueryResult<Row>> {
+      if (sql.includes("FROM tenant_memberships") && role) {
+        return {
+          rows: [{
+            membership_id: "00000000-0000-4000-8000-000000000001",
+            role,
+            status,
+            generation: 1,
+            version: "1"
+          } as Row],
+          rowCount: 1
+        };
       }
-      return role ? ([{
-        membership_id: "00000000-0000-4000-8000-000000000001",
-        generation: 1,
-        role,
-        status,
-        version: "1"
-      }] as unknown as readonly Row[]) : [];
-    }
+      return { rows: [], rowCount: 0 };
+    },
+    release() {}
   };
+  return { async connect() { return client; } };
 }
 
 describe("tenant membership authorization", () => {
-  it("resolves the role from the tenant membership row", async () => {
-    await expect(
-      getTenantMembership(transactionWithRole("manager"), principal())
-    ).resolves.toEqual({
+  it("resolves the active membership using the stable internal user ID", async () => {
+    const identity = principal();
+    const membership = await withTenantTransaction(
+      poolWithMembership("manager"), identity, "tenant-1",
+      (transaction) => getTenantMembership(transaction, identity)
+    );
+    expect(membership).toEqual({
       membershipId: "00000000-0000-4000-8000-000000000001",
       tenantId: "tenant-1",
-      userId: "user-1",
+      userId,
       generation: 1,
       role: "manager",
       status: "active",
@@ -72,33 +80,41 @@ describe("tenant membership authorization", () => {
     });
   });
 
-  it("returns null when the user has no membership", async () => {
-    await expect(
-      getTenantMembership(transactionWithRole(null), principal())
-    ).resolves.toBeNull();
+  it("denies missing, suspended and removed memberships before callback execution", async () => {
+    const identity = principal();
+    let callbackCalled = false;
+    await expect(withTenantTransaction(
+      poolWithMembership(null), identity, "tenant-1",
+      async () => { callbackCalled = true; }
+    )).rejects.toBeInstanceOf(TenantAuthorizationError);
+    await expect(withTenantTransaction(
+      poolWithMembership("manager", "suspended"), identity, "tenant-1",
+      async () => { callbackCalled = true; }
+    )).rejects.toBeInstanceOf(TenantAuthorizationError);
+    await expect(withTenantTransaction(
+      poolWithMembership("manager", "removed"), identity, "tenant-1",
+      async () => { callbackCalled = true; }
+    )).rejects.toBeInstanceOf(TenantAuthorizationError);
+    expect(callbackCalled).toBe(false);
   });
 
   it("allows only explicitly permitted roles", async () => {
-    await expect(
-      requireTenantRole(transactionWithRole("editor"), principal(), ["owner", "admin", "editor"])
-    ).resolves.toMatchObject({ role: "editor" });
-    await expect(
-      requireTenantRole(transactionWithRole("viewer"), principal(), ["owner", "admin", "editor"])
-    ).rejects.toBeInstanceOf(TenantAuthorizationError);
+    const identity = principal();
+    await expect(withTenantTransaction(
+      poolWithMembership("editor"), identity, "tenant-1",
+      (transaction) => requireTenantRole(transaction, identity, ["owner", "admin", "editor"])
+    )).resolves.toMatchObject({ role: "editor" });
+    await expect(withTenantTransaction(
+      poolWithMembership("viewer"), identity, "tenant-1",
+      (transaction) => requireTenantRole(transaction, identity, ["owner", "admin", "editor"])
+    )).rejects.toBeInstanceOf(TenantAuthorizationError);
   });
 
-  it("does not authorize suspended or removed memberships", async () => {
-    await expect(
-      getTenantMembership(transactionWithRole("manager", "suspended"), principal())
-    ).resolves.toBeNull();
-    await expect(
-      getTenantMembership(transactionWithRole("manager", "removed"), principal())
-    ).resolves.toBeNull();
-  });
-
-  it("does not treat an unrecognized database role as membership", async () => {
-    await expect(
-      getTenantMembership(transactionWithRole("unexpected" as TenantRole), principal())
-    ).resolves.toBeNull();
+  it("fails closed for unknown database roles", async () => {
+    const identity = principal();
+    await expect(withTenantTransaction(
+      poolWithMembership("unexpected"), identity, "tenant-1",
+      (transaction) => getTenantMembership(transaction, identity)
+    )).rejects.toBeInstanceOf(TenantAuthorizationError);
   });
 });
