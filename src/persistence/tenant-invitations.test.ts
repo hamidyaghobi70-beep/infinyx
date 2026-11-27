@@ -1,9 +1,5 @@
-import { generateKeyPairSync, sign } from "node:crypto";
 import { describe, expect, it } from "vitest";
-import {
-  createAuthenticatedPrincipalResolver,
-  createJwtPrincipalVerifier
-} from "../core/authenticated-principal.js";
+import { createTestPrincipal } from "../core/testing/test-principal.js";
 import {
   createTenantInvitation,
   InvitationConflictError,
@@ -23,27 +19,13 @@ const issuer = "https://infinyx.invitation.test";
 const audience = "infinyx-test";
 const userId = "10000000-0000-4000-8000-000000000001";
 const existingUserId = "10000000-0000-4000-8000-000000000002";
-const keysPair = generateKeyPairSync("rsa", { modulusLength: 2048 });
-const verifier = createJwtPrincipalVerifier({
-  issuer, audience,
-  publicKeyPem: keysPair.publicKey.export({ type: "spki", format: "pem" }).toString()
+const keys = createInvitationSecrets({
+  encryptionKey: Buffer.alloc(32, 7),
+  tokenPepper: Buffer.alloc(32, 8)
 });
-const principal = createAuthenticatedPrincipalResolver(() => userId)(
-  (() => {
-    const encode = (value: unknown) => Buffer.from(JSON.stringify(value)).toString("base64url");
-    const unsigned = [
-      encode({ alg: "RS256", typ: "JWT" }),
-      encode({ iss: issuer, aud: audience, sub: "owner-provider-sub", exp: Math.floor(Date.now() / 1000) + 600 })
-    ].join(".");
-    return verifier(`${unsigned}.${sign("RSA-SHA256", Buffer.from(unsigned, "ascii"), keysPair.privateKey).toString("base64url")}`);
-  })()
-);
-
-const keys: InvitationKeyMaterial = {
-  tokenKey: Buffer.alloc(32, 3), tokenKeyVersion: 1,
-  identityKey: Buffer.alloc(32, 5), identityKeyVersion: 1,
-  deliveryKey: Buffer.alloc(32, 7), deliveryKeyVersion: 1
-};
+const principal = await createTestPrincipal({
+  issuer, audience, subject: "owner-provider-sub", userId
+});
 
 function fakePool(options: { targetAlreadyMember?: boolean } = {}) {
   const calls: Array<{ sql: string; values?: readonly unknown[] }> = [];
