@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import type { Pool } from "pg";
 import { createPostgresPool } from "../persistence/postgres-pool.js";
 import { createCsrfToken, createOpaqueSessionId, decryptSessionTokenBundle } from "./session-crypto.js";
 import { PostgresWebSessionStore } from "./session-store.js";
@@ -37,7 +38,24 @@ integrationDescribe("PostgreSQL web-session refresh advisory lock", () => {
     const sessionId = createOpaqueSessionId();
     const csrfToken = createCsrfToken();
     const now = new Date();
-    const store = new PostgresWebSessionStore(pool, encryptionKey);
+    // Track checked-out clients at the PoolClient boundary. pg.Pool.totalCount
+    // also includes idle clients and cannot prove simultaneous checkout.
+    let checkedOut = 0;
+    let peakCheckedOut = 0;
+    const trackedPool = {
+      connect: async () => {
+        const client = await pool.connect();
+        checkedOut += 1;
+        peakCheckedOut = Math.max(peakCheckedOut, checkedOut);
+        const release = client.release.bind(client);
+        client.release = (error?: Error | boolean) => {
+          checkedOut -= 1;
+          release(error);
+        };
+        return client;
+      }
+    } as unknown as Pool;
+    const store = new PostgresWebSessionStore(trackedPool, encryptionKey);
 
     let signalRefreshStarted!: () => void;
     const refreshStarted = new Promise<void>(resolve => { signalRefreshStarted = resolve; });
@@ -80,9 +98,11 @@ integrationDescribe("PostgreSQL web-session refresh advisory lock", () => {
       const second = await store.getUsableAccessToken(sessionId, refresh);
       expect(second).toBeNull();
       expect(refreshCalls).toBe(1);
-      // The first refresh is still blocked in its provider callback, so the
-      // second call must have checked out a distinct PostgreSQL connection.
-      expect(pool.totalCount).toBeGreaterThanOrEqual(2);
+      // The first provider callback is still blocked while the second call
+      // attempts the advisory lock. Both PoolClients must therefore overlap.
+      // peakCheckedOut measures checked-out clients, excluding idle pool clients.
+      expect(checkedOut).toBe(1);
+      expect(peakCheckedOut).toBe(2);
 
       finishRefresh();
       await expect(first).resolves.toBe("rotated-access-token");
