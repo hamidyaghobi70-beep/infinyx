@@ -99,7 +99,9 @@ export function fingerprintInvitationIdentity(
 }
 
 export function constantTimeEqual32(candidate: Buffer, stored: Buffer): boolean {
-  return constantTimeEqual32(candidate, stored);
+  return Buffer.isBuffer(candidate) && Buffer.isBuffer(stored) &&
+    candidate.length === 32 && stored.length === 32 &&
+    timingSafeEqual(candidate, stored);
 }
 
 export function createInvitationSecrets(
@@ -138,9 +140,7 @@ export function invitationTokenMatches(
   candidate: Buffer,
   stored: Buffer
 ): boolean {
-  return Buffer.isBuffer(candidate) && Buffer.isBuffer(stored) &&
-    candidate.length === 32 && stored.length === 32 &&
-    timingSafeEqual(candidate, stored);
+  return constantTimeEqual32(candidate, stored);
 }
 
 
