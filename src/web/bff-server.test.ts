@@ -14,7 +14,11 @@ async function request(
     startLogin: (_req, res) => { res.statusCode = 302; res.setHeader("Location", "https://idp.example.test/authorize"); res.end(); },
     handleCallback: (_req, res) => { res.statusCode = 204; res.end(); },
     getSession: (_req, res) => { res.setHeader("Content-Type", "application/json"); res.end(JSON.stringify({ authenticated: false })); },
-    logout: (_req, res) => { res.statusCode = 204; res.end(); }
+    logout: (_req, res) => { res.statusCode = 204; res.end(); },
+    startReauth: (_req, res) => { res.statusCode = 204; res.end(); },
+    handleReauthCallback: (_req, res) => { res.statusCode = 204; res.end(); },
+    startLink: (_req, res) => { res.statusCode = 204; res.end(); },
+    handleLinkCallback: (_req, res) => { res.statusCode = 204; res.end(); }
   };
   const server = createBffHttpServer(handlers);
   servers.push(server);
