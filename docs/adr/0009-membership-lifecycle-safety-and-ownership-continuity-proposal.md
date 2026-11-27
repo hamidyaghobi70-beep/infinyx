@@ -1,7 +1,7 @@
-# ADR-0009 Proposal: Membership Lifecycle Safety and Ownership Continuity
+# ADR-0009: Membership Lifecycle Safety and Ownership Continuity
 
-- **Status:** Proposed — founder decision required
-- **Date prepared:** 2026-11-27
+- **Status:** Accepted
+- **Decision date:** 2026-11-27
 - **Decision owner:** INFINYX founder
 - **Related decisions:** ADR-0006, ADR-0007, ADR-0008
 
@@ -9,13 +9,13 @@
 
 ADR-0008 limits membership lifecycle administration to active, database-verified owners and admins. Before implementing those operations, the platform needs explicit safeguards for self-removal, owner accounts, last-owner continuity, reversibility, and audit failures.
 
-This document is a proposal for founder review. It is not an accepted policy and does not authorize implementation.
+The founder has explicitly approved all seven safeguards in Section 2. This ADR records the accepted policy. It does not by itself authorize merge, release, or deployment.
 
-## 2. Recommended safeguards for approval
+## 2. Accepted safeguards
 
 ### 2.1 Self-suspension and self-removal
 
-**Recommendation:** An actor may not suspend or remove their own membership through the administrative lifecycle API.
+**Decision:** An actor may not suspend or remove their own membership through the administrative lifecycle API.
 
 A user who wants to leave a tenant should use a separate leave-membership workflow. If the user is the last active owner, leaving must first require a completed ownership transfer to another eligible member.
 
@@ -100,15 +100,12 @@ Before enabling lifecycle administration, integration tests should cover:
 12. Cross-tenant and inactive-actor operations fail closed.
 13. All checks use the same transaction and least-privilege database role with RLS enabled and forced.
 
-## 5. Founder decisions requested
+## 5. Implementation gates and scope
 
-The founder is asked to approve, reject, or amend each recommendation in Section 2. Until then:
+The safeguards in Section 2 are accepted policy and must be enforced by any future membership lifecycle implementation. The verification cases in Section 4 are mandatory acceptance criteria.
 
-- ADR-0008 remains the accepted high-level authorization policy.
-- The edge cases listed here remain unresolved implementation gates.
-- No membership lifecycle schema, repository, endpoint, or UI should be implemented based on this proposal alone.
-- No merge, release, or deployment is authorized.
+This ADR does not itself implement a membership lifecycle schema, repository, endpoint, audit subsystem, or UI. Detailed technical design and implementation must remain on the authorized feature branch and preserve the approved safeguards. No merge, release, or deployment is authorized.
 
 ## 6. Governance
 
-This proposal is recorded on `feat/adr-platform-foundation` for review only. Acceptance requires explicit founder approval and a subsequent status/decision update. The `main` branch remains unchanged.
+This accepted ADR is recorded on `feat/adr-platform-foundation`. The `main` branch remains unchanged. Any change to these safeguards requires renewed founder approval.
