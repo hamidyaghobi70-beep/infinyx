@@ -1,7 +1,10 @@
 import { randomUUID } from "node:crypto";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { createPostgresPool } from "../persistence/postgres-pool.js";
-import { registerVerifiedIdentityLink } from "./identity-link-workflow.js";
+import {
+  completeIdentitySessionRevocation,
+  registerVerifiedIdentityLink
+} from "./identity-link-workflow.js";
 
 const databaseUrl = process.env.INFINYX_TEST_DATABASE_URL;
 const integrationDescribe = databaseUrl ? describe : describe.skip;
@@ -190,4 +193,38 @@ integrationDescribe("PostgreSQL immutable external identity link workflow", () =
       );
       expect(rows.rowCount).toBe(0);
   });
+  it("keeps failed session revocation pending and only completes after confirmed revocation", async () => {
+    const actor = randomUUID();
+    const issuer = `https://outbox-${randomUUID()}.example.test`;
+    const subject = `subject-${randomUUID()}`;
+    await adminPool.query("INSERT INTO users (id) VALUES ($1::uuid)", [actor]);
+    const linked = await registerVerifiedIdentityLink(pool, actor, issuer, subject, randomUUID());
+    expect(linked.outcome).toBe("linked");
+    if (linked.outcome !== "linked") throw new Error("Expected linked outcome.");
+
+    const failedSessions = { revokeAllForUser: async () => { throw new Error("temporary failure"); } };
+    expect(await completeIdentitySessionRevocation(
+      pool, failedSessions as never, actor, linked.outboxId
+    )).toBe(false);
+    const pending = await adminPool.query(
+      "SELECT completed_at, attempts, last_error_code FROM identity_session_revocation_outbox WHERE outbox_id = $1::uuid",
+      [linked.outboxId]
+    );
+    expect(pending.rows[0]).toMatchObject({
+      completed_at: null, attempts: 1, last_error_code: "session_revocation_failed"
+    });
+
+    const successfulSessions = { revokeAllForUser: async () => undefined };
+    expect(await completeIdentitySessionRevocation(
+      pool, successfulSessions as never, actor, linked.outboxId
+    )).toBe(true);
+    const completed = await adminPool.query(
+      "SELECT completed_at, attempts, last_error_code FROM identity_session_revocation_outbox WHERE outbox_id = $1::uuid",
+      [linked.outboxId]
+    );
+    expect(completed.rows[0]?.completed_at).toBeTruthy();
+    expect(completed.rows[0]?.attempts).toBe(2);
+    expect(completed.rows[0]?.last_error_code).toBeNull();
+  });
+
 });
