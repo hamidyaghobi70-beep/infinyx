@@ -42,7 +42,7 @@ function fakePool(row: ReturnType<typeof sessionRow>) {
       if (sql.includes("SELECT user_id::text AS user_id")) {
         return { rows: [stored], rowCount: 1 };
       }
-      if (sql.includes("UPDATE web_sessions") && sql.includes("encrypted_token_bundle")) {
+      if (sql.includes("UPDATE web_sessions") && sql.includes("SET encrypted_token_bundle")) {
         stored = { ...stored, encrypted_token_bundle: values?.[2] as Buffer };
         return { rows: [], rowCount: 1 };
       }
@@ -105,7 +105,7 @@ describe("serialized web-session access-token refresh", () => {
     expect(await store.getUsableAccessToken(createOpaqueSessionId(), refresh)).toBeNull();
     expect(refresh).not.toHaveBeenCalled();
     expect(fake.calls.some(call => call.sql.includes("SET revoked_at"))).toBe(true);
-    expect(fake.calls.at(-1)?.sql).toBe("COMMIT");
+    expect(fake.calls.some(call => call.sql.includes("pg_advisory_unlock"))).toBe(true);
   });
 
   it("revokes the session when refresh fails rather than returning an expired token", async () => {
