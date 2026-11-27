@@ -27,7 +27,13 @@ const redirectUri = `${publicOrigin}/auth/callback`;
 const userId = "10000000-0000-4000-8000-000000000001";
 
 async function openServer(handlers: ReturnType<typeof createOidcBffHandlers>) {
-  const server = createBffHttpServer(handlers);
+  const server = createBffHttpServer({
+    ...handlers,
+    startReauth: (_request, response) => { response.statusCode = 404; response.end(); },
+    handleReauthCallback: (_request, response) => { response.statusCode = 404; response.end(); },
+    startLink: (_request, response) => { response.statusCode = 404; response.end(); },
+    handleLinkCallback: (_request, response) => { response.statusCode = 404; response.end(); }
+  });
   servers.push(server);
   await new Promise<void>(resolve => server.listen(0, "127.0.0.1", resolve));
   const address = server.address();
