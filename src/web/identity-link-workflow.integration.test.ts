@@ -59,11 +59,14 @@ integrationDescribe("PostgreSQL immutable external identity link workflow", () =
     const beforeIdentityRows = await adminPool.query(
       "SELECT identity_id::text, user_id::text, issuer, subject, created_at FROM user_external_identities ORDER BY identity_id"
     );
+    const priorIdentityIds = beforeIdentityRows.rows.map((row: { identity_id: string }) => row.identity_id);
     const beforeLifecycle = await adminPool.query(
-      "SELECT identity_id::text, status, version, created_at, updated_at FROM user_external_identity_lifecycle ORDER BY identity_id"
+      "SELECT identity_id::text, status, version, created_at, updated_at FROM user_external_identity_lifecycle WHERE identity_id = ANY($1::uuid[]) ORDER BY identity_id",
+      [priorIdentityIds]
     );
     const beforeEvents = await adminPool.query(
-      "SELECT event_id::text, identity_id::text, from_status, to_status, reason_code, created_at FROM user_external_identity_lifecycle_events ORDER BY event_id"
+      "SELECT event_id::text, identity_id::text, from_status, to_status, reason_code, created_at FROM user_external_identity_lifecycle_events WHERE identity_id = ANY($1::uuid[]) ORDER BY event_id",
+      [priorIdentityIds]
     );
 
       const result = await registerVerifiedIdentityLink(pool, actor, issuer, newSubject, correlationId);
@@ -138,7 +141,6 @@ integrationDescribe("PostgreSQL immutable external identity link workflow", () =
       );
       expect(oldEventsAfter.rows).toEqual(eventsBeforeOld);
 
-      const priorIdentityIds = beforeIdentityRows.rows.map((row: { identity_id: string }) => row.identity_id);
       const allPriorIdentitiesAfter = await adminPool.query(
         "SELECT identity_id::text, user_id::text, issuer, subject, created_at FROM user_external_identities WHERE identity_id = ANY($1::uuid[]) ORDER BY identity_id",
         [priorIdentityIds]
