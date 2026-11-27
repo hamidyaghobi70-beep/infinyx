@@ -12,6 +12,7 @@ import { PostgresWebSessionStore } from "./session-store.js";
 import { PostgresIdentitySecurityTransactionStore } from "./identity-security-transactions.js";
 import { createIdentityLinkHandlers } from "./identity-link-handlers.js";
 import { retryPendingIdentitySessionRevocations } from "./identity-link-workflow.js";
+import { retryPendingAccountSessionRevocations } from "./account-session-revocation.js";
 
 export class WebBffStartupError extends Error {
   constructor() {
@@ -81,6 +82,7 @@ export async function createWebBffApplication(
       runtime.sessionEncryptionKey
     );
     await retryPendingIdentitySessionRevocations(pool, sessions);
+    await retryPendingAccountSessionRevocations(pool, sessions);
     const handlers = createOidcBffHandlers({
       configuration: runtime.oidc,
       client,
@@ -99,6 +101,7 @@ export async function createWebBffApplication(
       server: createBffHttpServer({ ...handlers, ...identityHandlers }),
       pool,
       retryPendingIdentitySessionRevocations: () => retryPendingIdentitySessionRevocations(pool!, sessions),
+      retryPendingAccountSessionRevocations: () => retryPendingAccountSessionRevocations(pool!, sessions),
       host: runtime.host,
       port: runtime.port
     });
