@@ -16,8 +16,15 @@ async function start(): Promise<void> {
     application.server.listen(application.port, application.host);
   });
 
+  const revocationRetryTimer = setInterval(() => {
+    void application.retryPendingIdentitySessionRevocations().catch(() => {
+      process.stderr.write("INFINYX identity session revocation retry failed.\n");
+    });
+  }, 30_000);
+
   let closing = false;
   const shutdown = () => {
+    clearInterval(revocationRetryTimer);
     if (closing) return;
     closing = true;
     application.server.close((error) => {
