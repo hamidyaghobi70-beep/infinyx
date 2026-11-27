@@ -6,7 +6,7 @@ import { PostgresOidcLoginTransactionStore } from "./oidc-login-transactions.js"
 const key = Buffer.alloc(32, 19);
 
 function fakePool(rows: unknown[] = [], rowCount = 1) {
-  const query = vi.fn(async () => ({ rows, rowCount }));
+  const query = vi.fn(async (_sql: string, _values?: readonly unknown[]) => ({ rows, rowCount }));
   return { pool: { query } as unknown as Pool, query };
 }
 
