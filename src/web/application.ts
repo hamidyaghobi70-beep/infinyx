@@ -13,6 +13,8 @@ import { PostgresIdentitySecurityTransactionStore } from "./identity-security-tr
 import { createIdentityLinkHandlers } from "./identity-link-handlers.js";
 import { retryPendingIdentitySessionRevocations } from "./identity-link-workflow.js";
 import { retryPendingAccountSessionRevocations } from "./account-session-revocation.js";
+import { PostgresAccountRecoveryTransactionStore } from "./account-recovery-transactions.js";
+import { createAccountRecoveryHandlers } from "./account-recovery-handlers.js";
 
 export class WebBffStartupError extends Error {
   constructor() {
@@ -77,7 +79,7 @@ export async function createWebBffApplication(
       pool,
       runtime.sessionEncryptionKey
     );
-    const securityTransactions = new PostgresIdentitySecurityTransactionStore(
+    const recoveryTransactions = new PostgresAccountRecoveryTransactionStore(pool, runtime.sessionEncryptionKey);\n    const securityTransactions = new PostgresIdentitySecurityTransactionStore(
       pool,
       runtime.sessionEncryptionKey
     );
@@ -98,7 +100,7 @@ export async function createWebBffApplication(
       securityTransactions
     });
     return Object.freeze({
-      server: createBffHttpServer({ ...handlers, ...identityHandlers }),
+      server: createBffHttpServer({ ...handlers, ...identityHandlers, ...recoveryHandlers }),
       pool,
       retryPendingIdentitySessionRevocations: () => retryPendingIdentitySessionRevocations(pool!, sessions),
       retryPendingAccountSessionRevocations: () => retryPendingAccountSessionRevocations(pool!, sessions),
