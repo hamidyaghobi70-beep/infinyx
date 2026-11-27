@@ -40,6 +40,42 @@ jobs:
           node-version: "22"
       - name: Install dependencies
         run: npm ci
+      - name: Create a short-lived local TLS certificate for Keycloak
+        run: |
+          mkdir -p .ci/keycloak
+          openssl req -x509 -newkey rsa:2048 -sha256 -days 1 -nodes \
+            -keyout .ci/keycloak/server.key \
+            -out .ci/keycloak/server.crt \
+            -subj "/CN=localhost" \
+            -addext "subjectAltName=DNS:localhost,IP:127.0.0.1"
+          chmod 600 .ci/keycloak/server.key
+          echo "NODE_EXTRA_CA_CERTS=$GITHUB_WORKSPACE/.ci/keycloak/server.crt" >> "$GITHUB_ENV"
+          echo "KEYCLOAK_INTEGRATION_ISSUER=https://localhost:8443/realms/infinyx-ci" >> "$GITHUB_ENV"
+      - name: Start isolated Keycloak test realm over HTTPS
+        run: |
+          docker run --detach --name infinyx-keycloak \
+            --publish 8443:8443 \
+            --volume "$GITHUB_WORKSPACE/.ci/keycloak:/opt/keycloak/conf/tls:ro" \
+            --volume "$GITHUB_WORKSPACE/.github/keycloak/infinyx-ci-realm.json:/opt/keycloak/data/import/infinyx-ci-realm.json:ro" \
+            --env KC_BOOTSTRAP_ADMIN_USERNAME=ci-admin \
+            --env KC_BOOTSTRAP_ADMIN_PASSWORD=ci-only-admin-password \
+            --env KC_HOSTNAME=https://localhost:8443 \
+            --env KC_HTTPS_CERTIFICATE_FILE=/opt/keycloak/conf/tls/server.crt \
+            --env KC_HTTPS_CERTIFICATE_KEY_FILE=/opt/keycloak/conf/tls/server.key \
+            quay.io/keycloak/keycloak:26.3.3 start-dev --https-port=8443 --import-realm
+          for attempt in $(seq 1 60); do
+            if curl --fail --silent --show-error \
+              --cacert .ci/keycloak/server.crt \
+              https://localhost:8443/realms/infinyx-ci/.well-known/openid-configuration >/dev/null; then
+              exit 0
+            fi
+            sleep 2
+          done
+          docker logs infinyx-keycloak
+          exit 1
+      - name: Stop Keycloak test realm
+        if: always()
+        run: docker rm --force infinyx-keycloak || true
       - name: Create least-privilege application role
         run: |
           psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -c "CREATE ROLE infinyx_app LOGIN PASSWORD 'ci-only-password' NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT NOBYPASSRLS"
@@ -90,3 +126,8 @@ jobs:
         run: npm run build
       - name: Run unit and PostgreSQL integration tests
         run: npm test
+      - name: Verify live Keycloak discovery and JWKS over HTTPS
+        env:
+          KEYCLOAK_INTEGRATION_CLIENT_ID: infinyx-web
+          KEYCLOAK_INTEGRATION_CLIENT_SECRET: ci-only-infinyx-web-secret
+        run: npm run test:keycloak
