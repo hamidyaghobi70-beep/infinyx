@@ -118,6 +118,14 @@ export function buildPostgresPoolConfig(
     throw new PostgresConfigurationError();
   }
 
+  // Session refresh holds one checked-out client while the OIDC provider is
+  // contacted (bounded to five seconds). The default remains conservative;
+  // operators should size max from measured peak concurrent DB work, not from
+  // request rate alone. Budget the sum of pool maxima across every application
+  // replica and other DB consumers against the database connection limit, with
+  // headroom for migrations/operations. Monitor pg.Pool waitingCount,
+  // totalCount, and idleCount; a rising waitingCount signals pool pressure.
+  // Increasing max without database capacity and load testing is not a fix.
   const config: PoolConfig = {
     connectionString,
     max: boundedInteger(env.DATABASE_POOL_MAX, 5, 1, 20),
