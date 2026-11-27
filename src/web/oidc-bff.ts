@@ -293,9 +293,12 @@ export function createOidcBffHandlers(dependencies: OidcBffHandlerDependencies) 
       let userId: string | undefined;
       try {
         const identity = await dependencies.database.query<{ user_id: string }>(
-          `SELECT user_id::text AS user_id
-             FROM user_external_identities
-            WHERE issuer = $1 AND subject = $2
+          `SELECT identity.user_id::text AS user_id
+             FROM user_external_identities AS identity
+             INNER JOIN user_external_identity_lifecycle AS lifecycle
+               ON lifecycle.identity_id = identity.identity_id
+              AND lifecycle.status = 'active'
+            WHERE identity.issuer = $1 AND identity.subject = $2
             LIMIT 1`,
           [claims.iss, claims.sub]
         );
