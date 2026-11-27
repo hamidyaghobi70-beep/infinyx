@@ -1,4 +1,5 @@
-import { afterAll, describe, expect, it } from "vitest";
+import * as oidc from "openid-client";
+import { describe, expect, it } from "vitest";
 import { discoverOidcClient } from "./oidc-bff.js";
 
 const issuer = process.env.KEYCLOAK_INTEGRATION_ISSUER;
@@ -21,13 +22,20 @@ describe.skipIf(!issuer)("live Keycloak staging integration", () => {
     expect(metadata.token_endpoint).toMatch(/^https:\/\//u);
     expect(metadata.jwks_uri).toMatch(/^https:\/\//u);
 
+    const authorizationUrl = oidc.buildAuthorizationUrl(client, {
+      redirect_uri: "https://localhost:3000/auth/callback",
+      response_type: "code",
+      scope: "openid",
+      state: "ci-integration-state"
+    });
+    expect(authorizationUrl.origin).toBe("https://localhost:8443");
+    expect(authorizationUrl.pathname).toBe("/realms/infinyx-ci/protocol/openid-connect/auth");
+    expect(authorizationUrl.searchParams.get("client_id")).toBe(clientId);
+
     const jwksResponse = await fetch(metadata.jwks_uri!);
     expect(jwksResponse.status).toBe(200);
     const jwks = await jwksResponse.json() as { keys?: unknown[] };
     expect(Array.isArray(jwks.keys)).toBe(true);
     expect(jwks.keys!.length).toBeGreaterThan(0);
-
-    const authorizationUrl = new URL("https://localhost:8443/");
-    expect(authorizationUrl.protocol).toBe("https:");
   });
 });
