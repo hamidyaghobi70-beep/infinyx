@@ -100,7 +100,6 @@ exports.down = (pgm) => {
     DROP INDEX tenant_memberships_current_generation_unique;
 
     ALTER TABLE tenant_memberships
-      DROP CONSTRAINT tenant_memberships_audit_membership_fk,
       DROP CONSTRAINT tenant_memberships_tenant_membership_unique,
       DROP CONSTRAINT tenant_memberships_generation_unique,
       DROP CONSTRAINT tenant_memberships_generation_check,
