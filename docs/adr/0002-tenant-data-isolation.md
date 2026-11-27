@@ -8,7 +8,7 @@
 
 INFINYX verifies JWT identity and derives a tenant identifier from the verified principal. That establishes an authenticated tenant context; it does not, by itself, isolate persisted records. Every database read and write must enforce the same tenant boundary, including background jobs and future administrative paths.
 
-ADR-0003 selects PostgreSQL with a shared database and shared tenant-aware tables as the target persistence architecture. This ADR defines the security contract that the persistence implementation must satisfy. The repository does not yet contain a database driver, schema, migration framework, or implemented database isolation boundary.
+ADR-0003 selects PostgreSQL with a shared database and shared tenant-aware tables as the target persistence architecture. This ADR defines the security contract for the persistence implementation. The repository now contains an initial PostgreSQL pool adapter, a migration for the `tenants` and `tenant_memberships` tables, forced RLS policies, and real-PostgreSQL CI tests using a least-privilege application role. This is a verified foundation for these two tables, not yet a complete application DAL or domain schema.
 
 ## Security invariants
 
@@ -32,6 +32,10 @@ The implementation must follow ADR-0003 and:
 - Keep explicit tenant predicates in DAL operations as an additional, reviewable safeguard.
 - Add tenant-aware unique constraints and composite foreign keys where relationships are tenant-local.
 
+## Important security boundary limitation
+
+The initial policy context uses the transaction-local PostgreSQL setting `app.tenant_id`. A custom setting is not a cryptographically authenticated identity: code running arbitrary SQL as the same application database role could attempt to change it. Therefore, this RLS design is defense in depth against omitted tenant predicates and ordinary repository mistakes; it must not be described as protection against arbitrary SQL execution or a successful SQL injection under the shared role. Parameterized SQL, trusted application-owned query text, least-privilege grants, and independent security review remain mandatory. A stronger database-authenticated tenant context must be evaluated before production use.
+
 ## Required isolation tests
 
 Use two independently authenticated principals, Tenant A and Tenant B, and seed distinct records for each.
@@ -48,21 +52,21 @@ Use two independently authenticated principals, Tenant A and Tenant B, and seed 
 | Cross-tenant relationship is attempted | Rejected by database constraint or data-access policy |
 | Background/system task accesses tenant data | Requires an explicit scoped identity and is audited |
 
-Tests must exercise the actual persistence adapter and database policies. A unit test that only compares two tenant ID strings is not evidence of database isolation.
+Tests must exercise the actual persistence adapter and database policies. A unit test that only compares two tenant ID strings is not evidence of database isolation. The initial CI suite currently exercises the `tenants` and `tenant_memberships` tables against ephemeral PostgreSQL; every future tenant-owned table must be added to the same coverage before it is treated as isolated.
 
 ## Rollout and acceptance
 
-1. Ensure dependency installation is reproducible through a committed lockfile and CI uses `npm ci`, as required by ADR-0003.
-2. Implement tenant context propagation at the transaction boundary.
-3. Add tenant-aware schema constraints and database-enforced RLS policies.
-4. Implement repository-level tenant scoping through the DAL.
-5. Run integration tests against the real PostgreSQL database, including connection-pool reuse and negative cross-tenant cases.
-6. Verify that the application database role cannot bypass the isolation policy.
-7. Only then consider the persistence boundary ready for independent security review.
+1. Reproducible dependency installation through a committed lockfile and CI `npm ci`: COMPLETE.
+2. Tenant context propagation at the transaction boundary: IMPLEMENTED and unit-tested.
+3. Initial `tenants` and `tenant_memberships` schema constraints and forced RLS policies: IMPLEMENTED.
+4. Real PostgreSQL integration tests for own-tenant access, cross-tenant read/write denial, missing context, and pool reuse: PASSING in CI.
+5. Least-privilege application role without table ownership or `BYPASSRLS`: VERIFIED in CI.
+6. Repository-level DAL, all future domain tables, broader relationship constraints, and stronger protection against arbitrary SQL execution: NOT YET IMPLEMENTED.
+7. Independent security review is still required before production use.
 
 ## Consequences and open decisions
 
 - ADR-0003 is authoritative for the PostgreSQL platform decision; this ADR is authoritative for tenant-isolation invariants and acceptance tests.
-- The current JWT principal is necessary input to this design, but is not proof that tenant isolation has been implemented.
+- The current JWT principal is necessary input to this design, but is not proof by itself. The initial RLS behavior has been verified only for the two tables named above and only within the stated threat-model limits.
 - PostgreSQL hosting provider and deployment topology remain open.
 - Merge and release remain separate approval decisions.
