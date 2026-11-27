@@ -32,8 +32,7 @@ function boundedInteger(
 }
 
 function readStrictTlsConfiguration(
-  env: PostgresEnvironment,
-  hostname: string
+  env: PostgresEnvironment
 ): NonNullable<PoolConfig["ssl"]> {
   const ca = env.DATABASE_SSL_CA;
   const servername = env.DATABASE_SSL_SERVERNAME;
@@ -59,7 +58,6 @@ function readStrictTlsConfiguration(
   // The explicit servername is intentionally independent of the network host:
   // private endpoints may be addressed by an IP while the certificate identity
   // is a DNS SAN. The caller must provide the expected DNS identity explicitly.
-  void hostname;
   return { rejectUnauthorized: true, ca, servername };
 }
 
@@ -138,7 +136,7 @@ export function buildPostgresPoolConfig(
     application_name: "infinyx-api",
     ssl:
       sslMode === "require"
-        ? readStrictTlsConfiguration(env, parsedUrl.hostname)
+        ? readStrictTlsConfiguration(env)
         : false
   };
 
