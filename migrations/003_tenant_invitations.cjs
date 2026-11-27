@@ -94,6 +94,37 @@ exports.up = (pgm) => {
     CREATE INDEX tenant_invitation_audit_history_idx
       ON tenant_invitation_audit_events (tenant_id, invitation_id, occurred_at DESC);
 
+    CREATE TABLE tenant_invitation_delivery_outbox (
+      outbox_id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+      tenant_id text NOT NULL,
+      invitation_id uuid NOT NULL,
+      key_version integer NOT NULL,
+      nonce bytea NOT NULL,
+      ciphertext bytea NOT NULL,
+      auth_tag bytea NOT NULL,
+      status varchar(16) NOT NULL DEFAULT 'pending',
+      attempts integer NOT NULL DEFAULT 0,
+      next_attempt_at timestamptz NOT NULL DEFAULT now(),
+      created_at timestamptz NOT NULL DEFAULT now(),
+      sent_at timestamptz,
+      CONSTRAINT tenant_invitation_outbox_invitation_fk
+        FOREIGN KEY (tenant_id, invitation_id)
+        REFERENCES tenant_invitations (tenant_id, invitation_id)
+        ON DELETE RESTRICT,
+      CONSTRAINT tenant_invitation_outbox_key_version_check CHECK (key_version > 0),
+      CONSTRAINT tenant_invitation_outbox_nonce_check CHECK (octet_length(nonce) = 12),
+      CONSTRAINT tenant_invitation_outbox_auth_tag_check CHECK (octet_length(auth_tag) = 16),
+      CONSTRAINT tenant_invitation_outbox_status_check CHECK (status IN ('pending', 'sent', 'dead')),
+      CONSTRAINT tenant_invitation_outbox_attempts_check CHECK (attempts >= 0),
+      CONSTRAINT tenant_invitation_outbox_sent_check
+        CHECK ((status = 'sent') = (sent_at IS NOT NULL)),
+      CONSTRAINT tenant_invitation_outbox_invitation_unique UNIQUE (invitation_id)
+    );
+
+    CREATE INDEX tenant_invitation_outbox_ready_idx
+      ON tenant_invitation_delivery_outbox (next_attempt_at, created_at)
+      WHERE status = 'pending';
+
     ALTER TABLE tenant_invitations ENABLE ROW LEVEL SECURITY;
     ALTER TABLE tenant_invitations FORCE ROW LEVEL SECURITY;
     CREATE POLICY tenant_invitations_tenant_scope ON tenant_invitations
@@ -213,6 +244,7 @@ exports.down = (pgm) => {
     DROP FUNCTION IF EXISTS lookup_tenant_for_invitation_token(bytea);
     DROP FUNCTION IF EXISTS require_tenant_invitation_audit();
     DROP FUNCTION IF EXISTS enforce_tenant_invitation_transition();
+    DROP TABLE IF EXISTS tenant_invitation_delivery_outbox;
     DROP TABLE IF EXISTS tenant_invitation_audit_events;
     DROP TABLE IF EXISTS tenant_invitations;
   `);
