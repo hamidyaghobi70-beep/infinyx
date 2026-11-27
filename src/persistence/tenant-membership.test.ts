@@ -46,7 +46,13 @@ function transactionWithRole(role: TenantRole | null): TenantTransaction {
           sql.startsWith("SELECT set_config")) {
         return [];
       }
-      return role ? ([{ role }] as unknown as readonly Row[]) : [];
+      return role ? ([{
+        membership_id: "00000000-0000-4000-8000-000000000001",
+        generation: 1,
+        role,
+        status: "active",
+        version: "1"
+      }] as unknown as readonly Row[]) : [];
     }
   };
 }
