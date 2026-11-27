@@ -495,7 +495,6 @@ integrationDescribe("PostgreSQL tenant RLS integration", () => {
     )).resolves.toBeNull();
   });
 
-});
 
   it("requires an audit event for direct lifecycle updates and blocks removed reactivation", async () => {
     const owner = principalFor("tenant-a");
@@ -552,3 +551,4 @@ integrationDescribe("PostgreSQL tenant RLS integration", () => {
     )).rejects.toBeInstanceOf(TenantPersistenceError);
   });
 
+});
