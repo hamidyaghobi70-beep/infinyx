@@ -43,9 +43,15 @@ exports.up = (pgm) => {
       CONSTRAINT tenant_invitations_version_check
         CHECK (version > 0),
       CONSTRAINT tenant_invitations_acceptance_metadata_check
-        CHECK ((status = 'accepted') = (accepted_by IS NOT NULL AND accepted_at IS NOT NULL)),
+        CHECK (
+          (status = 'accepted' AND accepted_by IS NOT NULL AND accepted_at IS NOT NULL)
+          OR (status <> 'accepted' AND accepted_by IS NULL AND accepted_at IS NULL)
+        ),
       CONSTRAINT tenant_invitations_revocation_metadata_check
-        CHECK ((status = 'revoked') = (revoked_by IS NOT NULL AND revoked_at IS NOT NULL)),
+        CHECK (
+          (status = 'revoked' AND revoked_by IS NOT NULL AND revoked_at IS NOT NULL)
+          OR (status <> 'revoked' AND revoked_by IS NULL AND revoked_at IS NULL)
+        ),
       CONSTRAINT tenant_invitations_token_hash_unique UNIQUE (token_hash)
     );
 
@@ -202,6 +208,11 @@ exports.up = (pgm) => {
            AND audit.previous_status = OLD.status
            AND audit.new_status = NEW.status
            AND audit.outcome = 'succeeded'
+           AND (
+             (NEW.status = 'accepted' AND audit.actor_user_id = NEW.accepted_by)
+             OR (NEW.status = 'revoked' AND audit.actor_user_id = NEW.revoked_by)
+             OR NEW.status = 'expired'
+           )
       ) THEN
         RAISE EXCEPTION 'Invitation transition requires an audit event';
       END IF;
