@@ -26,7 +26,7 @@ describe("account session revocation outbox", () => {
       .resolves.toBe(true);
     expect(sessions.revokeAllForUser).toHaveBeenCalledWith(userId);
     expect(calls[0]).toBe("sessions-revoked");
-    expect(calls[1]).toContain("SET completed_at = now()");
+    expect(calls[1]).toContain("complete_user_account_session_revocation");
   });
 
   it("leaves the fail-closed outbox pending when session revocation fails", async () => {
