@@ -156,13 +156,11 @@ export async function completeIdentitySessionRevocation(
   if (!UUID_PATTERN.test(userId) || !UUID_PATTERN.test(outboxId)) return false;
   try {
     await sessions.revokeAllForUser(userId);
-    const completed = await pool.query(
-      `UPDATE identity_session_revocation_outbox
-          SET completed_at = now(), attempts = attempts + 1, last_error_code = NULL
-        WHERE outbox_id = $1::uuid AND user_id = $2::uuid AND completed_at IS NULL`,
+    const completed = await pool.query<{ completed: boolean }>(
+      "SELECT complete_identity_session_revocation($1::uuid, $2::uuid) AS completed",
       [outboxId, userId]
     );
-    if (completed.rowCount === 1) return true;
+    if (completed.rows[0]?.completed === true) return true;
     const status = await pool.query<{ completed_at: Date | null }>(
       "SELECT completed_at FROM identity_session_revocation_outbox WHERE outbox_id = $1::uuid AND user_id = $2::uuid",
       [outboxId, userId]
