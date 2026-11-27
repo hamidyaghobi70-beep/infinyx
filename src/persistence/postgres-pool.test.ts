@@ -240,7 +240,7 @@ describe("buildPostgresPoolConfig", () => {
     ).toThrow(PostgresConfigurationError);
   });
 
-  it("allows explicit TLS opt-out only in development or test", () => {
+  it("allows TLS opt-out only in tests or local development", () => {
     expect(
       buildPostgresPoolConfig({
         DATABASE_URL: databaseUrl,
@@ -248,6 +248,20 @@ describe("buildPostgresPoolConfig", () => {
         NODE_ENV: "test"
       }).ssl
     ).toBe(false);
+    expect(
+      buildPostgresPoolConfig({
+        DATABASE_URL: "postgresql://infinyx_app:secret@localhost:5432/infinyx",
+        DATABASE_SSL: "disable",
+        NODE_ENV: "development"
+      }).ssl
+    ).toBe(false);
+    expect(() =>
+      buildPostgresPoolConfig({
+        DATABASE_URL: databaseUrl,
+        DATABASE_SSL: "disable",
+        NODE_ENV: "development"
+      })
+    ).toThrow(PostgresConfigurationError);
     expect(() =>
       buildPostgresPoolConfig({
         DATABASE_URL: databaseUrl,
