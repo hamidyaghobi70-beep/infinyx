@@ -134,6 +134,9 @@ describe("serialized web-session access-token refresh", () => {
     expect(calls).toHaveLength(2);
     for (const sql of calls) {
       expect(sql).toContain("user_account_security");
+      expect(sql).toContain("user_external_identities");
+      expect(sql).toContain("user_external_identity_lifecycle");
+      expect(sql).toContain("lifecycle.status = 'active'");
       expect(sql).toContain("user_account_session_revocation_outbox");
       expect(sql).toContain("account_security.status = 'active'");
     }
@@ -143,6 +146,9 @@ describe("serialized web-session access-token refresh", () => {
     const pool = {
       query: vi.fn(async (sql: string) => {
         expect(sql).toContain("user_account_security");
+        expect(sql).toContain("user_external_identities");
+        expect(sql).toContain("user_external_identity_lifecycle");
+        expect(sql).toContain("lifecycle.status = 'active'");
         expect(sql).toContain("user_account_session_revocation_outbox");
         expect(sql).toContain("identity_session_revocation_outbox");
         return { rows: [], rowCount: 0 };
