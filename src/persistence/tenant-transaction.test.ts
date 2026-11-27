@@ -84,7 +84,7 @@ function fakeDatabase() {
 describe("withTenantTransaction", () => {
   it("creates tenant memory scope only from the active authorized transaction", async () => {
     const db = fakeDatabase();
-    const scope = await withTenantTransaction(db.pool, principal, "tenant-a", (tx) =>
+    const scope = await withTenantTransaction(db.pool, principal, "tenant-a", async (tx) =>
       createTenantMemoryScope(tx, principal, "assistant")
     );
     expect(scope).toEqual({
