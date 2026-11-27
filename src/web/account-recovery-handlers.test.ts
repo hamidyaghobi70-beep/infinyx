@@ -3,7 +3,7 @@ import type { Pool } from "pg";
 import type { Server } from "node:http";
 import type * as oidc from "openid-client";
 import { createBffHttpServer } from "./bff-server.js";
-import { createOpaqueSessionId } from "./session-crypto.js";
+import { createOpaqueSessionId, type IdentitySecurityTransactionPayload } from "./session-crypto.js";
 import { createAccountRecoveryHandlers } from "./account-recovery-handlers.js";
 import type { OidcBffClient, OidcBffConfiguration } from "./oidc-bff.js";
 import { recoverSuspendedAccount } from "./account-recovery-workflow.js";
@@ -83,8 +83,12 @@ function setup() {
     authorizationCodeGrant
   } as unknown as OidcBffClient;
   const recoveryTransactions = {
-    create: vi.fn(async () => undefined),
-    consume: vi.fn(async () => ({ transactionId: "30000000-0000-4000-8000-000000000001", payload }))
+    create: vi.fn(async (
+      _state: string, _binding: string, _payload: IdentitySecurityTransactionPayload, _expiresAt: Date
+    ) => undefined),
+    consume: vi.fn(async (_state: string, _binding: string) => ({
+      transactionId: "30000000-0000-4000-8000-000000000001", payload
+    }))
   };
   const configuration: OidcBffConfiguration = {
     issuer, clientId: "infinyx-web", clientSecret: "synthetic-secret",
