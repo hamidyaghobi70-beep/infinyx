@@ -14,6 +14,23 @@ jobs:
   verify:
     name: Typecheck and unit tests
     runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: infinyx_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d infinyx_test"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    env:
+      DATABASE_URL: postgresql://postgres:postgres@localhost:5432/infinyx_test?sslmode=disable
+      INFINYX_TEST_DATABASE_URL: postgresql://infinyx_app:ci-only-password@localhost:5432/infinyx_test?sslmode=disable
     steps:
       - name: Check out source
         uses: actions/checkout@v4
@@ -23,6 +40,25 @@ jobs:
           node-version: "22"
       - name: Install dependencies
         run: npm ci
+      - name: Create least-privilege application role
+        run: |
+          psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -c "CREATE ROLE infinyx_app LOGIN PASSWORD 'ci-only-password' NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT NOBYPASSRLS"
+      - name: Apply database migrations
+        run: npm run db:migrate:up
+      - name: Grant application table privileges and seed isolated tenants
+        run: |
+          psql "$DATABASE_URL" -v ON_ERROR_STOP=1 <<'SQL'
+          GRANT USAGE ON SCHEMA public TO infinyx_app;
+          GRANT SELECT, INSERT, UPDATE, DELETE ON tenants, tenant_memberships TO infinyx_app;
+          INSERT INTO tenants (id, name) VALUES
+            ('tenant-a', 'Tenant A'),
+            ('tenant-b', 'Tenant B');
+          INSERT INTO tenant_memberships (tenant_id, user_id, role) VALUES
+            ('tenant-a', 'user-tenant-a', 'owner'),
+            ('tenant-b', 'user-tenant-b', 'owner');
+          SQL
+      - name: Check migration file syntax
+        run: npm run db:migrate:check
       - name: Audit dependency vulnerabilities
         run: |
           npm audit --json > npm-audit.json || true
