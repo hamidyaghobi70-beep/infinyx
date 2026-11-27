@@ -100,8 +100,11 @@ class PgTenantSqlClient implements TenantSqlClient {
     sql: string,
     values: readonly unknown[] = []
   ): Promise<SqlQueryResult<Row>> {
-    const result = await this.client.query<Row>(sql, [...values]);
-    return { rows: result.rows, rowCount: result.rowCount };
+    const result = await this.client.query(sql, [...values]);
+    return {
+      rows: result.rows as unknown as readonly Row[],
+      rowCount: result.rowCount
+    };
   }
 
   release(destroy = false): void {
