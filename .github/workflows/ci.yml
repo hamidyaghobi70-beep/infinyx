@@ -30,7 +30,7 @@ jobs:
           --health-retries 5
     env:
       DATABASE_URL: postgresql://postgres:postgres@localhost:5432/infinyx_test
-      INFINYX_TEST_DATABASE_URL: postgresql://infinyx_app:ci-only-password@localhost:5432/infinyx_test?sslmode=disable
+      INFINYX_TEST_DATABASE_URL: postgresql://infinyx_app:ci-only-password@localhost:5432/infinyx_test
     steps:
       - name: Check out source
         uses: actions/checkout@v4
