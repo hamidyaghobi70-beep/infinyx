@@ -299,6 +299,10 @@ export function createOidcBffHandlers(dependencies: OidcBffHandlerDependencies) 
                ON lifecycle.identity_id = identity.identity_id
               AND lifecycle.status = 'active'
             WHERE identity.issuer = $1 AND identity.subject = $2
+              AND NOT EXISTS (
+                SELECT 1 FROM identity_session_revocation_outbox AS pending
+                 WHERE pending.user_id = identity.user_id AND pending.completed_at IS NULL
+              )
             LIMIT 1`,
           [claims.iss, claims.sub]
         );
