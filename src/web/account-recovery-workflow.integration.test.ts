@@ -88,8 +88,9 @@ integrationDescribe("PostgreSQL safe suspended account recovery", () => {
       [account.identityId]
     );
 
+    const recoveryCorrelationId = randomUUID();
     const result = await recoverSuspendedAccount(
-      pool, account.issuer, account.subject, randomUUID()
+      pool, account.issuer, account.subject, recoveryCorrelationId
     );
     expect(result.outcome).toBe("recovered");
     if (result.outcome !== "recovered") throw new Error("Expected recovered outcome.");
@@ -113,10 +114,7 @@ integrationDescribe("PostgreSQL safe suspended account recovery", () => {
       `SELECT outcome, reason_code, user_id::text, identity_id::text
          FROM user_account_recovery_audit_events
         WHERE correlation_id = $1::uuid`,
-      [result.outboxId === "" ? "" : (await adminPool.query(
-        "SELECT correlation_id::text FROM user_account_security WHERE user_id = $1::uuid",
-        [account.userId]
-      )).rows[0]!.correlation_id]
+      [recoveryCorrelationId]
     );
     expect(audit.rows[0]).toMatchObject({
       outcome: "succeeded", reason_code: "active_identity_proved",
