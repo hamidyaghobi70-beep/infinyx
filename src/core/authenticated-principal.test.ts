@@ -185,7 +185,8 @@ describe("internal principal resolution", () => {
 
   it("fails closed for unknown identities and forged external identity objects", async () => {
     const resolver = createAuthenticatedPrincipalResolver(() => null);
-    expect(() => resolver(await identity())).toThrow(AuthenticationError);
+    const verifiedIdentity = await identity();
+    expect(() => resolver(verifiedIdentity)).toThrow(AuthenticationError);
     expect(() => createAuthenticatedPrincipalResolver(() => internalUserId)({
       issuer, subject: "provider-subject-1", audience: [audience], expiresAt: now + 10
     })).toThrow(AuthenticationError);
