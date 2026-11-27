@@ -495,7 +495,8 @@ integrationDescribe("PostgreSQL tenant RLS integration", () => {
     )).resolves.toBeNull();
   });
 
-});\n
+});
+
   it("requires an audit event for direct lifecycle updates and blocks removed reactivation", async () => {
     const owner = principalFor("tenant-a");
     const targetUserId = "user-lifecycle-trigger-guard";
