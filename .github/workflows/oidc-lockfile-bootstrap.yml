@@ -1,0 +1,36 @@
+name: Temporary OIDC lockfile generation
+
+on:
+  push:
+    branches:
+      - feat/adr-platform-foundation
+    paths:
+      - ".github/workflows/oidc-lockfile-bootstrap.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  generate-lockfile:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out approved implementation branch
+        uses: actions/checkout@v4
+      - name: Set up Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Resolve exact OIDC client dependency and lockfile
+        run: npm install --package-lock-only --ignore-scripts --save-exact openid-client@6.9.1
+      - name: Emit lockfile and package manifest for deterministic commit
+        run: |
+          node --input-type=commonjs <<'NODE'
+          const fs = require("node:fs");
+          for (const name of ["package.json", "package-lock.json"]) {
+            const value = fs.readFileSync(name).toString("base64");
+            const width = 3000;
+            for (let offset = 0; offset < value.length; offset += width) {
+              console.log("@@BASE64:" + name + ":" + String(offset).padStart(8, "0") + ":" + value.slice(offset, offset + width));
+            }
+          }
+          NODE
