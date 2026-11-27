@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
-import type { TenantPrincipal } from "./tenant-transaction.js";
+import type { AuthenticatedPrincipal } from "../core/authenticated-principal.js";
+import { getTenantTransactionContext } from "./tenant-transaction.js";
 import {
   constantTimeEqual32,
   createInvitationSecrets,
@@ -114,11 +115,12 @@ export async function resolveInvitationTarget(
 
 async function lockAndAuthorizeTenant(
   transaction: TenantTransaction,
-  principal: TenantPrincipal
+  principal: AuthenticatedPrincipal
 ): Promise<void> {
+  const { tenantId } = getTenantTransactionContext(transaction, principal);
   const tenant = await transaction.query<{ id: string }>(
     "SELECT id FROM tenants WHERE id = $1 FOR UPDATE",
-    [principal.tenantId]
+    [tenantId]
   );
   if (tenant.length !== 1) throw new TenantAuthorizationError();
   try {
@@ -161,7 +163,7 @@ async function writeInvitationAudit(
  */
 export async function createTenantInvitation(
   transaction: TenantTransaction,
-  principal: TenantPrincipal,
+  principal: AuthenticatedPrincipal,
   target: ResolvedInvitationTarget,
   role: InvitationRole,
   correlationId: string,
@@ -172,6 +174,7 @@ export async function createTenantInvitation(
     throw new InvitationRequestError();
   }
 
+  const { tenantId } = getTenantTransactionContext(transaction, principal);
   await lockAndAuthorizeTenant(transaction, principal);
 
   const secrets = createInvitationSecrets(
@@ -185,7 +188,7 @@ export async function createTenantInvitation(
        FROM tenant_invitation_audit_events
       WHERE tenant_id = $1 AND correlation_id = $2
       LIMIT 1`,
-    [principal.tenantId, correlationId]
+    [tenantId, correlationId]
   );
   if (prior[0]) {
     if (prior[0].action !== "created" ||
@@ -205,7 +208,7 @@ export async function createTenantInvitation(
          FROM tenant_invitations
         WHERE tenant_id = $1 AND invitation_id = $2
         LIMIT 1`,
-      [principal.tenantId, prior[0].invitation_id]
+      [tenantId, prior[0].invitation_id]
     );
     const row = existing[0];
     if (!row || row.identity_type !== target.identityType ||
@@ -224,7 +227,7 @@ export async function createTenantInvitation(
           AND status IN ('active', 'suspended')
         LIMIT 1
         FOR UPDATE`,
-      [principal.tenantId, target.internalUserId]
+      [tenantId, target.internalUserId]
     );
     if (currentMembership.length > 0) throw new InvitationConflictError();
   }
@@ -238,7 +241,7 @@ export async function createTenantInvitation(
         AND status = 'pending'
         AND expires_at <= now()
       FOR UPDATE`,
-    [principal.tenantId, target.identityType, secrets.identityFingerprint]
+    [tenantId, target.identityType, secrets.identityFingerprint]
   );
 
   for (const invitation of expired) {
@@ -248,10 +251,10 @@ export async function createTenantInvitation(
           SET status = 'expired', version = version + 1
         WHERE tenant_id = $1 AND invitation_id = $2
           AND status = 'pending' AND version = $3`,
-      [principal.tenantId, invitation.invitation_id, invitation.version]
+      [tenantId, invitation.invitation_id, invitation.version]
     );
     await writeInvitationAudit(transaction, {
-      tenantId: principal.tenantId,
+      tenantId: tenantId,
       invitationId: invitation.invitation_id,
       actorUserId: principal.userId,
       action: "expired",
@@ -270,7 +273,7 @@ export async function createTenantInvitation(
         AND identity_fingerprint = $3 AND status = 'pending'
         AND expires_at > now()
       LIMIT 1`,
-    [principal.tenantId, target.identityType, secrets.identityFingerprint]
+    [tenantId, target.identityType, secrets.identityFingerprint]
   );
   if (duplicate.length > 0) throw new InvitationConflictError();
 
@@ -284,7 +287,7 @@ export async function createTenantInvitation(
      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, now() + interval '72 hours')
      RETURNING invitation_id::text AS invitation_id, expires_at::text AS expires_at`,
     [
-      principal.tenantId,
+      tenantId,
       secrets.identityType,
       secrets.identityFingerprint,
       keys.identityKeyVersion,
@@ -298,7 +301,7 @@ export async function createTenantInvitation(
   if (!row) throw new InvitationConflictError();
 
   await writeInvitationAudit(transaction, {
-    tenantId: principal.tenantId,
+    tenantId: tenantId,
     invitationId: row.invitation_id,
     actorUserId: principal.userId,
     action: "created",
@@ -311,7 +314,7 @@ export async function createTenantInvitation(
 
   const encrypted = encryptInvitationDelivery({
     invitationId: row.invitation_id,
-    tenantId: principal.tenantId,
+    tenantId: tenantId,
     identityType: secrets.identityType,
     normalizedIdentity: secrets.normalizedIdentity,
     rawToken: secrets.rawToken
@@ -322,7 +325,7 @@ export async function createTenantInvitation(
       (tenant_id, invitation_id, key_version, nonce, ciphertext, auth_tag)
      VALUES ($1, $2, $3, $4, $5, $6)`,
     [
-      principal.tenantId,
+      tenantId,
       row.invitation_id,
       encrypted.keyVersion,
       encrypted.nonce,
@@ -340,7 +343,7 @@ export async function createTenantInvitation(
 /** Revokes only a pending invitation; audit and state change share the caller's transaction. */
 export async function revokeTenantInvitation(
   transaction: TenantTransaction,
-  principal: TenantPrincipal,
+  principal: AuthenticatedPrincipal,
   invitationId: string,
   correlationId: string
 ): Promise<{ readonly outcome: "succeeded" | "denied" | "noop" }> {
@@ -348,6 +351,7 @@ export async function revokeTenantInvitation(
     throw new InvitationRequestError();
   }
 
+  const { tenantId } = getTenantTransactionContext(transaction, principal);
   await lockAndAuthorizeTenant(transaction, principal);
 
   const prior = await transaction.query<AuditRow>(
@@ -355,7 +359,7 @@ export async function revokeTenantInvitation(
        FROM tenant_invitation_audit_events
       WHERE tenant_id = $1 AND correlation_id = $2
       LIMIT 1`,
-    [principal.tenantId, correlationId]
+    [tenantId, correlationId]
   );
   if (prior[0]) {
     if (prior[0].action !== "revoked" ||
@@ -372,12 +376,12 @@ export async function revokeTenantInvitation(
        FROM tenant_invitations
       WHERE tenant_id = $1 AND invitation_id = $2
       FOR UPDATE`,
-    [principal.tenantId, invitationId]
+    [tenantId, invitationId]
   );
   const invitation = rows[0];
   if (!invitation) {
     await writeInvitationAudit(transaction, {
-      tenantId: principal.tenantId,
+      tenantId: tenantId,
       invitationId: null,
       actorUserId: principal.userId,
       action: "replay_denied",
@@ -400,10 +404,10 @@ export async function revokeTenantInvitation(
           SET status = 'expired', version = version + 1
         WHERE tenant_id = $1 AND invitation_id = $2
           AND status = 'pending' AND version = $3`,
-      [principal.tenantId, invitationId, invitation.version]
+      [tenantId, invitationId, invitation.version]
     );
     await writeInvitationAudit(transaction, {
-      tenantId: principal.tenantId,
+      tenantId: tenantId,
       invitationId,
       actorUserId: principal.userId,
       action: "expired",
@@ -422,10 +426,10 @@ export async function revokeTenantInvitation(
             version = version + 1
       WHERE tenant_id = $2 AND invitation_id = $3
         AND status = 'pending' AND version = $4`,
-    [principal.userId, principal.tenantId, invitationId, invitation.version]
+    [principal.userId, tenantId, invitationId, invitation.version]
   );
   await writeInvitationAudit(transaction, {
-    tenantId: principal.tenantId,
+    tenantId: tenantId,
     invitationId,
     actorUserId: principal.userId,
     action: "revoked",
