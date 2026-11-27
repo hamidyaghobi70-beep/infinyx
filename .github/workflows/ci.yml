@@ -342,8 +342,69 @@ jobs:
         run: npm run typecheck
       - name: Build Web BFF runtime
         run: npm run build
+      - name: Create an ephemeral PostgreSQL TLS fixture
+        run: |
+          mkdir -p .ci/postgres-tls
+          openssl req -x509 -newkey rsa:2048 -sha256 -days 2 -nodes \
+            -keyout .ci/postgres-tls/ca.key \
+            -out .ci/postgres-tls/ca.crt \
+            -subj "/CN=INFINYX CI PostgreSQL CA" \
+            -addext "basicConstraints=critical,CA:TRUE" \
+            -addext "keyUsage=critical,keyCertSign,cRLSign"
+          openssl req -newkey rsa:2048 -nodes \
+            -keyout .ci/postgres-tls/server.key \
+            -out .ci/postgres-tls/server.csr \
+            -subj "/CN=localhost"
+          printf '%s\\n' \
+            "subjectAltName=DNS:localhost" \
+            "extendedKeyUsage=serverAuth" \
+            "keyUsage=digitalSignature,keyEncipherment" \
+            "basicConstraints=CA:FALSE" > .ci/postgres-tls/server.ext
+          openssl x509 -req -in .ci/postgres-tls/server.csr \
+            -CA .ci/postgres-tls/ca.crt -CAkey .ci/postgres-tls/ca.key \
+            -CAcreateserial -out .ci/postgres-tls/server.crt \
+            -days 2 -sha256 -extfile .ci/postgres-tls/server.ext
+          openssl req -x509 -newkey rsa:2048 -sha256 -days 2 -nodes \
+            -keyout .ci/postgres-tls/wrong-ca.key \
+            -out .ci/postgres-tls/wrong-ca.crt \
+            -subj "/CN=INFINYX CI Untrusted PostgreSQL CA" \
+            -addext "basicConstraints=critical,CA:TRUE" \
+            -addext "keyUsage=critical,keyCertSign,cRLSign"
+          printf '%s\\n' \
+            "local all all trust" \
+            "hostnossl all all all reject" \
+            "hostssl all all all scram-sha-256" > .ci/postgres-tls/pg_hba.conf
+          chmod 600 .ci/postgres-tls/server.key
+          chmod 644 .ci/postgres-tls/server.crt .ci/postgres-tls/ca.crt \
+            .ci/postgres-tls/wrong-ca.crt .ci/postgres-tls/pg_hba.conf
+          sudo chown 999:999 .ci/postgres-tls/server.key .ci/postgres-tls/pg_hba.conf
+          docker run --detach --name infinyx-postgres-tls \
+            --publish 5433:5432 \
+            --volume "$GITHUB_WORKSPACE/.ci/postgres-tls:/tls:ro" \
+            --env POSTGRES_USER=postgres \
+            --env POSTGRES_PASSWORD=ci-only-postgres-password \
+            --env POSTGRES_DB=infinyx_tls_test \
+            postgres:16 \
+            -c ssl=on \
+            -c ssl_cert_file=/tls/server.crt \
+            -c ssl_key_file=/tls/server.key \
+            -c hba_file=/tls/pg_hba.conf
+          for attempt in $(seq 1 30); do
+            if pg_isready -h 127.0.0.1 -p 5433 -U postgres -d infinyx_tls_test; then
+              exit 0
+            fi
+            sleep 2
+          done
+          docker logs infinyx-postgres-tls
+          exit 1
+      - name: Verify real pg strict TLS and fail-closed behavior
+        env:
+          TLS_TEST_DATABASE_URL: postgresql://postgres:ci-only-postgres-password@localhost:5433/infinyx_tls_test
+          TLS_TEST_CA_FILE: .ci/postgres-tls/ca.crt
+          TLS_TEST_WRONG_CA_FILE: .ci/postgres-tls/wrong-ca.crt
+        run: node scripts/verify-postgres-strict-tls-ci.mjs
       - name: Run unit and PostgreSQL integration tests
-        run: npm test
+        run: npm test -- --no-file-parallelism
       - name: Verify live Keycloak discovery and JWKS over HTTPS
         env:
           KEYCLOAK_INTEGRATION_CLIENT_ID: infinyx-web
