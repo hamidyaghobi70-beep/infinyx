@@ -1,9 +1,5 @@
-import { generateKeyPairSync, sign } from "node:crypto";
 import { describe, expect, it } from "vitest";
-import {
-  createAuthenticatedPrincipalResolver,
-  createJwtPrincipalVerifier
-} from "../core/authenticated-principal.js";
+import { createTestPrincipal } from "../core/testing/test-principal.js";
 import { getCurrentTenant } from "./tenant-repository.js";
 import {
   TenantAuthorizationError,
@@ -16,21 +12,9 @@ import {
 const issuer = "https://infinyx.tenant-repository.test";
 const audience = "infinyx-test";
 const userId = "10000000-0000-4000-8000-000000000001";
-const keys = generateKeyPairSync("rsa", { modulusLength: 2048 });
-const verifier = createJwtPrincipalVerifier({
-  issuer, audience,
-  publicKeyPem: keys.publicKey.export({ type: "spki", format: "pem" }).toString()
+const principal = await createTestPrincipal({
+  issuer, audience, subject: "provider-subject", userId
 });
-const principal = createAuthenticatedPrincipalResolver(() => userId)(
-  (() => {
-    const encode = (value: unknown) => Buffer.from(JSON.stringify(value)).toString("base64url");
-    const unsigned = [
-      encode({ alg: "RS256", typ: "JWT" }),
-      encode({ iss: issuer, aud: audience, sub: "provider-subject", exp: Math.floor(Date.now() / 1000) + 60 })
-    ].join(".");
-    return verifier(`${unsigned}.${sign("RSA-SHA256", Buffer.from(unsigned, "ascii"), keys.privateKey).toString("base64url")}`);
-  })()
-);
 
 function pool(options: {
   role?: string | null;
