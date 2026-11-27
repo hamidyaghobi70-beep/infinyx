@@ -184,6 +184,17 @@ jobs:
             IF legacy_events <> 1 THEN
               RAISE EXCEPTION 'Suspension did not create a pending session-revocation request';
             END IF;
+            rejected := false;
+            BEGIN
+              UPDATE user_account_session_revocation_outbox
+                 SET completed_at = now()
+               WHERE user_id = test_user AND completed_at IS NULL;
+            EXCEPTION WHEN insufficient_privilege THEN
+              rejected := true;
+            END;
+            IF NOT rejected THEN
+              RAISE EXCEPTION 'Application role can bypass database-owned account session revocation completion';
+            END IF;
             PERFORM complete_user_account_session_revocation(outbox_id, test_user)
               FROM user_account_session_revocation_outbox
              WHERE user_id = test_user AND completed_at IS NULL;
