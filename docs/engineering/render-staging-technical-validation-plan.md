@@ -47,7 +47,7 @@ Sources:
 INFINYX currently builds a `pg` pool with `ssl: { rejectUnauthorized: true }`. Its current design also requires a private database path. Therefore:
 
 1. The Render **internal URL is not currently proven compatible** with the application's certificate-verification requirement. Do not silently downgrade to `sslmode=require`.
-2. The Render **external URL may be compatible with strict certificate validation**, but it is a public-network route, not a private-network route. It would require a narrowly restricted database IP allow-list and an explicit architecture decision accepting that network trade-off.
+2. The Render **external URL is out of scope**: although it may support strict certificate validation, it traverses the public internet and violates the owner's mandatory private-database requirement. Do not evaluate it as a fallback.
 3. Render's external URL commonly includes `sslmode=require`. The node-postgres documentation warns that SSL-related URL parameters such as `sslmode` replace the separately supplied `ssl` object. The current code's `rejectUnauthorized: true` therefore cannot be assumed to remain effective merely because it appears in the pool config. The URL parsing/configuration must be tested and, if necessary, sanitized so explicit strict TLS settings are preserved.
 
 Relevant implementation evidence:
@@ -66,7 +66,7 @@ Not acceptable:
 - disabling TLS;
 - storing a production credential in a test.
 
-**Decision gate:** If the private-network database requirement remains mandatory and Render cannot provide a private connection with certificate validation, Render is a **no-go** for this design. The external URL is only a possible alternative if the project owner explicitly approves changing the network requirement to a public TLS endpoint restricted by source IP, and the code-level TLS behavior is proven.
+**Decision gate:** The project owner has confirmed that private PostgreSQL connectivity is non-negotiable. If Render cannot provide a private connection with TLS certificate and hostname validation, Render is a **no-go** for this design. The external URL must not be used as a workaround, regardless of IP allow-listing.
 
 ### 2.3 PostgreSQL inbound access must be explicitly restricted
 
@@ -180,20 +180,20 @@ Stop condition:
 4. For the external URL, inspect the certificate chain and hostname identity and test strict verification using the Node.js runtime trust store.
 5. Inspect the final connection string for `sslmode`, `sslrootcert`, `sslcert`, and `sslkey`. Ensure these parameters do not silently override the explicit TLS configuration passed to node-postgres.
 6. Test the actual pinned `pg@8.23.1` behavior with `rejectUnauthorized: true`; test both trusted certificate and deliberately untrusted/mismatched-certificate failure cases.
-7. If the external URL is considered, confirm a dedicated outbound IP or sufficiently narrow documented egress range can be allow-listed on the database. Verify the exact plan/cost and the impact of egress IP changes.
-8. Verify database inbound external access is disabled for the private path, or tightly restricted to the approved BFF egress addresses for an explicitly approved external-TLS alternative.
-9. Verify unauthorized external sources are rejected at the database network boundary.
-10. Verify the BFF uses the least-privilege application role and never a database owner/superuser credential.
+7. Verify database inbound external access is disabled; do not propose an external URL or public-IP allow-list as an alternative to private connectivity.
+8. Verify unauthorized external sources are rejected at the database network boundary.
+9. Verify the BFF uses the least-privilege application role and never a database owner/superuser credential.
 
 Acceptance:
 - The selected connection path uses TLS with certificate-chain and hostname validation.
 - The node-postgres configuration is proven to preserve strict verification after parsing the actual provider URL.
-- If the private-network requirement remains in force, the database connection must use a private URL; an external URL is not an equivalent substitute.
+- The database connection must use a private URL; an external URL is prohibited by the approved architecture decision.
+- External database access is disabled.
 - No superuser/owner credential is used by the BFF.
 
 Stop condition:
 - Do not set `rejectUnauthorized: false`, and do not silently downgrade to unverified `sslmode=require`.
-- If Render's internal endpoint cannot satisfy strict certificate validation, stop unless the project owner separately approves evaluating the external TLS + source-IP-allow-list architecture as a change to the private-network requirement.
+- If Render's internal endpoint cannot satisfy strict certificate validation, stop the Render evaluation and mark Render no-go. Do not fall back to external TLS + source-IP allow-listing.
 
 ### WP4 — Database roles and migrations
 
@@ -286,7 +286,7 @@ Acceptance:
 | G1 Private networking | BFF/Keycloak/DB same-region private paths | No-go |
 | G2 Keycloak admin isolation | External negative tests deny all admin/management routes | No-go |
 | G3 Strict DB TLS | Actual `pg@8.23.1` connection proves certificate and hostname validation | No-go until approved fix |
-| G3a Private DB path | Private URL meets TLS policy, or owner separately approves external TLS + source-IP allow-list trade-off | No-go while private-only requirement remains |
+| G3a Private DB path | Private URL meets TLS policy; external database URL is prohibited | No-go |
 | G4 Database access | External access disabled/restricted; least privilege | No-go |
 | G5 Backup/restore | Successful isolated restore of both DBs | No-go |
 | G6 Secrets | Runtime injection, access boundaries, rotation plan | No-go |
@@ -319,7 +319,7 @@ Three high-risk technical questions must be resolved first:
 2. Render's internal PostgreSQL URL uses optional self-signed TLS and does not support standard `verify-ca`/`verify-full`. The external URL supports trusted TLS but traverses the public internet. This creates a real trade-off against INFINYX's private-database requirement.
 3. The current node-postgres configuration must be tested with the actual Render connection URL: URL-level SSL parameters can replace the explicit `ssl` object, so strict verification is not proven by reading `rejectUnauthorized: true` in isolation.
 
-If any requirement can only be met by weakening TLS verification or leaving administrative routes public, stop the Render path and compare another architecture/provider. The external database URL is not an approved workaround unless the project owner explicitly accepts the network-boundary change.
+Private PostgreSQL connectivity is now an owner-approved non-negotiable requirement. If Render cannot satisfy private networking and strict TLS certificate validation together, Render is a **no-go** and another provider must be evaluated. Public/external PostgreSQL connectivity is not an acceptable workaround. If any requirement can only be met by weakening TLS verification or leaving administrative routes public, stop the Render path.
 
 ## 8. Sources
 
