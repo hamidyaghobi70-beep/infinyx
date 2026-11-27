@@ -100,6 +100,12 @@ exports.up = (pgm) => {
       USING (tenant_id = current_setting('app.tenant_id', true))
       WITH CHECK (tenant_id = current_setting('app.tenant_id', true));
 
+    ALTER TABLE tenant_invitation_delivery_outbox ENABLE ROW LEVEL SECURITY;
+    ALTER TABLE tenant_invitation_delivery_outbox FORCE ROW LEVEL SECURITY;
+    CREATE POLICY tenant_invitation_outbox_tenant_scope ON tenant_invitation_delivery_outbox
+      USING (tenant_id = current_setting('app.tenant_id', true))
+      WITH CHECK (tenant_id = current_setting('app.tenant_id', true));
+
     ALTER TABLE tenant_invitation_audit_events ENABLE ROW LEVEL SECURITY;
     ALTER TABLE tenant_invitation_audit_events FORCE ROW LEVEL SECURITY;
     CREATE POLICY tenant_invitation_audit_tenant_scope ON tenant_invitation_audit_events
