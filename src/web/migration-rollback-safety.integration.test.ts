@@ -89,13 +89,11 @@ integrationDescribe("database migration rollback safety", () => {
   });
 
   it("refuses to remove a durable refresh reservation while its outcome is active or ambiguous", async () => {
-    const userId = randomUUID();
     const sessionHash = randomBytes(32);
     const issuer = `https://rollback-refresh-${randomUUID()}.example.test`;
     const subject = `subject-${randomUUID()}`;
 
     try {
-      await adminPool.query("INSERT INTO users (id) VALUES ($1::uuid)", [userId]);
       await adminPool.query(
         `INSERT INTO web_sessions
            (session_id_hash, user_id, issuer, subject, csrf_token_hash,
@@ -105,7 +103,7 @@ integrationDescribe("database migration rollback safety", () => {
                  clock_timestamp() + interval '8 hours', $7::uuid)`,
         [
           sessionHash,
-          userId,
+          "10000000-0000-4000-8000-000000000001",
           issuer,
           subject,
           randomBytes(32),
@@ -126,7 +124,6 @@ integrationDescribe("database migration rollback safety", () => {
       expect(stillPresent.rows[0]?.refresh_attempt_id).toMatch(/^[0-9a-f-]{36}$/iu);
     } finally {
       await adminPool.query("DELETE FROM web_sessions WHERE session_id_hash = $1", [sessionHash]);
-      await adminPool.query("DELETE FROM users WHERE id = $1::uuid", [userId]);
     }
   });
 });
