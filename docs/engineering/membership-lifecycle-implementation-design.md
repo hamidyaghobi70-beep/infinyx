@@ -1,10 +1,10 @@
 # Membership Lifecycle Implementation Design
 
-- **Status:** Proposed technical design; not implementation authorization
+- **Status:** Implemented persistence baseline on feature branch; CI verification pending
 - **Date:** 2026-11-27
 - **Branch:** `feat/adr-platform-foundation`
 - **Decision basis:** Accepted ADR-0007, ADR-0008, and ADR-0009
-- **Scope:** Database and persistence design for membership lifecycle administration. No migration, runtime code, endpoint, UI, ownership-transfer flow, or deployment is included.
+- **Scope:** Membership lifecycle schema, backfill, audit persistence, and repository implementation. HTTP endpoints, UI, invitation acceptance, ownership-transfer flow, and deployment remain out of scope.
 
 ## 1. Goals and non-goals
 
@@ -180,15 +180,17 @@ The administrative repository should expose a narrow operation such as a lifecyc
 
 All authorization and mutation must remain inside one `TenantTransaction`. Do not perform a membership check in one transaction and mutate in another. Keep SQL application-owned and parameterized.
 
-## 7. Migration sequencing proposal
+## 7. Implementation status
 
-The eventual implementation should be split into reviewable steps:
+The following persistence baseline has been committed on the feature branch:
 
-1. **Schema expansion/backfill:** add membership identity, generation, status, status metadata, and version; backfill current rows; add checks and indexes.
-2. **Audit foundation:** add append-only tenant-scoped audit events and least-privilege grants/RLS.
-3. **Repository enforcement:** update membership reads to require active state; add transition repository with locks, transition matrix, idempotency, and atomic audit.
-4. **Branch relationship alignment:** before implementing branch assignments, bind them to membership generation rather than user ID alone.
-5. **Integration verification:** run the complete PostgreSQL suite under the least-privilege non-superuser, non-BYPASSRLS application role.
+1. **Schema expansion/backfill:** migration 002 adds membership identity, generation, lifecycle status, status metadata, and version. Existing memberships default to generation 1 and active.
+2. **Audit foundation:** tenant-scoped RLS-protected audit events are added. The CI application role receives SELECT/INSERT only; it receives no UPDATE/DELETE privilege on audit rows.
+3. **Repository enforcement:** membership reads require active status. The lifecycle repository locks the tenant row, locks current actor/target generations, enforces the approved transition and owner safeguards, and writes audit events atomically.
+4. **Idempotency:** tenant-scoped correlation IDs prevent duplicate processing; reuse for a different actor/target/action is rejected.
+5. **Integration verification:** PostgreSQL 16 tests cover transitions, revocation, reactivation, removal history, new generations, owner-target denial, audit isolation, and append-only application grants. CI result must be checked before declaring this baseline verified.
+
+Branch assignments are not yet implemented; when added, they must reference `membership_id` rather than only a user ID.
 
 The existing tenant foreign key uses `ON DELETE CASCADE`. Before audit history is relied upon, tenant deletion must not cascade away membership/audit history. Prefer a separately governed tenant soft-delete/retention process and a restrictive FK for retained records. Do not implement destructive tenant deletion as part of this scope.
 
@@ -231,8 +233,8 @@ Still requiring separate decisions/design before enabling broader functionality:
 - Whether assignment archival/purge is ever permitted and under what retention controls.
 - API-level rate limiting and abuse monitoring for lifecycle administration.
 
-## 10. Implementation gate
+## 10. Remaining implementation boundaries
 
-This document is a technical proposal only. It does not authorize code, migrations, endpoints, UI, merge, release, or deployment.
+The founder approved the migration/backfill, audit schema, repository changes, and PostgreSQL integration tests. Those changes are committed on `feat/adr-platform-foundation`; their verification remains pending until CI reports a result.
 
-Before implementation, obtain explicit founder approval for the concrete scope: migration/backfill, audit schema, repository changes, and PostgreSQL integration tests. Keep all approved work on `feat/adr-platform-foundation`; keep `main` unchanged. No merge, release, or deployment is authorized.
+This implementation does not add HTTP endpoints, UI, invitation delivery/acceptance, self-leave, ownership transfer/governance, branch assignment tables, or branch-scoped authorization. Do not treat it as production-ready. Keep `main` unchanged. No merge, release, or deployment is authorized.
