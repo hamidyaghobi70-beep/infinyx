@@ -43,7 +43,7 @@ function poolWithRole(role: TenantRole | null): TenantSqlPool {
           sql.startsWith("SELECT set_config")) {
         return { rows: [] as Row[], rowCount: null };
       }
-      const rows = role ? [{ role } as Row] : [];
+      const rows = role ? [{ role } as unknown as Row] : [];
       return { rows, rowCount: role ? 1 : 0 };
     }),
     release: vi.fn()
