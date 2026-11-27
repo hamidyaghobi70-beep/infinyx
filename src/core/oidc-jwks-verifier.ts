@@ -100,11 +100,11 @@ export function createOidcJwksPrincipalVerifier(
             (jwk.alg !== undefined && jwk.alg !== "RS256") ||
             (jwk.key_ops !== undefined && (!Array.isArray(jwk.key_ops) || !jwk.key_ops.includes("verify"))) ||
             typeof jwk.kid !== "string" || !KID_PATTERN.test(jwk.kid)) continue;
+        if (keys.has(jwk.kid)) throw new Error("Duplicate signing key ID.");
         try {
           const key = createPublicKey({ key: jwk as JsonWebKey, format: "jwk" });
           if (key.asymmetricKeyType !== "rsa" ||
               (key.asymmetricKeyDetails?.modulusLength ?? 0) < 2048) continue;
-          if (keys.has(jwk.kid)) throw new Error("Duplicate signing key ID.");
           keys.set(jwk.kid, key);
         } catch {
           // Ignore unusable public keys; a token can only select a validated kid.
