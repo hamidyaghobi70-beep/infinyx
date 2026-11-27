@@ -49,7 +49,9 @@ Session cookies use the __Host- prefix with Secure, HttpOnly, Path=/, no Domain,
 
 ## 5. Token refresh
 
-The session store exposes a server-side access-token retrieval helper. When a token approaches expiry, the session row is selected FOR UPDATE; the refresh request occurs while the row lock is held, and the rotated token bundle is encrypted before commit. Concurrent refresh attempts serialize on the same row. If refresh fails, the session is revoked and an expired access token is never returned. If the provider omits a replacement refresh token, the previous refresh token is retained.
+The session store exposes a server-side access-token retrieval helper. When a token approaches expiry, the store first reads the current session bundle, then atomically claims the refresh attempt by setting `refresh_attempt_id` only if no other attempt has claimed the session and the stored bundle is unchanged. This update commits before the OIDC network request; no PostgreSQL client or transaction is held while waiting for the provider.
+
+Only the attempt holding that UUID can persist the rotated bundle. Persistence uses a compare-and-set against both the attempt UUID and the original encrypted bundle, and clears the reservation only when the update succeeds. Concurrent attempts fail closed. If the refresh callback throws or returns invalid data, the current implementation revokes the session. If persistence fails after the provider may have rotated a single-use refresh token, the reservation is deliberately retained and the store returns an operation error; it must not retry the old refresh token. If the provider omits a replacement refresh token, the previous refresh token is retained. An expired access token is never returned.
 
 No browser route exposes this token helper or returns the token bundle.
 
@@ -59,6 +61,7 @@ Migrations:
 
 - 006_web_sessions.cjs: global, tenant-independent web session records.
 - 007_web_login_transactions.cjs: short-lived, one-time OIDC login transactions.
+- 016_durable_session_refresh_reservation.cjs: adds the durable OIDC refresh-attempt reservation.
 
 These are authentication infrastructure records, not tenant business data, so they are not tenant-scoped. The application role receives explicit table privileges through the CI setup; no elevated role or RLS bypass is introduced. Session and login-state identifiers are stored as hashes. Token/PKCE/nonce payloads are encrypted.
 
@@ -116,12 +119,64 @@ CI run: https://github.com/hamidyaghobi70-beep/infinyx/actions/runs/45941140918
 A refresh attempt is claimed by an atomic update to `web_sessions.refresh_attempt_id`
 before any OIDC provider request. No database client or transaction is held while
 waiting on the provider. Only the request holding that UUID can persist the rotated
-token bundle. Competing requests and requests after process/connection loss fail
-closed while the reservation remains set.
+token bundle. Competing requests fail closed while the reservation remains set.
 
-This is intentionally conservative: if the provider outcome is ambiguous (including
-a process crash or database disconnect after the provider may have rotated a
-single-use refresh token), the session is not automatically retried. The user must
-authenticate again. This trades availability for protection against refresh-token
-reuse and concurrent rotation. A successful compare-and-set clears the reservation;
-a definite provider failure revokes the session.
+This is intentionally conservative. If the provider call throws, the current code
+revokes the session. If the process or database connection fails after the provider
+may have rotated a single-use refresh token, the reservation remains set and the
+session is not automatically retried. The user may need to authenticate again.
+This trades availability for protection against refresh-token reuse and concurrent
+rotation.
+
+## 11. Operational handling of a pending refresh reservation
+
+### What the reservation means
+
+A non-null `web_sessions.refresh_attempt_id` means one refresh attempt claimed the
+session and has not completed its successful compare-and-set. It does **not** prove
+that the provider is still processing the request: the application process may have
+stopped, the database may have become unavailable, or persistence may have failed
+after the provider rotated its token.
+
+Migration 016 currently stores the attempt UUID but does not store a claim timestamp
+or provider outcome. Therefore operators cannot safely infer the age or outcome of
+a reservation from this column alone.
+
+### Safe operator rules
+
+- Do not clear `refresh_attempt_id` manually just to make refresh work again.
+- Do not retry the previous refresh token or build an automatic job that clears
+  reservations based only on their apparent age.
+- Do not treat a non-null reservation as proof that a user account is disabled or
+  that the session has expired. Session lookup and touch intentionally continue to
+  work while a refresh reservation is pending.
+- If a user is affected by a stuck or ambiguous refresh, use the normal logout /
+  session-revocation path and have the user authenticate again. Do not attempt to
+  recover the old refresh token.
+- Preserve relevant application and provider logs for incident review, but never
+  log raw access tokens, refresh tokens, ID tokens, session cookies, or CSRF tokens.
+
+### Read-only monitoring
+
+The following aggregate query counts sessions with a pending reservation without
+exposing session identifiers or token material:
+
+```sql
+SELECT count(*) AS pending_refresh_reservations
+  FROM web_sessions
+ WHERE refresh_attempt_id IS NOT NULL
+   AND revoked_at IS NULL;
+```
+
+This count is a signal for investigation, not a safe cleanup instruction. Because
+the current schema has no reservation timestamp, it cannot distinguish a slow
+in-flight refresh from an abandoned reservation. Do not create age-based alerts or
+automatic cleanup from this query alone.
+
+### Follow-up before production operations
+
+Add a reservation timestamp and structured, secret-free observability before
+building age-based alerts or automated recovery. Any future recovery design must
+distinguish a provider-confirmed failure from an ambiguous outcome and must never
+replay a potentially consumed refresh token. This runbook does not authorize
+manual database edits, merging, or deployment.
