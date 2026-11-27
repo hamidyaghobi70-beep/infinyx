@@ -25,7 +25,7 @@ function transaction(options: {
           generation: 1,
           role: options.role,
           status: "active",
-          version: 1
+          version: "1"
         }] : []) as unknown as readonly Row[];
       }
       if (sql.startsWith("SELECT id, name, created_at::text")) {
@@ -62,7 +62,7 @@ describe("tenant repository", () => {
         generation: 1,
         role: "owner",
         status: "active",
-        version: 1
+        version: "1"
       }
     });
     expect(calls).toHaveLength(2);
