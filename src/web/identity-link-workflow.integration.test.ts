@@ -61,7 +61,6 @@ integrationDescribe("PostgreSQL immutable external identity link workflow", () =
       "SELECT event_id::text, identity_id::text, from_status, to_status, reason_code, created_at FROM user_external_identity_lifecycle_events ORDER BY event_id"
     );
 
-    try {
       const result = await registerVerifiedIdentityLink(pool, actor, issuer, newSubject, correlationId);
       expect(result.outcome).toBe("linked");
       if (result.outcome !== "linked") throw new Error("Expected linked outcome.");
@@ -147,7 +146,6 @@ integrationDescribe("PostgreSQL immutable external identity link workflow", () =
     const issuer = `https://race-${randomUUID()}.example.test`;
     const subject = `subject-${randomUUID()}`;
     await adminPool.query("INSERT INTO users (id) VALUES ($1::uuid), ($2::uuid)", [first, second]);
-    try {
       const results = await Promise.all([
         registerVerifiedIdentityLink(pool, first, issuer, subject, randomUUID()),
         registerVerifiedIdentityLink(pool, second, issuer, subject, randomUUID())
@@ -174,7 +172,6 @@ integrationDescribe("PostgreSQL immutable external identity link workflow", () =
        VALUES ($1::uuid, 'external_identity.link_denied', 'test_seed', $2::uuid)`,
       [actor, correlationId]
     );
-    try {
       await expect(registerVerifiedIdentityLink(pool, actor, issuer, subject, correlationId)).rejects.toThrow();
       const rows = await adminPool.query(
         "SELECT 1 FROM user_external_identities WHERE issuer = $1 AND subject = $2",
