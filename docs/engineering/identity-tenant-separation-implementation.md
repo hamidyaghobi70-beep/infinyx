@@ -1,8 +1,8 @@
 # Identity and Tenant Separation — Implementation Record
 
 - **Status:** Implemented on the feature branch; CI verified
-- **Implementation commit:** `b22078a96c42ed38e73a610c73ee24550e7cf060`
-- **CI run:** [#45935082596](https://github.com/hamidyaghobi70-beep/infinyx/actions/runs/45935082596)
+- **Implementation commit:** `11cb8efce9a8d7caf7ccfc5a7c65d88254b6ac4d`
+- **CI run:** [#45935238195](https://github.com/hamidyaghobi70-beep/infinyx/actions/runs/45935082596)
 - **Related:** ADR-0011, Keycloak Staging Integration Design, Keycloak Staging Implementation Plan
 - **Branch:** `feat/adr-platform-foundation`
 
@@ -57,7 +57,7 @@ Legacy membership rows with `internal_user_id IS NULL` do not authorize tenant a
 CI run [#45935082596](https://github.com/hamidyaghobi70-beep/infinyx/actions/runs/45935082596) completed successfully on the implementation commit.
 
 - TypeScript typecheck: passed
-- Unit and PostgreSQL integration tests: 11 test files, 98 tests passed
+- Unit and PostgreSQL integration tests: 11 test files, 99 tests passed
 - PostgreSQL migrations and migration syntax checks: passed
 - Dependency audit: 0 reported vulnerabilities
 - Least-privilege application role and tenant RLS integration checks: passed
