@@ -225,6 +225,14 @@ integrationDescribe("PostgreSQL identity security transaction persistence", () =
          VALUES ($1, $2::uuid, $3, $4, 'reauth_identity_link', $5, now() + interval '1 minute')`,
         [Buffer.alloc(31), userId, Buffer.alloc(32), Buffer.alloc(32), Buffer.alloc(64)]
       )).rejects.toThrow();
+
+      await expect(adminPool.query(
+        `INSERT INTO identity_security_transactions
+           (state_hash, user_id, session_id_hash, browser_binding_hash,
+            purpose, encrypted_payload, expires_at)
+         VALUES ($1, $2::uuid, $3, $4, 'reauth_identity_link', $5, now() + interval '6 minutes')`,
+        [Buffer.alloc(32, 1), userId, Buffer.alloc(32), Buffer.alloc(32), Buffer.alloc(64)]
+      )).rejects.toThrow();
     } finally {
       await adminPool.query("DELETE FROM users WHERE id = $1::uuid", [userId]);
     }
