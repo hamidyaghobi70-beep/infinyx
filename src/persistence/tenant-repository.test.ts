@@ -19,8 +19,14 @@ function transaction(options: {
       values: readonly unknown[] = []
     ): Promise<readonly Row[]> => {
       options.calls?.push({ sql, values });
-      if (sql.startsWith("SELECT role FROM tenant_memberships")) {
-        return (options.role ? [{ role: options.role }] : []) as unknown as readonly Row[];
+      if (sql.startsWith("SELECT membership_id::text AS membership_id")) {
+        return (options.role ? [{
+          membership_id: "00000000-0000-4000-8000-000000000001",
+          generation: 1,
+          role: options.role,
+          status: "active",
+          version: 1
+        }] : []) as unknown as readonly Row[];
       }
       if (sql.startsWith("SELECT id, name, created_at::text")) {
         return (options.tenant ? [options.tenant] : []) as unknown as readonly Row[];
@@ -50,9 +56,13 @@ describe("tenant repository", () => {
         createdAt: "2026-11-27 00:00:00+00"
       },
       membership: {
+        membershipId: "00000000-0000-4000-8000-000000000001",
         tenantId: "tenant-1",
         userId: "user-1",
-        role: "owner"
+        generation: 1,
+        role: "owner",
+        status: "active",
+        version: 1
       }
     });
     expect(calls).toHaveLength(2);
