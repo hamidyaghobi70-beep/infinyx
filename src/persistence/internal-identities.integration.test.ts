@@ -93,18 +93,20 @@ integrationDescribe("PostgreSQL internal identity integration", () => {
 
   it("keeps external identity records immutable and non-deletable to the app role", async () => {
     const suffix = randomUUID();
-    await withTenantTransaction(tenantPool, principal, async (transaction) => {
-      const user = await createInternalUser(transaction);
-      await linkExternalIdentity(transaction, user.id, issuer, `immutable-${suffix}`);
-      await expect(transaction.query(
-        "UPDATE user_external_identities SET user_id = $1::uuid WHERE issuer = $2 AND subject = $3",
-        [user.id, issuer, `immutable-${suffix}`]
-      )).rejects.toThrow();
-      await expect(transaction.query(
-        "DELETE FROM user_external_identities WHERE issuer = $1 AND subject = $2",
-        [issuer, `immutable-${suffix}`]
-      )).rejects.toThrow();
-    });
+    const user = await withTenantTransaction(tenantPool, principal, (transaction) =>
+      createInternalUser(transaction)
+    );
+    await withTenantTransaction(tenantPool, principal, (transaction) =>
+      linkExternalIdentity(transaction, user.id, issuer, `immutable-${suffix}`)
+    );
+    await expect(pool.query(
+      "UPDATE user_external_identities SET user_id = $1::uuid WHERE issuer = $2 AND subject = $3",
+      [user.id, issuer, `immutable-${suffix}`]
+    )).rejects.toThrow();
+    await expect(pool.query(
+      "DELETE FROM user_external_identities WHERE issuer = $1 AND subject = $2",
+      [issuer, `immutable-${suffix}`]
+    )).rejects.toThrow();
   });
 
   it("does not allow links to nonexistent internal users", async () => {
