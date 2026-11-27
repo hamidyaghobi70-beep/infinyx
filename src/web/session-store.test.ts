@@ -37,8 +37,18 @@ function fakePool(row: ReturnType<typeof sessionRow>) {
   const query = vi.fn(async (sql: string, values?: readonly unknown[]) => {
     calls.push({ sql, values });
     if (sql.includes("SELECT user_id::text AS user_id")) {
-      const blocked = stored.revoked_at !== null || stored.refresh_attempt_id !== null;
+      const accessTokenLookup = sql.includes("refresh_attempt_id");
+      const blocked = stored.revoked_at !== null ||
+        (accessTokenLookup && stored.refresh_attempt_id !== null);
       return { rows: blocked ? [] : [stored], rowCount: blocked ? 0 : 1 };
+    }
+    if (sql.includes("SET last_seen_at =")) {
+      const touchedAt = values?.[1] as Date;
+      const nextIdleExpiry = values?.[2] as Date;
+      if (stored.revoked_at !== null || touchedAt >= stored.idle_expires_at ||
+          touchedAt >= stored.absolute_expires_at) return { rows: [], rowCount: 0 };
+      stored.idle_expires_at = new Date(Math.min(nextIdleExpiry.getTime(), stored.absolute_expires_at.getTime()));
+      return { rows: [], rowCount: 1 };
     }
     if (sql.includes("SET refresh_attempt_id =")) {
       if (stored.refresh_attempt_id || stored.revoked_at ||
@@ -203,8 +213,26 @@ describe("serialized web-session access-token refresh", () => {
       expect(sql).toContain("lifecycle.status = 'active'");
       expect(sql).toContain("user_account_session_revocation_outbox");
       expect(sql).toContain("account_security.status = 'active'");
-      expect(sql).toContain("refresh_attempt_id IS NULL");
+      expect(sql).not.toContain("refresh_attempt_id IS NULL");
     }
+  });
+
+  it("keeps a session active and touchable while a durable refresh reservation is pending", async () => {
+    const fake = fakePool(sessionRow(now.getTime() - 1, "single-use-refresh-token"));
+    const store = new PostgresWebSessionStore(fake.pool, key, () => now);
+    fake.stored.refresh_attempt_id = "4c4d8c1b-1e8f-4aab-9b61-40a6a32caa41";
+
+    await expect(store.findActive(createOpaqueSessionId())).resolves.toMatchObject({
+      userId,
+      issuer,
+      subject: "subject-1"
+    });
+    await expect(store.touch(
+      createOpaqueSessionId(),
+      new Date(now.getTime() + 1_800_000)
+    )).resolves.toBe(true);
+
+    expect(fake.stored.refresh_attempt_id).toBe("4c4d8c1b-1e8f-4aab-9b61-40a6a32caa41");
   });
 
   it("refuses to create a session unless the account is active and both revocation barriers are clear", async () => {
