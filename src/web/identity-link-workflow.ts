@@ -162,7 +162,12 @@ export async function completeIdentitySessionRevocation(
         WHERE outbox_id = $1::uuid AND user_id = $2::uuid AND completed_at IS NULL`,
       [outboxId, userId]
     );
-    return completed.rowCount === 1;
+    if (completed.rowCount === 1) return true;
+    const status = await pool.query<{ completed_at: Date | null }>(
+      "SELECT completed_at FROM identity_session_revocation_outbox WHERE outbox_id = $1::uuid AND user_id = $2::uuid",
+      [outboxId, userId]
+    );
+    return status.rows[0]?.completed_at !== null && status.rows[0]?.completed_at !== undefined;
   } catch {
     try {
       await pool.query(
