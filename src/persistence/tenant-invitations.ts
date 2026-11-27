@@ -356,7 +356,7 @@ export async function revokeTenantInvitation(
     return Object.freeze({ outcome: invitation.status === "revoked" ? "noop" : "denied" });
   }
 
-  if (new Date(invitation.expires_at).getTime() <= Date.now()) {
+  if (invitation.is_expired === true) {
     await transaction.query(
       `UPDATE tenant_invitations
           SET status = 'expired', version = version + 1
