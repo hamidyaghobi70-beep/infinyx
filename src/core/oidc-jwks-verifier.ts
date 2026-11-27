@@ -26,14 +26,8 @@ export interface OidcJwksVerifierOptions {
   readonly fetcher?: typeof fetch;
 }
 
-interface DiscoveryDocument {
-  readonly issuer: string;
-  readonly jwks_uri: string;
-}
-
 interface CachedKeys {
   readonly expiresAt: number;
-  readonly refreshedAt: number;
   readonly keys: ReadonlyMap<string, KeyObject>;
 }
 
@@ -104,11 +98,13 @@ export function createOidcJwksPrincipalVerifier(
         const jwk = candidate as Record<string, unknown>;
         if (jwk.kty !== "RSA" || (jwk.use !== undefined && jwk.use !== "sig") ||
             (jwk.alg !== undefined && jwk.alg !== "RS256") ||
+            (jwk.key_ops !== undefined && (!Array.isArray(jwk.key_ops) || !jwk.key_ops.includes("verify"))) ||
             typeof jwk.kid !== "string" || !KID_PATTERN.test(jwk.kid)) continue;
         try {
           const key = createPublicKey({ key: jwk as JsonWebKey, format: "jwk" });
           if (key.asymmetricKeyType !== "rsa" ||
               (key.asymmetricKeyDetails?.modulusLength ?? 0) < 2048) continue;
+          if (keys.has(jwk.kid)) throw new Error("Duplicate signing key ID.");
           keys.set(jwk.kid, key);
         } catch {
           // Ignore unusable public keys; a token can only select a validated kid.
@@ -118,7 +114,6 @@ export function createOidcJwksPrincipalVerifier(
       const refreshedAt = Date.now();
       const result = Object.freeze({
         expiresAt: refreshedAt + cacheTtlMs,
-        refreshedAt,
         keys
       });
       cache = result;
