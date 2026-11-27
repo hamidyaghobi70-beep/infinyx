@@ -355,7 +355,7 @@ jobs:
             -keyout .ci/postgres-tls/server.key \
             -out .ci/postgres-tls/server.csr \
             -subj "/CN=localhost"
-          printf '%s\\n' \
+          printf '%s\n' \
             "subjectAltName=DNS:localhost" \
             "extendedKeyUsage=serverAuth" \
             "keyUsage=digitalSignature,keyEncipherment" \
@@ -370,7 +370,7 @@ jobs:
             -subj "/CN=INFINYX CI Untrusted PostgreSQL CA" \
             -addext "basicConstraints=critical,CA:TRUE" \
             -addext "keyUsage=critical,keyCertSign,cRLSign"
-          printf '%s\\n' \
+          printf '%s\n' \
             "local all all trust" \
             "hostnossl all all all reject" \
             "hostssl all all all scram-sha-256" > .ci/postgres-tls/pg_hba.conf
@@ -410,6 +410,6 @@ jobs:
           KEYCLOAK_INTEGRATION_CLIENT_ID: infinyx-web
           KEYCLOAK_INTEGRATION_CLIENT_SECRET: ci-only-infinyx-web-secret
         run: npm run test:keycloak
-      - name: Stop Keycloak test realm
+      - name: Stop temporary PostgreSQL and Keycloak test containers
         if: always()
-        run: docker rm --force infinyx-keycloak || true
+        run: docker rm --force infinyx-postgres-tls infinyx-keycloak || true
