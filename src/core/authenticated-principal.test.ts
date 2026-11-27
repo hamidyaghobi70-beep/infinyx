@@ -114,7 +114,7 @@ describe("OIDC discovery and JWKS token verifier", () => {
     await expect(verifier("not-a-jwt")).rejects.toBeInstanceOf(AuthenticationError);
     await expect(verifier("x".repeat(16_385))).rejects.toBeInstanceOf(AuthenticationError);
     await expect(verifier(token(pair, { sub: "  " }))).rejects.toBeInstanceOf(AuthenticationError);
-    await expect(verifier(token(pair, { sub: "bad\\u0000subject" }))).rejects.toBeInstanceOf(AuthenticationError);
+    await expect(verifier(token(pair, { sub: "bad\u0000subject" }))).rejects.toBeInstanceOf(AuthenticationError);
   });
 
   it("refreshes trusted JWKS once to accept a rotated signing key", async () => {
@@ -185,7 +185,7 @@ describe("internal principal resolution", () => {
 
   it("fails closed for unknown identities and forged external identity objects", async () => {
     const resolver = createAuthenticatedPrincipalResolver(() => null);
-    await expect(resolver(await identity())).rejects.toBeInstanceOf(AuthenticationError);
+    expect(() => resolver(await identity())).toThrow(AuthenticationError);
     expect(() => createAuthenticatedPrincipalResolver(() => internalUserId)({
       issuer, subject: "provider-subject-1", audience: [audience], expiresAt: now + 10
     })).toThrow(AuthenticationError);
@@ -261,7 +261,7 @@ describe("personal memory scope", () => {
       userId: internalUserId, issuer, subject: "provider-subject-1",
       audience: [audience], expiresAt: now + 100
     }, "assistant")).toThrow(AuthenticationError);
-    expect(() => createPrincipalMemoryScope(principal, "bad\\u0000module"))
+    expect(() => createPrincipalMemoryScope(principal, "bad\u0000module"))
       .toThrow(AuthenticationError);
   });
 
