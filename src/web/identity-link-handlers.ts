@@ -7,6 +7,7 @@ import {
 } from "./session-crypto.js";
 import {
   createExpiredIdentitySecurityCookie,
+  createExpiredStepUpCookie,
   createIdentitySecurityCookie,
   createExpiredSessionCookie,
   readIdentitySecurityCookie,
@@ -104,7 +105,9 @@ export function createIdentityLinkHandlers(deps: Dependencies) {
       nonce
     });
     response.statusCode = 302;
-    response.setHeader("Set-Cookie", createIdentitySecurityCookie(browserBinding));
+    response.setHeader("Set-Cookie", purpose === "identity_link"
+      ? [createIdentitySecurityCookie(browserBinding), createExpiredStepUpCookie()]
+      : [createIdentitySecurityCookie(browserBinding), createExpiredStepUpCookie()]);
     response.setHeader("Location", authorizationUrl.href);
     response.end();
   }
@@ -177,10 +180,13 @@ export function createIdentityLinkHandlers(deps: Dependencies) {
         new Date(now().getTime() + 5 * 60 * 1000)
       );
       if (!grant) return sendJson(response, 401, { error: "reauthentication_failed" }, [createExpiredIdentitySecurityCookie()]);
-      sendJson(response, 204, {}, [
+      response.statusCode = 303;
+      response.setHeader("Set-Cookie", [
         createIdentitySecurityCookie(grant, "stepup"),
         createExpiredIdentitySecurityCookie()
       ]);
+      response.setHeader("Location", "/account/security");
+      response.end();
     },
 
     startLink: async (request: IncomingMessage, response: ServerResponse): Promise<void> => {
