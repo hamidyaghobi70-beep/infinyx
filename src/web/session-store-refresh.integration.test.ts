@@ -81,7 +81,9 @@ integrationDescribe("PostgreSQL web-session refresh advisory lock", () => {
         [userId, issuer, subject]
       );
 
-      await store.create({
+      // Seed the fixture with the migration/admin connection; the app-role pool
+      // remains the subject of the refresh, advisory-lock, and CAS assertions.
+      await new PostgresWebSessionStore(adminPool, encryptionKey).create({
         sessionId, csrfToken, userId, issuer, subject,
         tokenBundle: {
           accessToken: "expired-access-token",
