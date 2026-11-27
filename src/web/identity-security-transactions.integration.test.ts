@@ -81,6 +81,18 @@ integrationDescribe("PostgreSQL identity security transaction persistence", () =
       expect(winners[0]?.payload).toEqual(payload);
 
       const transactionId = winners[0]!.transactionId;
+      expect(await store.issueVerifiedStepUpGrant(
+        transactionId, otherUserId, sessionId, "identity_link",
+        new Date(Date.now() + 4 * 60 * 1000)
+      )).toBeNull();
+      expect(await store.issueVerifiedStepUpGrant(
+        transactionId, userId, otherSessionId, "identity_link",
+        new Date(Date.now() + 4 * 60 * 1000)
+      )).toBeNull();
+      expect(await store.issueVerifiedStepUpGrant(
+        transactionId, userId, sessionId, "identity_unlink",
+        new Date(Date.now() + 4 * 60 * 1000)
+      )).toBeNull();
       const grant = await store.issueVerifiedStepUpGrant(
         transactionId, userId, sessionId, "identity_link",
         new Date(Date.now() + 4 * 60 * 1000)
