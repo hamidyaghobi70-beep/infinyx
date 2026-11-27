@@ -171,7 +171,7 @@ describe("personal memory scope", () => {
       userId: internalUserId, issuer, subject: "provider-subject-1",
       audience: [audience], expiresAt: now + 100
     }, "assistant")).toThrow(AuthenticationError);
-    expect(() => createPrincipalMemoryScope(resolvePrincipal(verify(token())), "bad\\u0000module"))
+    expect(() => createPrincipalMemoryScope(resolvePrincipal(verify(token())), "bad\u0000module"))
       .toThrow(AuthenticationError);
   });
 
