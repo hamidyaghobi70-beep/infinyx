@@ -1,6 +1,6 @@
 # Phase B3 — External Identity Unlink Implementation Record
 
-**Status:** Implemented on the feature branch; CI verification pending.
+**Status:** Implemented; GitHub Actions CI run #45951114915 and pull-request run #45951120576 completed successfully for implementation commit `ee736c0176446b8abb0475e9372670607bd5824e`.
 
 ## Scope delivered
 
