@@ -118,6 +118,25 @@ integrationDescribe("PostgreSQL internal identity integration", () => {
       status: "rejected",
       reason: expect.any(ExternalIdentityConflictError)
     });
+
+    const lifecycle = await pool.query<{ status: string }>(
+      `SELECT lifecycle.status
+         FROM user_external_identities AS identity
+         INNER JOIN user_external_identity_lifecycle AS lifecycle
+           ON lifecycle.identity_id = identity.identity_id
+        WHERE identity.issuer = $1 AND identity.subject = $2`,
+      [issuer, `race-${suffix}`]
+    );
+    expect(lifecycle.rows).toEqual([{ status: "active" }]);
+    const initialEvents = await pool.query<{ reason_code: string }>(
+      `SELECT reason_code
+         FROM user_external_identity_lifecycle_events AS event
+         INNER JOIN user_external_identities AS identity
+           ON identity.identity_id = event.identity_id
+        WHERE identity.issuer = $1 AND identity.subject = $2`,
+      [issuer, `race-${suffix}`]
+    );
+    expect(initialEvents.rows).toEqual([{ reason_code: "identity_created" }]);
   });
 
   it("keeps external identity records immutable and non-deletable to the app role", async () => {
