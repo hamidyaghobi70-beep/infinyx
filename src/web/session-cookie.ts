@@ -89,6 +89,47 @@ export function readLoginTransactionCookie(header: string | undefined): string |
 }
 
 
+export const ACCOUNT_RECOVERY_TRANSACTION_COOKIE_NAME = "__Host-infinyx_account_recovery_tx";
+
+export function createAccountRecoveryTransactionCookie(binding: string): string {
+  if (!/^[A-Za-z0-9_-]{43}$/u.test(binding)) {
+    throw new TypeError("Invalid account recovery transaction binding.");
+  }
+  return [
+    `${ACCOUNT_RECOVERY_TRANSACTION_COOKIE_NAME}=${binding}`,
+    "Path=/",
+    "Secure",
+    "HttpOnly",
+    "SameSite=Lax",
+    "Max-Age=300"
+  ].join("; ");
+}
+
+export function createExpiredAccountRecoveryTransactionCookie(): string {
+  return [
+    `${ACCOUNT_RECOVERY_TRANSACTION_COOKIE_NAME}=`,
+    "Path=/",
+    "Secure",
+    "HttpOnly",
+    "SameSite=Lax",
+    "Max-Age=0"
+  ].join("; ");
+}
+
+export function readAccountRecoveryTransactionCookie(header: string | undefined): string | null {
+  if (typeof header !== "string" || Buffer.byteLength(header, "utf8") > MAX_COOKIE_HEADER_BYTES) {
+    return null;
+  }
+  const matches = header.split(";").filter(part => {
+    const separator = part.indexOf("=");
+    return separator >= 0 && part.slice(0, separator).trim() === ACCOUNT_RECOVERY_TRANSACTION_COOKIE_NAME;
+  });
+  if (matches.length !== 1) return null;
+  const separator = matches[0]!.indexOf("=");
+  const value = matches[0]!.slice(separator + 1).trim();
+  return /^[A-Za-z0-9_-]{43}$/u.test(value) ? value : null;
+}
+
 export const IDENTITY_SECURITY_TRANSACTION_COOKIE_NAME = "__Host-infinyx_identity_tx";
 export const IDENTITY_STEP_UP_COOKIE_NAME = "__Host-infinyx_stepup";
 
