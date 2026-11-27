@@ -204,6 +204,17 @@ integrationDescribe("PostgreSQL tenant RLS integration", () => {
       expect(table.rows).toEqual([
         { relrowsecurity: true, relforcerowsecurity: true }
       ]);
+
+      const auditTable = await client.query<{
+        relrowsecurity: boolean;
+        relforcerowsecurity: boolean;
+      }>(
+        "SELECT relrowsecurity, relforcerowsecurity FROM pg_class WHERE relname = $1",
+        ["tenant_membership_audit_events"]
+      );
+      expect(auditTable.rows).toEqual([
+        { relrowsecurity: true, relforcerowsecurity: true }
+      ]);
     } finally {
       client.release();
     }
@@ -381,6 +392,23 @@ integrationDescribe("PostgreSQL tenant RLS integration", () => {
       )
     );
     expect(audit).toEqual([{ outcome: "denied" }]);
+
+    const crossTenantAudit = await withTenantTransaction(
+      tenantPool,
+      principalFor("tenant-b"),
+      (transaction) => transaction.query<{ outcome: string }>(
+        "SELECT outcome FROM tenant_membership_audit_events WHERE tenant_id = $1 AND correlation_id = $2",
+        ["tenant-a", "20000000-0000-4000-8000-000000000001"]
+      )
+    );
+    expect(crossTenantAudit).toEqual([]);
+
+    await expect(withTenantTransaction(tenantPool, owner, (transaction) =>
+      transaction.query(
+        "UPDATE tenant_membership_audit_events SET outcome = $1 WHERE tenant_id = $2 AND correlation_id = $3",
+        ["succeeded", "tenant-a", "20000000-0000-4000-8000-000000000001"]
+      )
+    )).rejects.toBeInstanceOf(TenantPersistenceError);
 
     const ownerMembership = await withTenantTransaction(tenantPool, owner, (transaction) =>
       getTenantMembership(transaction, owner)
