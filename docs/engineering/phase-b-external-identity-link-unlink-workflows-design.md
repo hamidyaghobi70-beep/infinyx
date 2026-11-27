@@ -180,7 +180,7 @@ A general security-audit table/outbox schema is a proposed addition and must be 
 
 Recommended default for Phase B:
 
-- **After successful link:** create a replacement session for the same internal user with a new opaque session ID and new CSRF token; revoke all prior sessions for that user, including the initiating session, then issue only the replacement cookie after revocation is confirmed. This prevents a stolen pre-link session from remaining valid. Provider tokens remain server-side. If replacement-session creation or revocation fails, fail closed, clear browser cookies, and require a fresh login.
+- **After successful link:** revoke all sessions for that user, including the initiating session, clear the session cookie, and require a fresh login through an active identity. Do not issue a replacement session from the pre-link session. This avoids preserving trust in a session whose security context has just changed. Provider tokens remain server-side. If revocation cannot be confirmed, fail closed, clear browser cookies, and keep the operation in a pending/indeterminate state.
 - **After successful unlink:** revoke all sessions for the user, including the current session, and clear the session cookie. Require a fresh login through a remaining active identity. No replacement session is issued from the just-unlinked session.
 - **After denied/idempotent link:** no identity mutation. Rotate neither identity nor session by default; record rate-limited security outcome. If policy detects suspicious activity, revoke sessions through a separate incident response path.
 - **On revocation job failure:** keep the operation in a non-success/indeterminate state, retry idempotently, alert operations, and prevent any newly issued session from bypassing the required policy.
@@ -239,7 +239,7 @@ The implementation must define transaction boundaries and ordering so there is n
 - Audit insertion failure rolls back link/unlink mutation.
 - Outbox retry is idempotent; completed revocation cannot be undone by retry.
 - Last-identity check is serialized with link/unlink changes to avoid write-skew.
-- Session revocation makes every prior session fail `findActive`; replacement session after link has a new session ID and CSRF token.
+- Session revocation makes every prior session fail `findActive`; link completion requires a fresh login and does not carry forward the initiating session.
 - Existing Phase A ownership immutability, revoked-login denial, lifecycle append-only history, and legacy backfill tests remain green.
 
 ### Acceptance criteria (all mandatory)
