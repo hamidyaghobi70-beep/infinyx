@@ -182,21 +182,30 @@ export function createBearerAuthMiddleware(
 ): RequestHandler {
   return (request, response, next) => {
     const header = request.header("authorization");
+    const reject = () => { response.status(401).json({ error: "unauthorized" }); };
     if (!header || !/^Bearer [^\\s]+$/.test(header)) {
-      response.status(401).json({ error: "unauthorized" });
+      reject();
       return;
     }
-    void (async () => {
-      try {
-        const identity = verifyToken(header.slice(7));
-        const principal = await resolvePrincipal(identity);
-        if (!isAuthenticatedPrincipal(principal)) throw new AuthenticationError();
-        response.locals.authenticatedPrincipal = principal;
-        next();
-      } catch {
-        response.status(401).json({ error: "unauthorized" });
+    const accept = (principal: AuthenticatedPrincipal) => {
+      if (!isAuthenticatedPrincipal(principal)) {
+        reject();
+        return;
       }
-    })();
+      response.locals.authenticatedPrincipal = principal;
+      next();
+    };
+    try {
+      const identity = verifyToken(header.slice(7));
+      const resolved = resolvePrincipal(identity);
+      if (resolved instanceof Promise) {
+        void resolved.then(accept).catch(reject);
+      } else {
+        accept(resolved);
+      }
+    } catch {
+      reject();
+    }
   };
 }
 
