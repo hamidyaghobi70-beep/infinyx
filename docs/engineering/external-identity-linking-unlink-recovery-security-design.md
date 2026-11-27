@@ -1,6 +1,6 @@
 # External Identity Linking, Unlinking, and Recovery — Security Design
 
-**Status:** Proposed — design only; implementation requires separate founder approval  
+**Status:** Approved security design baseline; phased implementation is tracked in separate engineering records  
 **Repository:** `hamidyaghobi70-beep/infinyx`  
 **Branch:** `feat/adr-platform-foundation`  
 **Scope:** External identity lifecycle for the existing provider-neutral OIDC and Web BFF foundation
@@ -87,6 +87,19 @@ Recovery is a separate, high-risk workflow and must not be conflated with ordina
 - After recovery, revoke all existing sessions and require fresh authentication.
 
 Recovery proof requirements, delay windows, notification channels, and escalation policy remain product/security decisions to finalize before implementation.
+
+### 3.4.1 Approved and implemented C3 MVP boundary
+
+The approved C3 implementation supports only recovery of a `suspended` account after a fresh OIDC authentication using an exact external identity that is already bound to that same internal user and remains in `active` identity lifecycle state.
+
+- The flow uses a five-minute, single-use, browser-bound state/nonce/PKCE transaction and requires a recent `auth_time`.
+- Account recovery changes only the internal account-security projection. The immutable external identity binding and external identity lifecycle state/history are not changed.
+- A successful transition appends account-security and recovery audit records and creates a session-revocation outbox barrier in the same database transaction. All prior sessions must be revoked before fresh login.
+- `disabled` accounts, revoked identities, unknown identities, active accounts, and all other ineligible cases are denied with a generic response.
+- Email/phone matching, identity transfer, identity reactivation, account merging, and support-agent recovery remain prohibited.
+- Full lost-account recovery is deferred: if no active linked identity remains, this MVP has no automatic recovery path.
+- Verified notification infrastructure and a trusted-edge rate-limit policy are not yet implemented and are required before public rollout. The new OIDC callback URI also requires explicit allow-list configuration at the provider; no provider configuration was changed in C3.
+- Implementation details and CI evidence: `docs/engineering/phase-c3-safe-account-recovery-implementation.md`.
 
 ## 4. Transaction, concurrency, and database requirements
 
@@ -182,4 +195,4 @@ Each phase requires explicit founder approval before code changes. Approval of t
 4. Should an identity be eligible for reactivation only for its original internal user? This design recommends yes, never reassignment.
 5. What user notification channels are available and verified for identity lifecycle changes?
 
-**Current implementation status:** No code or infrastructure changes have been made under this proposal. This document is a design artifact only.
+**Current implementation status:** Phases A and B and account-security phases C1–C3 have implementation records on the working branch. C4 final security audit/closure remains in progress. No Keycloak configuration, staging/production deployment, merge, or release has been performed.
