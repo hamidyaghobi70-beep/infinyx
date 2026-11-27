@@ -169,13 +169,13 @@ exports.up = (pgm) => {
     REVOKE ALL ON FUNCTION enforce_external_identity_lifecycle_update() FROM PUBLIC;
     REVOKE ALL ON FUNCTION prevent_external_identity_lifecycle_event_mutation() FROM PUBLIC;
 
-    INSERT INTO user_external_identity_lifecycle (identity_id)
-      SELECT identity_id FROM user_external_identities
+    INSERT INTO user_external_identity_lifecycle (identity_id, created_at, updated_at)
+      SELECT identity_id, created_at, created_at FROM user_external_identities
       ON CONFLICT (identity_id) DO NOTHING;
 
     INSERT INTO user_external_identity_lifecycle_events
-      (identity_id, from_status, to_status, reason_code)
-      SELECT identity_id, NULL, 'active', 'legacy_backfill'
+      (identity_id, from_status, to_status, reason_code, created_at)
+      SELECT identity_id, NULL, 'active', 'legacy_backfill', created_at
         FROM user_external_identities
       ON CONFLICT DO NOTHING;
   `);
