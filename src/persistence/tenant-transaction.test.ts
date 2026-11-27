@@ -110,7 +110,7 @@ describe("withTenantTransaction", () => {
     expect(db.calls.map((call) => call.sql)).toEqual([
       "BEGIN",
       "SELECT set_config('app.tenant_id', $1, true)",
-      "SELECT membership_id::text AS membership_id, role, generation, version\n           FROM tenant_memberships\n          WHERE tenant_id = $1\n            AND internal_user_id = $2::uuid\n            AND status = 'active'\n          ORDER BY generation DESC\n          LIMIT 1",
+      "SELECT membership_id::text AS membership_id, role, generation, version\n           FROM tenant_memberships\n          WHERE tenant_id = $1\n            AND internal_user_id = $2::uuid\n            AND status = 'active'\n          ORDER BY generation DESC\n          LIMIT 1\n          FOR SHARE",
       "SELECT value FROM tenant_records WHERE tenant_id = $1",
       "COMMIT"
     ]);
@@ -154,7 +154,7 @@ describe("withTenantTransaction", () => {
     expect(db.calls.map((call) => call.sql)).toEqual([
       "BEGIN",
       "SELECT set_config('app.tenant_id', $1, true)",
-      "SELECT membership_id::text AS membership_id, role, generation, version\n           FROM tenant_memberships\n          WHERE tenant_id = $1\n            AND internal_user_id = $2::uuid\n            AND status = 'active'\n          ORDER BY generation DESC\n          LIMIT 1",
+      "SELECT membership_id::text AS membership_id, role, generation, version\n           FROM tenant_memberships\n          WHERE tenant_id = $1\n            AND internal_user_id = $2::uuid\n            AND status = 'active'\n          ORDER BY generation DESC\n          LIMIT 1\n          FOR SHARE",
       "ROLLBACK"
     ]);
     expect(db.releaseCount).toBe(1);
@@ -169,7 +169,7 @@ describe("withTenantTransaction", () => {
     expect(db.calls.map((call) => call.sql)).toEqual([
       "BEGIN",
       "SELECT set_config('app.tenant_id', $1, true)",
-      "SELECT membership_id::text AS membership_id, role, generation, version\n           FROM tenant_memberships\n          WHERE tenant_id = $1\n            AND internal_user_id = $2::uuid\n            AND status = 'active'\n          ORDER BY generation DESC\n          LIMIT 1",
+      "SELECT membership_id::text AS membership_id, role, generation, version\n           FROM tenant_memberships\n          WHERE tenant_id = $1\n            AND internal_user_id = $2::uuid\n            AND status = 'active'\n          ORDER BY generation DESC\n          LIMIT 1\n          FOR SHARE",
       "SELECT private_data",
       "ROLLBACK"
     ]);
@@ -193,7 +193,7 @@ describe("withTenantTransaction", () => {
     expect(db.calls.map((call) => call.sql)).toEqual([
       "BEGIN",
       "SELECT set_config('app.tenant_id', $1, true)",
-      "SELECT membership_id::text AS membership_id, role, generation, version\n           FROM tenant_memberships\n          WHERE tenant_id = $1\n            AND internal_user_id = $2::uuid\n            AND status = 'active'\n          ORDER BY generation DESC\n          LIMIT 1",
+      "SELECT membership_id::text AS membership_id, role, generation, version\n           FROM tenant_memberships\n          WHERE tenant_id = $1\n            AND internal_user_id = $2::uuid\n            AND status = 'active'\n          ORDER BY generation DESC\n          LIMIT 1\n          FOR SHARE",
       "SELECT private_data",
       "ROLLBACK"
     ]);
