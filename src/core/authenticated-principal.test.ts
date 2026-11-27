@@ -1,6 +1,6 @@
 import { generateKeyPairSync, sign } from "node:crypto";
 import type { Request, Response } from "express";
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 import {
   AuthenticationError,
   createAuthenticatedPrincipalResolver,
@@ -152,13 +152,13 @@ describe("OIDC discovery and JWKS token verifier", () => {
 
   it("rejects invalid verifier configuration", () => {
     expect(() => createOidcJwksPrincipalVerifier({
-      issuer: "http://identity.infinyx.test", audience, authorizedParties: [authorizedParty]
+      issuer: "http://identity.infinyx.test", audience, authorizedParties: [authorizedParty], accessTokenType: "Bearer"
     })).toThrow(TypeError);
     expect(() => createOidcJwksPrincipalVerifier({
-      issuer, audience: " ", authorizedParties: [authorizedParty]
+      issuer, audience: " ", authorizedParties: [authorizedParty], accessTokenType: "Bearer"
     })).toThrow(TypeError);
     expect(() => createOidcJwksPrincipalVerifier({
-      issuer, audience, authorizedParties: []
+      issuer, audience, authorizedParties: [], accessTokenType: "Bearer"
     })).toThrow(TypeError);
     expect(() => createOidcJwksPrincipalVerifier({
       issuer, audience, authorizedParties: [authorizedParty], accessTokenType: "Bearer", cacheTtlMs: 99
