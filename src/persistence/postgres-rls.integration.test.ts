@@ -11,6 +11,11 @@ import {
   TenantPersistenceError,
   withTenantTransaction
 } from "./tenant-transaction.js";
+import {
+  getTenantMembership,
+  requireTenantRole,
+  TenantAuthorizationError
+} from "./tenant-membership.js";
 
 const databaseUrl = process.env.INFINYX_TEST_DATABASE_URL;
 const integrationDescribe = databaseUrl ? describe : describe.skip;
@@ -201,4 +206,33 @@ integrationDescribe("PostgreSQL tenant RLS integration", () => {
       client.release();
     }
   });
+  it("resolves a tenant role only from the caller's membership row", async () => {
+    const membership = await getTenantMembership(
+      tenantPool,
+      principalFor("tenant-a")
+    );
+    expect(membership).toEqual({
+      tenantId: "tenant-a",
+      userId: "user-tenant-a",
+      role: "owner"
+    });
+  });
+
+  it("denies users without a membership and enforces explicit role allowlists", async () => {
+    await expect(
+      getTenantMembership(
+        tenantPool,
+        principalFor("tenant-a", "user-not-a-member")
+      )
+    ).resolves.toBeNull();
+
+    await expect(
+      requireTenantRole(
+        tenantPool,
+        principalFor("tenant-a"),
+        ["viewer", "editor"]
+      )
+    ).rejects.toBeInstanceOf(TenantAuthorizationError);
+  });
+
 });
