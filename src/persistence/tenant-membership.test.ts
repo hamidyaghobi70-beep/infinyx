@@ -65,7 +65,7 @@ describe("tenant membership authorization", () => {
   });
 
   it("denies missing, suspended and removed memberships before callback execution", async () => {
-    const identity = principal();
+    const identity = await principal();
     let callbackCalled = false;
     await expect(withTenantTransaction(
       poolWithMembership(null), identity, "tenant-1",
@@ -83,7 +83,7 @@ describe("tenant membership authorization", () => {
   });
 
   it("allows only explicitly permitted roles", async () => {
-    const identity = principal();
+    const identity = await principal();
     await expect(withTenantTransaction(
       poolWithMembership("editor"), identity, "tenant-1",
       (transaction) => requireTenantRole(transaction, identity, ["owner", "admin", "editor"])
@@ -95,7 +95,7 @@ describe("tenant membership authorization", () => {
   });
 
   it("fails closed for unknown database roles", async () => {
-    const identity = principal();
+    const identity = await principal();
     await expect(withTenantTransaction(
       poolWithMembership("unexpected"), identity, "tenant-1",
       (transaction) => getTenantMembership(transaction, identity)
