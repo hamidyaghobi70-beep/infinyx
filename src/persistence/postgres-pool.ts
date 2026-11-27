@@ -32,7 +32,8 @@ function boundedInteger(
 }
 
 function readStrictTlsConfiguration(
-  env: PostgresEnvironment
+  env: PostgresEnvironment,
+  connectionHostname: string
 ): NonNullable<PoolConfig["ssl"]> {
   const ca = env.DATABASE_SSL_CA;
   const servername = env.DATABASE_SSL_SERVERNAME;
@@ -43,6 +44,7 @@ function readStrictTlsConfiguration(
     !servername ||
     servername.length > 253 ||
     isIP(servername) !== 0 ||
+    (isIP(connectionHostname) === 0 && servername.toLowerCase() !== connectionHostname.toLowerCase()) ||
     !/^(?=.{1,253}$)(?:[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?)(?:\.(?:[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?))*$/.test(servername)
   ) {
     throw new PostgresConfigurationError();
@@ -136,7 +138,7 @@ export function buildPostgresPoolConfig(
     application_name: "infinyx-api",
     ssl:
       sslMode === "require"
-        ? readStrictTlsConfiguration(env)
+        ? readStrictTlsConfiguration(env, parsedUrl.hostname)
         : false
   };
 
