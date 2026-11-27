@@ -73,8 +73,9 @@ exports.up = (pgm) => {
         RAISE EXCEPTION 'External identity lifecycle records are retained';
       END IF;
 
-      IF NEW.identity_id IS DISTINCT FROM OLD.identity_id THEN
-        RAISE EXCEPTION 'External identity lifecycle ownership is immutable';
+      IF NEW.identity_id IS DISTINCT FROM OLD.identity_id
+         OR NEW.created_at IS DISTINCT FROM OLD.created_at THEN
+        RAISE EXCEPTION 'External identity lifecycle identity and creation time are immutable';
       END IF;
 
       IF NEW.status IS NOT DISTINCT FROM OLD.status THEN
