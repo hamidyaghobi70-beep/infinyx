@@ -1,4 +1,5 @@
 name: Temporary database dependency lockfile bootstrap
+# Temporary: removed after dependency manifests are committed.
 
 on:
   push:
