@@ -1,6 +1,6 @@
 # Phase 5A — Ephemeral Keycloak CI Integration Record
 
-**Status:** Implemented in the working branch; CI execution pending.  
+**Status:** Implemented; GitHub Actions CI run #45945498416 completed successfully.  
 **Environment:** GitHub Actions job-local Docker container; no public endpoint.  
 **Keycloak image:** `quay.io/keycloak/keycloak:26.3.3`.
 
@@ -43,6 +43,14 @@ The workflow performs the following operations automatically:
 No domain, paid hosting, or paid Keycloak service is required. GitHub Actions usage remains subject to the repository/account's included minutes and usage limits; zero cost is not guaranteed for every account or usage pattern.
 
 The ephemeral container and realm disappear after the CI job. This is an integration-test environment, not persistent staging and not suitable for real users.
+
+## Verified CI evidence
+
+- Workflow run: [#45945498416](https://github.com/hamidyaghobi70-beep/infinyx/actions/runs/45945498416).
+- Run conclusion: `completed / success` on branch `feat/adr-platform-foundation`, commit `13e89a9f1f4e775b82d03612006e2ac48b3ad11d`.
+- All 21 job steps completed successfully, including TLS certificate creation, isolated Keycloak startup, database migrations, typecheck, Web BFF build, unit/PostgreSQL integration tests, live Keycloak OIDC discovery/JWKS verification over HTTPS, and container cleanup.
+- The test contacted a real ephemeral Keycloak 26.3.3 instance inside the CI job. It verified discovery metadata, HTTPS endpoints, authorization URL construction, and JWKS reachability.
+- This is not a full browser login, authorization-code callback/token exchange, refresh/logout, persistent staging, or production verification.
 
 ## Governance
 
