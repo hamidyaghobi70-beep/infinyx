@@ -1,6 +1,6 @@
 # Internal Identity Foundation — Implementation Notes
 
-- **Status:** Implemented on `feat/adr-platform-foundation`; CI verification pending
+- **Status:** Implemented and CI-verified on `feat/adr-platform-foundation`
 - **Scope:** Initial internal-user and external-identity persistence foundation
 - **Related:** ADR-0011 and `keycloak-staging-integration-design.md`
 
@@ -46,6 +46,8 @@ Rollback is intentionally refused once any internal user or external identity ro
 ## 4. CI and verification boundary
 
 CI grants the application role SELECT/INSERT only on the two identity tables. No UPDATE or DELETE grants are provided for external identity records. Unit tests cover exact mapping, idempotency, conflicts, multiple identities, malformed issuer/subject inputs, parameterization, and generic error handling. PostgreSQL integration tests cover unique mapping, concurrent claims, foreign-key enforcement, and restricted mutation privileges.
+
+**Verified CI:** GitHub Actions run [#45932852510](https://github.com/hamidyaghobi70-beep/infinyx/actions/runs/45932852510) completed successfully on code commit `2ef2aec7289a9932e4408352fb685a4922b2e103`. Migration application and syntax checks, dependency audit (0 reported vulnerabilities), TypeScript typecheck, and PostgreSQL integration/unit tests all passed: 11 test files and 108 tests. The subsequent documentation-only status update does not change the verified code.
 
 Passing CI verifies this isolated persistence foundation only. It does not make Keycloak configured, enable authentication, migrate existing users, or establish production readiness.
 
