@@ -69,10 +69,12 @@ jobs:
             ('10000000-0000-4000-8000-000000000002', 'https://infinyx.integration.test', 'user-tenant-b');
           INSERT INTO tenants (id, name) VALUES
             ('tenant-a', 'Tenant A'),
-            ('tenant-b', 'Tenant B');
+            ('tenant-b', 'Tenant B'),
+            ('tenant-c', 'Tenant C');
           INSERT INTO tenant_memberships (tenant_id, user_id, internal_user_id, role) VALUES
             ('tenant-a', '10000000-0000-4000-8000-000000000001', '10000000-0000-4000-8000-000000000001', 'owner'),
-            ('tenant-b', '10000000-0000-4000-8000-000000000002', '10000000-0000-4000-8000-000000000002', 'owner');
+            ('tenant-b', '10000000-0000-4000-8000-000000000002', '10000000-0000-4000-8000-000000000002', 'owner'),
+            ('tenant-c', '10000000-0000-4000-8000-000000000001', '10000000-0000-4000-8000-000000000001', 'manager');
           SQL
       - name: Check migration file syntax
         run: npm run db:migrate:check
