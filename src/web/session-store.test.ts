@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import type { Pool, PoolClient } from "pg";
+import type { Pool } from "pg";
 import {
   createCsrfToken,
   createOpaqueSessionId,
@@ -31,39 +31,37 @@ function sessionRow(expiry: number, refreshToken?: string) {
   };
 }
 
-function fakePool(
-  row: ReturnType<typeof sessionRow>,
-  options: { readonly lockResult?: boolean; readonly unlockResult?: boolean; readonly unlockError?: boolean } = {}
-) {
-  let stored = row;
+function fakePool(row: ReturnType<typeof sessionRow>) {
+  let stored = { ...row, refresh_attempt_id: null as string | null, revoked_at: null as Date | null };
   const calls: Array<{ sql: string; values?: readonly unknown[] }> = [];
-  const client = {
-    async query(sql: string, values?: readonly unknown[]) {
-      calls.push({ sql, values });
-      if (sql.includes("pg_try_advisory_lock")) return { rows: [{ acquired: options.lockResult ?? true }], rowCount: 1 };
-      if (sql.includes("pg_advisory_unlock")) {
-        if (options.unlockError) throw new Error("simulated advisory unlock failure");
-        return { rows: [{ unlocked: options.unlockResult ?? true }], rowCount: 1 };
-      }
-      if (sql.includes("SELECT user_id::text AS user_id")) {
-        return { rows: [stored], rowCount: 1 };
-      }
-      if (sql.includes("UPDATE web_sessions") && sql.includes("SET encrypted_token_bundle")) {
-        const updatedAt = (values?.[3] as Date).getTime();
-        if (updatedAt >= stored.idle_expires_at.getTime() ||
-            updatedAt >= stored.absolute_expires_at.getTime()) {
-          return { rows: [], rowCount: 0 };
-        }
-        stored = { ...stored, encrypted_token_bundle: values?.[2] as Buffer };
-        return { rows: [], rowCount: 1 };
-      }
-      return { rows: [], rowCount: null };
-    },
-    release: vi.fn()
-  };
-  const connect = vi.fn(async () => client);
-  const pool = { connect } as unknown as Pool;
-  return { pool, client, calls, connect, get stored() { return stored; } };
+  const query = vi.fn(async (sql: string, values?: readonly unknown[]) => {
+    calls.push({ sql, values });
+    if (sql.includes("SELECT user_id::text AS user_id")) {
+      const blocked = stored.revoked_at !== null || stored.refresh_attempt_id !== null;
+      return { rows: blocked ? [] : [stored], rowCount: blocked ? 0 : 1 };
+    }
+    if (sql.includes("SET refresh_attempt_id =")) {
+      if (stored.refresh_attempt_id || stored.revoked_at ||
+          !stored.encrypted_token_bundle.equals(values?.[2] as Buffer)) return { rows: [], rowCount: 0 };
+      stored.refresh_attempt_id = values?.[1] as string;
+      return { rows: [], rowCount: 1 };
+    }
+    if (sql.includes("SET encrypted_token_bundle")) {
+      const updatedAt = (values?.[3] as Date).getTime();
+      if (updatedAt >= stored.idle_expires_at.getTime() ||
+          updatedAt >= stored.absolute_expires_at.getTime() ||
+          stored.refresh_attempt_id !== values?.[1]) return { rows: [], rowCount: 0 };
+      stored = { ...stored, encrypted_token_bundle: values?.[2] as Buffer, refresh_attempt_id: null };
+      return { rows: [], rowCount: 1 };
+    }
+    if (sql.includes("SET revoked_at")) {
+      stored.revoked_at = values?.[2] as Date ?? values?.[1] as Date;
+      return { rows: [], rowCount: 1 };
+    }
+    return { rows: [], rowCount: null };
+  });
+  const pool = { query } as unknown as Pool;
+  return { pool, calls, query, get stored() { return stored; } };
 }
 
 describe("serialized web-session access-token refresh", () => {
@@ -86,8 +84,8 @@ describe("serialized web-session access-token refresh", () => {
     const accessToken = await store.getUsableAccessToken(createOpaqueSessionId(), refresh);
     expect(accessToken).toBe("new-access-token");
     expect(refresh).toHaveBeenCalledOnce();
-    expect(fake.calls.some(call => call.sql.includes("pg_try_advisory_lock"))).toBe(true);
-    expect(fake.calls.some(call => call.sql.includes("pg_advisory_unlock"))).toBe(true);
+    expect(fake.calls.some(call => call.sql.includes("SET refresh_attempt_id ="))).toBe(true);
+    expect(fake.calls.some(call => call.sql.includes("refresh_attempt_id = NULL"))).toBe(true);
     expect(fake.calls.some(call => call.sql === "BEGIN")).toBe(false);
     expect(fake.calls.find(call => call.sql.includes("SELECT user_id::text AS user_id"))?.sql)
       .toContain("user_external_identity_lifecycle");
@@ -127,7 +125,7 @@ describe("serialized web-session access-token refresh", () => {
     const refresh = vi.fn();
     expect(await store.getUsableAccessToken(createOpaqueSessionId(), refresh)).toBe("old-access-token");
     expect(refresh).not.toHaveBeenCalled();
-    expect(fake.calls.some(call => call.sql.includes("pg_advisory_unlock"))).toBe(true);
+    
   });
 
   it("revokes an expired session when no refresh token is available", async () => {
@@ -146,32 +144,15 @@ describe("serialized web-session access-token refresh", () => {
     const refresh = vi.fn(async () => { throw new Error("provider details must not escape"); });
     expect(await store.getUsableAccessToken(createOpaqueSessionId(), refresh)).toBeNull();
     expect(fake.calls.some(call => call.sql.includes("SET revoked_at"))).toBe(true);
-    expect(fake.calls.at(-1)?.sql).toContain("pg_advisory_unlock");
-    expect(fake.client.release).toHaveBeenCalledOnce();
+    expect(fake.calls.at(-1)?.sql).toContain("SET revoked_at");
   });
 
-  it.each([
-    ["returns false", { unlockResult: false }],
-    ["throws", { unlockError: true }]
-  ] as const)("discards the PostgreSQL client when advisory unlock %s", async (_label, options) => {
-    const fake = fakePool(sessionRow(now.getTime() + 180_000, "refresh-token"), options);
-    const store = new PostgresWebSessionStore(fake.pool, key, () => now);
-
-    await expect(
-      store.getUsableAccessToken(createOpaqueSessionId(), vi.fn())
-    ).resolves.toBe("old-access-token");
-
-    expect(fake.client.release).toHaveBeenCalledOnce();
-    expect(fake.client.release).toHaveBeenCalledWith(
-      expect.objectContaining({ message: "Discarding connection after advisory-lock cleanup failure." })
-    );
-  });
 
   it("fails closed for malformed session identifiers", async () => {
     const fake = fakePool(sessionRow(now.getTime() + 100_000, "refresh-token"));
     const store = new PostgresWebSessionStore(fake.pool, key, () => now);
     expect(await store.getUsableAccessToken("invalid", vi.fn())).toBeNull();
-    expect(fake.connect).not.toHaveBeenCalled();
+    expect(fake.query).not.toHaveBeenCalled();
   });
 
   it("fails closed when the account is inactive or has pending revocation", async () => {
@@ -228,47 +209,6 @@ describe("serialized web-session access-token refresh", () => {
     })).rejects.toThrow("Web session operation failed");
   });
 
-  it("releases each distinct client when concurrent refresh attempts cannot acquire the lock", async () => {
-    const clients = Array.from({ length: 10 }, () => ({
-      query: vi.fn(async (sql: string) => {
-        if (sql.includes("pg_try_advisory_lock")) {
-          return { rows: [{ acquired: false }], rowCount: 1 };
-        }
-        return { rows: [], rowCount: 0 };
-      }),
-      release: vi.fn()
-    }));
-    let nextClient = 0;
-    const pool = {
-      connect: vi.fn(async () => clients[nextClient++]!)
-    } as unknown as Pool;
-    const store = new PostgresWebSessionStore(pool, key, () => now);
 
-    const results = await Promise.all(
-      Array.from({ length: clients.length }, () => store.getUsableAccessToken(createOpaqueSessionId(), vi.fn()))
-    );
-
-    expect(results).toEqual(Array(clients.length).fill(null));
-    expect(pool.connect).toHaveBeenCalledTimes(clients.length);
-    for (const client of clients) {
-      expect(client.query).toHaveBeenCalledOnce();
-      expect(client.release).toHaveBeenCalledOnce();
-    }
-  });
-
-  it("fails closed when another request already owns the refresh lock", async () => {
-    const fake = fakePool(sessionRow(now.getTime() - 1, "refresh-token"));
-    fake.client.query = async (sql: string, values?: readonly unknown[]) => {
-      fake.calls.push({ sql, values });
-      if (sql.includes("pg_try_advisory_lock")) return { rows: [{ acquired: false }], rowCount: 1 };
-      return { rows: [], rowCount: 0 };
-    };
-    const store = new PostgresWebSessionStore(fake.pool, key, () => now);
-    const refresh = vi.fn();
-    expect(await store.getUsableAccessToken(createOpaqueSessionId(), refresh)).toBeNull();
-    expect(refresh).not.toHaveBeenCalled();
-    expect(fake.calls.some(call => call.sql.includes("pg_advisory_unlock"))).toBe(false);
-    expect(fake.client.release).toHaveBeenCalledOnce();
-  });
 
 });

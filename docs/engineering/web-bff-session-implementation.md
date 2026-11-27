@@ -109,3 +109,19 @@ CI run: https://github.com/hamidyaghobi70-beep/infinyx/actions/runs/45941140918
 - No provider end-session redirect; logout currently performs local revocation plus best-effort refresh-token revocation.
 - No dedicated web-auth audit-event table or operational key-rotation runbook.
 - No merge, release, or deployment; main remains unchanged.
+
+
+## 10. Durable OIDC refresh reservation
+
+A refresh attempt is claimed by an atomic update to `web_sessions.refresh_attempt_id`
+before any OIDC provider request. No database client or transaction is held while
+waiting on the provider. Only the request holding that UUID can persist the rotated
+token bundle. Competing requests and requests after process/connection loss fail
+closed while the reservation remains set.
+
+This is intentionally conservative: if the provider outcome is ambiguous (including
+a process crash or database disconnect after the provider may have rotated a
+single-use refresh token), the session is not automatically retried. The user must
+authenticate again. This trades availability for protection against refresh-token
+reuse and concurrent rotation. A successful compare-and-set clears the reservation;
+a definite provider failure revokes the session.

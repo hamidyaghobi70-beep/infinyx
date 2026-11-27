@@ -418,8 +418,7 @@ export function createOidcBffHandlers(dependencies: OidcBffHandlerDependencies) 
 
 /**
  * Returns a still-valid access token for a server-side session. Refresh is
- * serialized across application instances by a PostgreSQL session advisory
- * lock; refresh failures revoke the local session and never return an expired token.
+ * guarded by a durable database reservation; ambiguous refresh outcomes fail closed.
  */
 export async function getSessionAccessToken(
   sessionId: string,
