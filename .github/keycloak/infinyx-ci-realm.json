@@ -1,0 +1,21 @@
+{
+  "realm": "infinyx-ci",
+  "enabled": true,
+  "clients": [
+    {
+      "clientId": "infinyx-web",
+      "name": "INFINYX CI Web BFF",
+      "enabled": true,
+      "protocol": "openid-connect",
+      "publicClient": false,
+      "secret": "ci-only-infinyx-web-secret",
+      "standardFlowEnabled": true,
+      "implicitFlowEnabled": false,
+      "directAccessGrantsEnabled": false,
+      "serviceAccountsEnabled": false,
+      "redirectUris": ["https://localhost:3000/auth/callback"],
+      "webOrigins": [],
+      "protocolMappers": []
+    }
+  ]
+}
