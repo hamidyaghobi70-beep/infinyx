@@ -70,6 +70,17 @@ integrationDescribe("PostgreSQL immutable external identity link workflow", () =
         [issuer, newSubject]
       );
       expect(linked.rows[0]?.user_id).toBe(actor);
+      const newLifecycle = await adminPool.query(
+        `SELECT lifecycle.status, lifecycle.version, event.reason_code
+           FROM user_external_identities AS identity
+           INNER JOIN user_external_identity_lifecycle AS lifecycle
+             ON lifecycle.identity_id = identity.identity_id
+           INNER JOIN user_external_identity_lifecycle_events AS event
+             ON event.identity_id = identity.identity_id
+          WHERE identity.issuer = $1 AND identity.subject = $2`,
+        [issuer, newSubject]
+      );
+      expect(newLifecycle.rows).toEqual([{ status: "active", version: 1, reason_code: "identity_created" }]);
 
       const outbox = await adminPool.query(
         "SELECT user_id::text, completed_at FROM identity_session_revocation_outbox WHERE outbox_id = $1::uuid",
