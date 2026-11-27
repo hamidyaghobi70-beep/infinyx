@@ -91,6 +91,17 @@ describe("internal identity persistence", () => {
       outcome: "already_linked",
       identity: { userId }
     });
+    expect(calls[1]?.sql).toContain("INNER JOIN user_external_identity_lifecycle");
+    expect(calls[1]?.sql).toContain("lifecycle.status = 'active'");
+  });
+
+  it("does not treat a revoked identity as an active existing link", async () => {
+    const { tx } = transaction((sql) => sql.includes("INSERT INTO user_external_identities")
+      ? []
+      : []);
+    await expect(linkExternalIdentity(tx, userId, issuer, subject)).rejects.toThrow(
+      "Internal identity operation failed"
+    );
   });
 
   it("supports multiple provider identities for one internal user", async () => {
