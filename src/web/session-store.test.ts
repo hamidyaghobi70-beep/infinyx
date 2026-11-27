@@ -98,6 +98,33 @@ describe("serialized web-session access-token refresh", () => {
     });
   });
 
+  it("allows only one provider call while a durable reservation is pending", async () => {
+    const fake = fakePool(sessionRow(now.getTime() - 1, "single-use-refresh-token"));
+    const store = new PostgresWebSessionStore(fake.pool, key, () => now);
+    let signalStarted!: () => void;
+    let finishRefresh!: () => void;
+    const started = new Promise<void>(resolve => { signalStarted = resolve; });
+    const gate = new Promise<void>(resolve => { finishRefresh = resolve; });
+    const refresh = vi.fn(async () => {
+      signalStarted();
+      await gate;
+      return {
+        accessToken: "rotated-access-token",
+        refreshToken: "rotated-refresh-token",
+        accessTokenExpiresAt: now.getTime() + 300_000
+      };
+    });
+
+    const first = store.getUsableAccessToken(createOpaqueSessionId(), refresh);
+    await started;
+    const second = await store.getUsableAccessToken(createOpaqueSessionId(), refresh);
+    expect(second).toBeNull();
+    expect(refresh).toHaveBeenCalledOnce();
+    finishRefresh();
+    await expect(first).resolves.toBe("rotated-access-token");
+    expect(fake.stored.refresh_attempt_id).toBeNull();
+  });
+
   it("does not persist refreshed credentials if the session expires during the provider request", async () => {
     let clock = new Date(now);
     const row = sessionRow(clock.getTime() + 10_000, "refresh-token");
@@ -134,7 +161,6 @@ describe("serialized web-session access-token refresh", () => {
     expect(await store.getUsableAccessToken(createOpaqueSessionId(), refresh)).toBeNull();
     expect(refresh).not.toHaveBeenCalled();
     expect(fake.calls.some(call => call.sql.includes("SET revoked_at"))).toBe(true);
-    
   });
 
   it("revokes the session when refresh fails rather than returning an expired token", async () => {
@@ -176,6 +202,7 @@ describe("serialized web-session access-token refresh", () => {
       expect(sql).toContain("lifecycle.status = 'active'");
       expect(sql).toContain("user_account_session_revocation_outbox");
       expect(sql).toContain("account_security.status = 'active'");
+      expect(sql).toContain("refresh_attempt_id IS NULL");
     }
   });
 

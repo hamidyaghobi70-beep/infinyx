@@ -266,7 +266,9 @@ export class PostgresWebSessionStore {
     }
     if (!row) return null;
 
-    const current = decryptSessionTokenBundle(row.encrypted_token_bundle, this.encryptionKey);
+    let current: SessionTokenBundle;
+    try { current = decryptSessionTokenBundle(row.encrypted_token_bundle, this.encryptionKey); }
+    catch { throw new WebSessionStoreError(); }
     if (!current.csrfToken) throw new WebSessionStoreError();
     if (current.accessTokenExpiresAt > now.getTime() + 60_000) return current.accessToken;
 
