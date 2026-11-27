@@ -43,7 +43,7 @@ function poolWithMembership(role: string | null, status = "active"): TenantSqlPo
       sql: string,
       _values?: readonly unknown[]
     ): Promise<SqlQueryResult<Row>> {
-      if (sql.includes("FROM tenant_memberships") && role) {
+      if (sql.includes("FROM tenant_memberships") && role && status === "active") {
         return {
           rows: [{
             membership_id: "00000000-0000-4000-8000-000000000001",
