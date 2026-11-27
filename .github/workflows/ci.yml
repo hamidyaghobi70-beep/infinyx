@@ -209,11 +209,11 @@ jobs:
               UPDATE user_account_security_events
                  SET reason_code = 'tampered'
                WHERE user_id = test_user;
-            EXCEPTION WHEN raise_exception THEN
+            EXCEPTION WHEN insufficient_privilege OR raise_exception THEN
               rejected := true;
             END;
             IF NOT rejected THEN
-              RAISE EXCEPTION 'Account security event history was mutable';
+              RAISE EXCEPTION 'Application role unexpectedly mutated account security event history';
             END IF;
 
             SELECT count(*) INTO legacy_events
@@ -265,6 +265,37 @@ jobs:
                AND event.to_status = 'active';
             IF identity_count <> 2 OR active_count <> 2 OR backfill_event_count <> 2 THEN
               RAISE EXCEPTION 'Legacy identity lifecycle backfill verification failed';
+            END IF;
+          END;
+          $block$;
+          SQL
+      - name: Verify database-level account security immutability guards
+        run: |
+          psql "$DATABASE_URL" -v ON_ERROR_STOP=1 <<'SQL'
+          DO $block$
+          DECLARE
+            rejected boolean := false;
+          BEGIN
+            BEGIN
+              UPDATE user_account_security_events
+                 SET reason_code = 'tampered'
+               WHERE user_id = '10000000-0000-4000-8000-000000000099';
+            EXCEPTION WHEN raise_exception THEN
+              rejected := true;
+            END;
+            IF NOT rejected THEN
+              RAISE EXCEPTION 'Database allowed account security event history mutation';
+            END IF;
+
+            rejected := false;
+            BEGIN
+              DELETE FROM user_account_security
+               WHERE user_id = '10000000-0000-4000-8000-000000000099';
+            EXCEPTION WHEN raise_exception THEN
+              rejected := true;
+            END;
+            IF NOT rejected THEN
+              RAISE EXCEPTION 'Database allowed account security state deletion';
             END IF;
           END;
           $block$;
