@@ -16,6 +16,7 @@ import {
   requireTenantRole,
   TenantAuthorizationError
 } from "./tenant-membership.js";
+import { getCurrentTenant } from "./tenant-repository.js";
 
 const databaseUrl = process.env.INFINYX_TEST_DATABASE_URL;
 const integrationDescribe = databaseUrl ? describe : describe.skip;
@@ -218,6 +219,39 @@ integrationDescribe("PostgreSQL tenant RLS integration", () => {
       userId: "user-tenant-a",
       role: "owner"
     });
+  });
+
+  it("reads the current tenant through the membership-protected repository", async () => {
+    const owner = principalFor("tenant-a");
+    const result = await withTenantTransaction(
+      tenantPool,
+      owner,
+      (transaction) => getCurrentTenant(transaction, owner)
+    );
+
+    expect(result).toEqual({
+      tenant: {
+        id: "tenant-a",
+        name: "Tenant A",
+        createdAt: expect.any(String)
+      },
+      membership: {
+        tenantId: "tenant-a",
+        userId: "user-tenant-a",
+        role: "owner"
+      }
+    });
+  });
+
+  it("does not read tenant details when the principal has no membership", async () => {
+    const nonMember = principalFor("tenant-a", "user-not-a-member");
+    await expect(
+      withTenantTransaction(
+        tenantPool,
+        nonMember,
+        (transaction) => getCurrentTenant(transaction, nonMember)
+      )
+    ).rejects.toBeInstanceOf(TenantAuthorizationError);
   });
 
   it("denies users without a membership and enforces explicit role allowlists", async () => {
