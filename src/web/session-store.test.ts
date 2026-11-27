@@ -51,15 +51,14 @@ function fakePool(
         return { rows: [stored], rowCount: 1 };
       }
       if (sql.includes("UPDATE web_sessions") && sql.includes("SET refresh_lease_id = $3::uuid")) {
-        const claimTime = values?.[4] as Date;
         const existingExpiry = stored.refresh_lease_expires_at;
-        if (existingExpiry && new Date(existingExpiry).getTime() > claimTime.getTime()) {
+        if (existingExpiry && new Date(existingExpiry).getTime() > now.getTime()) {
           return { rows: [], rowCount: 0 };
         }
         stored = {
           ...stored,
           refresh_lease_id: values?.[2] as string,
-          refresh_lease_expires_at: values?.[3] as Date
+          refresh_lease_expires_at: new Date(now.getTime() + Number(values?.[3]))
         };
         return { rows: [], rowCount: 1 };
       }
