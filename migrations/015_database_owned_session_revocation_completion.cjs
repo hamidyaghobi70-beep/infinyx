@@ -84,6 +84,26 @@ exports.up = (pgm) => {
 
     REVOKE ALL ON FUNCTION complete_identity_session_revocation(uuid, uuid) FROM PUBLIC;
     REVOKE ALL ON FUNCTION complete_user_account_session_revocation(uuid, uuid) FROM PUBLIC;
+
+    DO $privileges$
+    BEGIN
+      IF EXISTS (SELECT 1 FROM pg_catalog.pg_roles WHERE rolname = 'infinyx_app') THEN
+        REVOKE UPDATE ON public.identity_session_revocation_outbox FROM infinyx_app;
+        REVOKE UPDATE (completed_at, attempts, last_error_code)
+          ON public.identity_session_revocation_outbox FROM infinyx_app;
+        GRANT UPDATE (attempts, last_error_code)
+          ON public.identity_session_revocation_outbox TO infinyx_app;
+        GRANT EXECUTE ON FUNCTION complete_identity_session_revocation(uuid, uuid) TO infinyx_app;
+
+        REVOKE UPDATE ON public.user_account_session_revocation_outbox FROM infinyx_app;
+        REVOKE UPDATE (completed_at, attempts, last_error_code)
+          ON public.user_account_session_revocation_outbox FROM infinyx_app;
+        GRANT UPDATE (attempts, last_error_code)
+          ON public.user_account_session_revocation_outbox TO infinyx_app;
+        GRANT EXECUTE ON FUNCTION complete_user_account_session_revocation(uuid, uuid) TO infinyx_app;
+      END IF;
+    END;
+    $privileges$;
   `);
 };
 
@@ -97,6 +117,25 @@ exports.down = (pgm) => {
       END IF;
     END;
     $preflight$;
+
+    DO $privileges$
+    BEGIN
+      IF EXISTS (SELECT 1 FROM pg_catalog.pg_roles WHERE rolname = 'infinyx_app') THEN
+        REVOKE EXECUTE ON FUNCTION complete_user_account_session_revocation(uuid, uuid) FROM infinyx_app;
+        REVOKE EXECUTE ON FUNCTION complete_identity_session_revocation(uuid, uuid) FROM infinyx_app;
+
+        REVOKE UPDATE (attempts, last_error_code)
+          ON public.user_account_session_revocation_outbox FROM infinyx_app;
+        GRANT UPDATE (completed_at, attempts, last_error_code)
+          ON public.user_account_session_revocation_outbox TO infinyx_app;
+
+        REVOKE UPDATE (attempts, last_error_code)
+          ON public.identity_session_revocation_outbox FROM infinyx_app;
+        GRANT UPDATE (completed_at, attempts, last_error_code)
+          ON public.identity_session_revocation_outbox TO infinyx_app;
+      END IF;
+    END;
+    $privileges$;
 
     DROP FUNCTION complete_user_account_session_revocation(uuid, uuid);
     DROP FUNCTION complete_identity_session_revocation(uuid, uuid);
