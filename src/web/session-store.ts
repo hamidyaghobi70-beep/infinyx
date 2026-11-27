@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import type { Pool } from "pg";
 import {
   decryptSessionTokenBundle,
@@ -6,6 +7,8 @@ import {
   hashOpaqueSecret,
   type SessionTokenBundle
 } from "./session-crypto.js";
+
+const REFRESH_LEASE_MS = 30_000;
 
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu;
 
@@ -46,6 +49,8 @@ interface SessionRow {
   encrypted_token_bundle: Buffer;
   idle_expires_at: Date | string;
   absolute_expires_at: Date | string;
+  refresh_lease_id?: string | null;
+  refresh_lease_expires_at?: Date | string | null;
 }
 
 export class PostgresWebSessionStore {
@@ -231,8 +236,8 @@ export class PostgresWebSessionStore {
     let destroyClient = false;
     const lockKey = "hashtextextended(encode($1::bytea, 'hex'), 78123)";
     try {
-      // Session-scoped lock serializes refresh across replicas without keeping
-      // a SQL transaction or row lock open during the provider network request.
+      // The advisory lock serializes healthy connections. The durable lease below
+      // also protects the provider call if PostgreSQL drops this connection.
       const lock = await client.query<{ acquired: boolean }>(
         `SELECT pg_try_advisory_lock(${lockKey}) AS acquired`, [sessionHash]
       );
@@ -242,7 +247,8 @@ export class PostgresWebSessionStore {
       const now = this.now();
       const selected = await client.query<SessionRow>(
         `SELECT user_id::text AS user_id, issuer, subject, csrf_token_hash,
-                encrypted_token_bundle, idle_expires_at, absolute_expires_at
+                encrypted_token_bundle, idle_expires_at, absolute_expires_at,
+                refresh_lease_id, refresh_lease_expires_at
            FROM web_sessions
           WHERE session_id_hash = $1 AND revoked_at IS NULL
             AND idle_expires_at > $2 AND absolute_expires_at > $2
@@ -273,14 +279,56 @@ export class PostgresWebSessionStore {
       if (!current.csrfToken) throw new WebSessionStoreError();
       if (current.accessTokenExpiresAt > now.getTime() + 60_000) return current.accessToken;
 
-      const revokeIfUnchanged = async () => {
+      if (!current.refreshToken) {
         await client.query(
-          `UPDATE web_sessions SET revoked_at = $3
+          `UPDATE web_sessions
+              SET revoked_at = $3, refresh_lease_id = NULL, refresh_lease_expires_at = NULL
             WHERE session_id_hash = $1 AND encrypted_token_bundle = $2 AND revoked_at IS NULL`,
           [sessionHash, row.encrypted_token_bundle, now]
         );
+        return null;
+      }
+
+      const leaseId = randomUUID();
+      const leaseStartedAt = this.now();
+      const leaseExpiresAt = new Date(leaseStartedAt.getTime() + REFRESH_LEASE_MS);
+      const lease = await client.query(
+        `UPDATE web_sessions
+            SET refresh_lease_id = $3::uuid, refresh_lease_expires_at = $4
+          WHERE session_id_hash = $1 AND encrypted_token_bundle = $2
+            AND revoked_at IS NULL AND idle_expires_at > $5 AND absolute_expires_at > $5
+            AND (refresh_lease_expires_at IS NULL OR refresh_lease_expires_at <= $5)
+            AND EXISTS (
+              SELECT 1 FROM user_account_security s
+               WHERE s.user_id = web_sessions.user_id AND s.status = 'active'
+            )
+            AND EXISTS (
+              SELECT 1 FROM user_external_identities i
+              INNER JOIN user_external_identity_lifecycle l ON l.identity_id = i.identity_id
+               WHERE i.user_id = web_sessions.user_id AND i.issuer = web_sessions.issuer
+                 AND i.subject = web_sessions.subject AND l.status = 'active'
+            )
+            AND NOT EXISTS (
+              SELECT 1 FROM user_account_session_revocation_outbox o
+               WHERE o.user_id = web_sessions.user_id AND o.completed_at IS NULL
+            )
+            AND NOT EXISTS (
+              SELECT 1 FROM identity_session_revocation_outbox o
+               WHERE o.user_id = web_sessions.user_id AND o.completed_at IS NULL
+            )`,
+        [sessionHash, row.encrypted_token_bundle, leaseId, leaseExpiresAt, leaseStartedAt]
+      );
+      if (lease.rowCount !== 1) return null;
+
+      const revokeIfLeaseOwned = async () => {
+        await client.query(
+          `UPDATE web_sessions
+              SET revoked_at = $4, refresh_lease_id = NULL, refresh_lease_expires_at = NULL
+            WHERE session_id_hash = $1 AND encrypted_token_bundle = $2
+              AND refresh_lease_id = $3::uuid AND revoked_at IS NULL`,
+          [sessionHash, row.encrypted_token_bundle, leaseId, this.now()]
+        );
       };
-      if (!current.refreshToken) { await revokeIfUnchanged(); return null; }
 
       let refreshed: {
         readonly accessToken: string;
@@ -288,10 +336,11 @@ export class PostgresWebSessionStore {
         readonly accessTokenExpiresAt: number;
       };
       try {
-        // The OIDC provider fetch is bounded to five seconds by providerFetch.
+        // The OIDC provider fetch is bounded to five seconds; the durable lease
+        // lasts longer so a replacement request cannot race an uncertain call.
         refreshed = await refresh(current.refreshToken);
       } catch {
-        await revokeIfUnchanged();
+        await revokeIfLeaseOwned();
         return null;
       }
 
@@ -304,7 +353,7 @@ export class PostgresWebSessionStore {
           (refreshed.refreshToken !== undefined &&
             (typeof refreshed.refreshToken !== "string" ||
              refreshed.refreshToken.length < 1 || refreshed.refreshToken.length > 16_384))) {
-        await revokeIfUnchanged();
+        await revokeIfLeaseOwned();
         return null;
       }
 
@@ -316,8 +365,10 @@ export class PostgresWebSessionStore {
       });
       const updated = await client.query(
         `UPDATE web_sessions
-            SET encrypted_token_bundle = $3, last_seen_at = $4
+            SET encrypted_token_bundle = $3, last_seen_at = $4,
+                refresh_lease_id = NULL, refresh_lease_expires_at = NULL
           WHERE session_id_hash = $1 AND encrypted_token_bundle = $2
+            AND refresh_lease_id = $5::uuid
             AND revoked_at IS NULL AND idle_expires_at > $4 AND absolute_expires_at > $4
             AND EXISTS (
               SELECT 1 FROM user_account_security s
@@ -338,7 +389,7 @@ export class PostgresWebSessionStore {
                WHERE o.user_id = web_sessions.user_id AND o.completed_at IS NULL
             )`,
         [sessionHash, row.encrypted_token_bundle,
-          encryptSessionTokenBundle(nextBundle, this.encryptionKey), refreshedAt]
+          encryptSessionTokenBundle(nextBundle, this.encryptionKey), refreshedAt, leaseId]
       );
       return updated.rowCount === 1 ? nextBundle.accessToken : null;
     } catch {
@@ -352,9 +403,6 @@ export class PostgresWebSessionStore {
           if (unlocked.rows[0]?.unlocked !== true) destroyClient = true;
         } catch { destroyClient = true; }
       }
-      // node-postgres destroys a checked-out client when release(error) is used.
-      // Closing the physical connection makes PostgreSQL release any session lock
-      // whose explicit unlock could not be confirmed.
       client.release(destroyClient ? new Error("Discarding connection after advisory-lock cleanup failure.") : undefined);
     }
   }
