@@ -107,7 +107,7 @@ Keep BFF login-response validation (state, nonce, PKCE, confidential-client auth
 
 **Exit criteria:** duplicate/concurrent mapping cannot link one external identity to two users; unknown identities denied; already-linked identity cannot be reassigned; audit contains no tokens, OTPs, credentials, or unnecessary personal data.
 
-### Phase 4 — Web BFF and server-side sessions
+### Phase 4 — Web BFF and server-side sessions (implemented; CI verified)
 
 - Define application-specific BFF routes and use server-side Authorization Code + PKCE S256 with confidential-client authentication.
 - Bind state, nonce, and PKCE verifier to initiating browser session; validate callback state and OIDC nonce.
@@ -119,7 +119,9 @@ Keep BFF login-response validation (state, nonce, PKCE, confidential-client auth
 - Define idle/absolute expiry, refresh, revocation, logout, and invalidation on user disablement, credential reset, identity unlinking, and suspected compromise.
 - Never log tokens, cookies, authorization codes, or CSRF tokens.
 
-**Exit criteria:** browser never receives tokens; session fixation, login CSRF, open redirects, callback replay, and cross-origin state-changing requests rejected; cookie/expiry/logout tested; Keycloak/session-store outage fails closed.
+**Implementation status:** Implemented on feat/adr-platform-foundation. The Node.js built-in HTTP BFF, OIDC Authorization Code + PKCE flow, encrypted PostgreSQL login transactions and sessions, CSRF checks, cookie handling, token refresh serialization, and local logout are recorded in docs/engineering/web-bff-session-implementation.md. Automated tests cover callback replay, previous-session rotation, fixed post-login redirect, cross-origin CSRF rejection, and fail-closed identity mapping. CI run 45941140918 passed (19 test files, 132 tests, typecheck, production build, migration checks, and npm audit with zero vulnerabilities).
+
+**Remaining limitations before staging/production:** no live Keycloak realm/client, no login UI, no business API proxy routes or tenant-selection UI, no provider end-session redirect, no dedicated web-auth audit-event table, no automated hooks from user disablement/identity unlink to revokeAllForUser, and no session-encryption-key rotation runbook. The session itself contains no tenant authorization; future tenant operations must continue to re-check live INFINYX membership and branch permissions.
 
 ### Phase 5 — Staging Keycloak deployment
 
@@ -165,7 +167,7 @@ Resolved by the implemented Phase 1:
 5. **Unknown identities:** fail closed. Invitation acceptance requires an already mapped internal user; automatic account provisioning and email/phone-based linking are not enabled.
 
 Still required before later phases:
-6. Select the staging server-side BFF session store and define outage behavior.
+6. **Resolved:** PostgreSQL is the server-side BFF session store. Session IDs and login-state values are hashed at rest; OAuth token bundles and pending OIDC PKCE/nonce data are AES-256-GCM encrypted. Refresh is serialized by a row lock. Database/session-store errors fail closed. Dedicated staging backup, key rotation, and operational recovery procedures remain to be designed.
 7. Define API audience, token type/use, accepted algorithms, authorized-party/client expectations, and clock-skew tolerance.
 8. Select hosting/network boundary, secret manager, and backup destination before infrastructure work.
 9. Decide local-only email/SMS test sinks versus a separately approved non-production delivery provider and controlled recipients.
@@ -173,7 +175,7 @@ Still required before later phases:
 ## 8. Separate approval gates
 
 - **A — Design:** approve the target identity/tenant contract and resolve Section 7. No code or infrastructure changes.
-- **B — Code:** Phase 1 is complete. Phases 2–4 (OIDC/JWKS, extended identity provisioning/linking, and web BFF/session implementation) each require explicit implementation approval, with tests and code review. No Keycloak deployment/configuration and no live delivery.
+- **B — Code:** Phases 1–4 have implementation records and CI evidence on the feature branch. Phase 4 implementation was explicitly approved and is recorded separately. No Keycloak deployment/configuration and no live delivery.
 - **C — Staging infrastructure:** separately authorize Phase 5 after an explicit hosting, secrets, network, database, and test-data plan.
 - **D — Production recommendation:** review Phase 6 evidence. Production deployment, merge, and release still require separate explicit authorization.
 
@@ -181,4 +183,4 @@ No phase may begin without its corresponding explicit approval.
 
 ## 9. Governance
 
-Phase 1 implementation is recorded separately. All remaining work stays gated by explicit approval. All work remains on feat/adr-platform-foundation; main remains unchanged. No merge, release, production deployment, public exposure, production credentials, or live message delivery is authorized.
+Phases 1–4 implementation is recorded separately. Phase 5 staging infrastructure remains gated by explicit approval. All work remains on feat/adr-platform-foundation; main remains unchanged. No merge, release, production deployment, public exposure, production credentials, or live message delivery is authorized.
