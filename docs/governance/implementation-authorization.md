@@ -34,9 +34,14 @@ The Master Strategy V3 statement `Implementation Authorization: NOT GRANTED` ref
 ## Current implementation state
 
 - Reproducible dependency installation: IMPLEMENTED; `npm ci` passed in GitHub Actions.
-- JWT authenticated-principal foundation: IMPLEMENTED; covered by the current CI test suite.
-- PostgreSQL target and tenant-isolation contract: DESIGNED in ADR-0002 and ADR-0003.
-- Tenant transaction boundary: IMPLEMENTED as a driver-neutral primitive; unit-tested with a fake pool. It is not a PostgreSQL adapter and does not prove database isolation (32 tests passed in the latest recorded CI run).
-- PostgreSQL driver, migration, and tenant transaction decisions: DESIGNED in ADR-0004.
-- PostgreSQL driver/pool adapter, migration execution, schema, RLS policies, and real PostgreSQL integration tests: NOT IMPLEMENTED.
+- Dependency security: IMPLEMENTED; `npm audit` reported zero vulnerabilities after pinning the migration tool to an audited version.
+- JWT authenticated-principal foundation: IMPLEMENTED and covered by CI.
+- PostgreSQL driver/pool adapter: IMPLEMENTED using `pg`, with bounded pool/timeouts and TLS required by default.
+- Migration tooling: IMPLEMENTED using `node-pg-migrate`; migration commands are explicit and are not run automatically during application startup.
+- Initial schema: IMPLEMENTED for `tenants` and `tenant_memberships`, including tenant-aware constraints and forced RLS policies.
+- Tenant transaction boundary: IMPLEMENTED; a verified principal supplies the immutable transaction-local tenant context.
+- Real PostgreSQL RLS integration: PASSING in GitHub Actions with an ephemeral PostgreSQL service and a non-superuser `infinyx_app` role that does not own the protected tables and has no `BYPASSRLS` privilege.
+- Verification evidence: CI run [45924851537](https://github.com/hamidyaghobi70-beep/infinyx/actions/runs/45924851537) passed; 49 tests passed across 4 test files, TypeScript passed, migration syntax and execution passed, and dependency audit reported zero vulnerabilities.
+- Scope limitations: only the initial two tables are covered. A complete DAL/repository layer, product-domain schema, production database/credentials, backup/restore, and independent security review remain outstanding.
+- RLS threat-model note: the custom transaction-local `app.tenant_id` setting is not cryptographically authenticated against arbitrary SQL running under the same DB role. Current RLS coverage is defense in depth against omitted tenant filters, not a substitute for SQL injection prevention or independent security review.
 - Merge and release: NOT AUTHORIZED.
