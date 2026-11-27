@@ -1,4 +1,5 @@
-import type { TenantPrincipal } from "./tenant-transaction.js";
+import type { AuthenticatedPrincipal } from "../core/authenticated-principal.js";
+import { getTenantTransactionContext } from "./tenant-transaction.js";
 import type { TenantTransaction } from "./tenant-transaction.js";
 import {
   TenantAuthorizationError,
@@ -94,7 +95,7 @@ async function writeAudit(
  */
 export async function transitionTenantMembership(
   transaction: TenantTransaction,
-  principal: TenantPrincipal,
+  principal: AuthenticatedPrincipal,
   targetUserId: string,
   requestedStatus: MembershipLifecycleTargetStatus,
   correlationId: string
@@ -108,9 +109,10 @@ export async function transitionTenantMembership(
     throw new MembershipLifecycleInputError();
   }
 
+  const { tenantId } = getTenantTransactionContext(transaction, principal);
   const tenantRows = await transaction.query<{ id: string }>(
     "SELECT id FROM tenants WHERE id = $1 FOR UPDATE",
-    [principal.tenantId]
+    [tenantId]
   );
   if (tenantRows.length === 0) throw new TenantAuthorizationError();
 
@@ -119,7 +121,7 @@ export async function transitionTenantMembership(
        FROM tenant_membership_audit_events
       WHERE tenant_id = $1 AND correlation_id = $2
       LIMIT 1`,
-    [principal.tenantId, correlationId]
+    [tenantId, correlationId]
   );
   const prior = priorEvents[0];
   if (prior) {
@@ -147,7 +149,7 @@ export async function transitionTenantMembership(
         )
       ORDER BY user_id
       FOR UPDATE`,
-    [principal.tenantId, [principal.userId, targetUserId]]
+    [tenantId, [principal.userId, targetUserId]]
   );
   const actor = memberRows.find((row) => row.user_id === principal.userId);
   const target = memberRows.find((row) => row.user_id === targetUserId);
@@ -194,7 +196,7 @@ export async function transitionTenantMembership(
         requestedStatus,
         principal.userId,
         correlationId,
-        principal.tenantId,
+        tenantId,
         target.membership_id,
         target.status,
         target.version
@@ -207,7 +209,7 @@ export async function transitionTenantMembership(
   }
 
   await writeAudit(transaction, {
-    tenantId: principal.tenantId,
+    tenantId: tenantId,
     actorUserId: principal.userId,
     targetUserId,
     targetMembershipId: target?.membership_id ?? null,
