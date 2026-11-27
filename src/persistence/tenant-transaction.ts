@@ -67,7 +67,7 @@ export function createTenantMemoryScope(
 ) {
   const context = getTenantTransactionContext(transaction, principal);
   if (typeof moduleId !== "string" || moduleId.trim().length === 0 ||
-      moduleId.length > 128 || /[\\u0000-\\u001f\\u007f-\\u009f]/u.test(moduleId)) {
+      moduleId.length > 128 || /[\u0000-\u001f\u007f-\u009f]/u.test(moduleId)) {
     throw new AuthenticationError();
   }
   return Object.freeze({
@@ -98,7 +98,7 @@ export async function withTenantTransaction<Result>(
 ): Promise<Result> {
   if (!isAuthenticatedPrincipal(principal)) throw new AuthenticationError();
   if (typeof tenantId !== "string" || tenantId.trim().length === 0 ||
-      tenantId.length > 256 || /[\\u0000-\\u001f\\u007f-\\u009f]/u.test(tenantId)) {
+      tenantId.length > 256 || /[\u0000-\u001f\u007f-\u009f]/u.test(tenantId)) {
     throw new TenantAuthorizationError();
   }
 
