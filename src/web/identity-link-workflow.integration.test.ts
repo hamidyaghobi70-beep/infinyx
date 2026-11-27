@@ -202,13 +202,19 @@ integrationDescribe("PostgreSQL immutable external identity link workflow", () =
     const actor = randomUUID();
     const issuer = `https://outbox-${randomUUID()}.example.test`;
     const subject = `subject-${randomUUID()}`;
+    const sessionIssuer = `https://session-${randomUUID()}.example.test`;
+    const sessionSubject = `session-subject-${randomUUID()}`;
     await adminPool.query("INSERT INTO users (id) VALUES ($1::uuid)", [actor]);
+    await adminPool.query(
+      "INSERT INTO user_external_identities (user_id, issuer, subject) VALUES ($1::uuid, $2, $3)",
+      [actor, sessionIssuer, sessionSubject]
+    );
     const sessions = new PostgresWebSessionStore(pool, sessionKey);
     const sessionId = createOpaqueSessionId();
     const csrfToken = createCsrfToken();
     const now = new Date();
     await sessions.create({
-      sessionId, csrfToken, userId: actor, issuer, subject,
+      sessionId, csrfToken, userId: actor, issuer: sessionIssuer, subject: sessionSubject,
       tokenBundle: {
         accessToken: "synthetic-access-token",
         accessTokenExpiresAt: now.getTime() + 300_000,
