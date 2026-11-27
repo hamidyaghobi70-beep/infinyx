@@ -66,8 +66,9 @@ async function dispatch(
 
   try {
     await handlers[handlerName](request, response);
-    if (!response.writableEnded && !response.headersSent) {
-      sendError(response, 500, "internal_error");
+    if (!response.writableEnded) {
+      if (!response.headersSent) sendError(response, 500, "internal_error");
+      else response.destroy();
     }
   } catch {
     if (!response.headersSent) {

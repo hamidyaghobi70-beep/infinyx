@@ -24,7 +24,8 @@ async function request(
   return fetch(`http://127.0.0.1:${address.port}${path}`, {
     method,
     headers,
-    ...(body === undefined ? {} : { body })
+    ...(body === undefined ? {} : { body }),
+    redirect: "manual"
   });
 }
 
