@@ -68,7 +68,7 @@ describe("tenant membership authorization", () => {
       generation: 1,
       role: "manager",
       status: "active",
-      version: 1
+      version: "1"
     });
   });
 
