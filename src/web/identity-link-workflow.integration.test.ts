@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { createPostgresPool } from "../persistence/postgres-pool.js";
+import { PostgresWebSessionStore } from "./session-store.js";
 import {
   completeIdentitySessionRevocation,
   registerVerifiedIdentityLink
@@ -8,6 +9,7 @@ import {
 
 const databaseUrl = process.env.INFINYX_TEST_DATABASE_URL;
 const integrationDescribe = databaseUrl ? describe : describe.skip;
+const sessionKey = Buffer.alloc(32, 31);
 
 integrationDescribe("PostgreSQL immutable external identity link workflow", () => {
   let pool: ReturnType<typeof createPostgresPool>;
@@ -214,9 +216,9 @@ integrationDescribe("PostgreSQL immutable external identity link workflow", () =
       completed_at: null, attempts: 1, last_error_code: "session_revocation_failed"
     });
 
-    const successfulSessions = { revokeAllForUser: async () => undefined };
+    const successfulSessions = new PostgresWebSessionStore(pool, sessionKey);
     expect(await completeIdentitySessionRevocation(
-      pool, successfulSessions as never, actor, linked.outboxId
+      pool, successfulSessions, actor, linked.outboxId
     )).toBe(true);
     const completed = await adminPool.query(
       "SELECT completed_at, attempts, last_error_code FROM identity_session_revocation_outbox WHERE outbox_id = $1::uuid",
