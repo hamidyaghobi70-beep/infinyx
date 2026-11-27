@@ -233,7 +233,7 @@ integrationDescribe("PostgreSQL tenant RLS integration", () => {
       generation: 1,
       role: "owner",
       status: "active",
-      version: 1
+      version: "1"
     });
   });
 
@@ -258,7 +258,7 @@ integrationDescribe("PostgreSQL tenant RLS integration", () => {
         generation: 1,
         role: "owner",
         status: "active",
-        version: 1
+        version: "1"
       }
     });
   });
