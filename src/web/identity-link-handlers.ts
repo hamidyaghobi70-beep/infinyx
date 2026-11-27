@@ -64,7 +64,7 @@ function validClaims(claims: unknown, issuer: string): claims is { iss: string; 
   const value = claims as { iss?: unknown; sub?: unknown };
   return value.iss === issuer &&
     typeof value.sub === "string" && value.sub.length > 0 &&
-    value.sub.length <= 512 && !/[\\u0000-\\u001f\\u007f-\\u009f]/u.test(value.sub);
+    value.sub.length <= 512 && !/[\u0000-\u001f\u007f-\u009f]/u.test(value.sub);
 }
 
 export function createIdentityLinkHandlers(deps: Dependencies) {
@@ -97,8 +97,11 @@ export function createIdentityLinkHandlers(deps: Dependencies) {
       );
     }
 
+    const callbackPath = purpose === "reauth_identity_link"
+      ? "/auth/reauth/callback"
+      : "/auth/identity-link/callback";
     const authorizationUrl = clientApi.buildAuthorizationUrl(deps.client, {
-      redirect_uri: `${deps.configuration.publicOrigin}/auth/identity-link/callback`,
+      redirect_uri: `${deps.configuration.publicOrigin}${callbackPath}`,
       response_type: "code",
       scope: "openid",
       code_challenge: codeChallenge,
@@ -107,9 +110,10 @@ export function createIdentityLinkHandlers(deps: Dependencies) {
       nonce
     });
     response.statusCode = 302;
-    response.setHeader("Set-Cookie", purpose === "identity_link"
-      ? [createIdentitySecurityCookie(browserBinding), createExpiredStepUpCookie()]
-      : [createIdentitySecurityCookie(browserBinding), createExpiredStepUpCookie()]);
+    response.setHeader("Set-Cookie", [
+      createIdentitySecurityCookie(browserBinding),
+      createExpiredStepUpCookie()
+    ]);
     response.setHeader("Location", authorizationUrl.href);
     response.end();
   }
