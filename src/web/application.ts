@@ -99,6 +99,13 @@ export async function createWebBffApplication(
       sessions,
       securityTransactions
     });
+    const recoveryHandlers = createAccountRecoveryHandlers({
+      configuration: runtime.oidc,
+      client,
+      database: pool,
+      sessions,
+      recoveryTransactions
+    });
     return Object.freeze({
       server: createBffHttpServer({ ...handlers, ...identityHandlers, ...recoveryHandlers }),
       pool,
