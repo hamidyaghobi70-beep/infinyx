@@ -222,87 +222,65 @@ export class PostgresWebSessionStore {
     }>
   ): Promise<string | null> {
     let sessionHash: Buffer;
-    try { sessionHash = hashOpaqueSecret(sessionId); }
-    catch { return null; }
-
+    try { sessionHash = hashOpaqueSecret(sessionId); } catch { return null; }
     let client: import("pg").PoolClient;
-    try {
-      client = await this.pool.connect();
-    } catch {
-      throw new WebSessionStoreError();
-    }
+    try { client = await this.pool.connect(); }
+    catch { throw new WebSessionStoreError(); }
 
-    let transactionOpen = false;
+    let lockAcquired = false;
     let destroyClient = false;
-    const now = this.now();
+    const lockKey = "hashtextextended(encode($1::bytea, 'hex'), 78123)";
     try {
-      await client.query("BEGIN");
-      transactionOpen = true;
+      // Session-scoped lock serializes refresh across replicas without keeping
+      // a SQL transaction or row lock open during the provider network request.
+      const lock = await client.query<{ acquired: boolean }>(
+        `SELECT pg_try_advisory_lock(${lockKey}) AS acquired`, [sessionHash]
+      );
+      lockAcquired = lock.rows[0]?.acquired === true;
+      if (!lockAcquired) return null;
+
+      const now = this.now();
       const selected = await client.query<SessionRow>(
         `SELECT user_id::text AS user_id, issuer, subject, csrf_token_hash,
                 encrypted_token_bundle, idle_expires_at, absolute_expires_at
            FROM web_sessions
-          WHERE session_id_hash = $1
-            AND revoked_at IS NULL
-            AND idle_expires_at > $2
-            AND absolute_expires_at > $2
+          WHERE session_id_hash = $1 AND revoked_at IS NULL
+            AND idle_expires_at > $2 AND absolute_expires_at > $2
             AND EXISTS (
-              SELECT 1 FROM user_account_security AS account_security
-               WHERE account_security.user_id = web_sessions.user_id
-                 AND account_security.status = 'active'
+              SELECT 1 FROM user_account_security s
+               WHERE s.user_id = web_sessions.user_id AND s.status = 'active'
             )
             AND EXISTS (
-              SELECT 1
-                FROM user_external_identities AS external_identity
-                INNER JOIN user_external_identity_lifecycle AS lifecycle
-                  ON lifecycle.identity_id = external_identity.identity_id
-               WHERE external_identity.user_id = web_sessions.user_id
-                 AND external_identity.issuer = web_sessions.issuer
-                 AND external_identity.subject = web_sessions.subject
-                 AND lifecycle.status = 'active'
+              SELECT 1 FROM user_external_identities i
+              INNER JOIN user_external_identity_lifecycle l ON l.identity_id = i.identity_id
+               WHERE i.user_id = web_sessions.user_id AND i.issuer = web_sessions.issuer
+                 AND i.subject = web_sessions.subject AND l.status = 'active'
             )
             AND NOT EXISTS (
-              SELECT 1 FROM user_account_session_revocation_outbox AS account_pending
-               WHERE account_pending.user_id = web_sessions.user_id
-                 AND account_pending.completed_at IS NULL
+              SELECT 1 FROM user_account_session_revocation_outbox o
+               WHERE o.user_id = web_sessions.user_id AND o.completed_at IS NULL
             )
-             AND NOT EXISTS (
-               SELECT 1 FROM identity_session_revocation_outbox AS pending
-                WHERE pending.user_id = web_sessions.user_id AND pending.completed_at IS NULL
-             )
-          LIMIT 1
-          FOR UPDATE`,
+            AND NOT EXISTS (
+              SELECT 1 FROM identity_session_revocation_outbox o
+               WHERE o.user_id = web_sessions.user_id AND o.completed_at IS NULL
+            )
+          LIMIT 1`,
         [sessionHash, now]
       );
       const row = selected.rows[0];
-      if (!row) {
-        await client.query("ROLLBACK");
-        transactionOpen = false;
-        return null;
-      }
-
+      if (!row) return null;
       const current = decryptSessionTokenBundle(row.encrypted_token_bundle, this.encryptionKey);
       if (!current.csrfToken) throw new WebSessionStoreError();
+      if (current.accessTokenExpiresAt > now.getTime() + 60_000) return current.accessToken;
 
-      if (current.accessTokenExpiresAt > now.getTime() + 60_000) {
-        await client.query("COMMIT");
-        transactionOpen = false;
-        return current.accessToken;
-      }
-
-      const revokeSession = async () => {
+      const revokeIfUnchanged = async () => {
         await client.query(
-          "UPDATE web_sessions SET revoked_at = $2 WHERE session_id_hash = $1 AND revoked_at IS NULL",
-          [sessionHash, now]
+          `UPDATE web_sessions SET revoked_at = $3
+            WHERE session_id_hash = $1 AND encrypted_token_bundle = $2 AND revoked_at IS NULL`,
+          [sessionHash, row.encrypted_token_bundle, now]
         );
-        await client.query("COMMIT");
-        transactionOpen = false;
       };
-
-      if (!current.refreshToken) {
-        await revokeSession();
-        return null;
-      }
+      if (!current.refreshToken) { await revokeIfUnchanged(); return null; }
 
       let refreshed: {
         readonly accessToken: string;
@@ -310,9 +288,10 @@ export class PostgresWebSessionStore {
         readonly accessTokenExpiresAt: number;
       };
       try {
+        // The OIDC provider fetch is bounded to five seconds by providerFetch.
         refreshed = await refresh(current.refreshToken);
       } catch {
-        await revokeSession();
+        await revokeIfUnchanged();
         return null;
       }
 
@@ -324,7 +303,7 @@ export class PostgresWebSessionStore {
           (refreshed.refreshToken !== undefined &&
             (typeof refreshed.refreshToken !== "string" ||
              refreshed.refreshToken.length < 1 || refreshed.refreshToken.length > 16_384))) {
-        await revokeSession();
+        await revokeIfUnchanged();
         return null;
       }
 
@@ -336,27 +315,43 @@ export class PostgresWebSessionStore {
       });
       const updated = await client.query(
         `UPDATE web_sessions
-            SET encrypted_token_bundle = $2,
-                last_seen_at = $3
-          WHERE session_id_hash = $1
-            AND revoked_at IS NULL`,
-        [sessionHash, encryptSessionTokenBundle(nextBundle, this.encryptionKey), now]
+            SET encrypted_token_bundle = $3, last_seen_at = $4
+          WHERE session_id_hash = $1 AND encrypted_token_bundle = $2
+            AND revoked_at IS NULL AND idle_expires_at > $4 AND absolute_expires_at > $4
+            AND EXISTS (
+              SELECT 1 FROM user_account_security s
+               WHERE s.user_id = web_sessions.user_id AND s.status = 'active'
+            )
+            AND EXISTS (
+              SELECT 1 FROM user_external_identities i
+              INNER JOIN user_external_identity_lifecycle l ON l.identity_id = i.identity_id
+               WHERE i.user_id = web_sessions.user_id AND i.issuer = web_sessions.issuer
+                 AND i.subject = web_sessions.subject AND l.status = 'active'
+            )
+            AND NOT EXISTS (
+              SELECT 1 FROM user_account_session_revocation_outbox o
+               WHERE o.user_id = web_sessions.user_id AND o.completed_at IS NULL
+            )
+            AND NOT EXISTS (
+              SELECT 1 FROM identity_session_revocation_outbox o
+               WHERE o.user_id = web_sessions.user_id AND o.completed_at IS NULL
+            )`,
+        [sessionHash, row.encrypted_token_bundle,
+          encryptSessionTokenBundle(nextBundle, this.encryptionKey), now]
       );
-      if (updated.rowCount !== 1) throw new WebSessionStoreError();
-      await client.query("COMMIT");
-      transactionOpen = false;
-      return nextBundle.accessToken;
+      return updated.rowCount === 1 ? nextBundle.accessToken : null;
     } catch {
-      if (transactionOpen) {
-        try {
-          await client.query("ROLLBACK");
-        } catch {
-          destroyClient = true;
-        }
-      }
       throw new WebSessionStoreError();
     } finally {
-      client.release(destroyClient ? new Error("Discarding failed session transaction.") : undefined);
+      if (lockAcquired) {
+        try {
+          const unlocked = await client.query<{ unlocked: boolean }>(
+            `SELECT pg_advisory_unlock(${lockKey}) AS unlocked`, [sessionHash]
+          );
+          if (unlocked.rows[0]?.unlocked !== true) destroyClient = true;
+        } catch { destroyClient = true; }
+      }
+      client.release(destroyClient ? new Error("Discarding connection after advisory-lock cleanup failure.") : undefined);
     }
   }
 
