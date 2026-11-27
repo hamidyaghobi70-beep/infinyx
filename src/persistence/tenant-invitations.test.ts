@@ -19,10 +19,11 @@ const issuer = "https://infinyx.invitation.test";
 const audience = "infinyx-test";
 const userId = "10000000-0000-4000-8000-000000000001";
 const existingUserId = "10000000-0000-4000-8000-000000000002";
-const keys = createInvitationSecrets({
-  encryptionKey: Buffer.alloc(32, 7),
-  tokenPepper: Buffer.alloc(32, 8)
-});
+const keys: InvitationKeyMaterial = {
+  tokenKey: Buffer.alloc(32, 3), tokenKeyVersion: 1,
+  identityKey: Buffer.alloc(32, 5), identityKeyVersion: 1,
+  deliveryKey: Buffer.alloc(32, 7), deliveryKeyVersion: 1
+};
 const principal = await createTestPrincipal({
   issuer, audience, subject: "owner-provider-sub", userId
 });
