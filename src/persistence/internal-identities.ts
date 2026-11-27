@@ -170,10 +170,13 @@ export async function linkExternalIdentity(
     }
 
     const existing = await transaction.query<ExternalIdentityRow>(
-      `SELECT identity_id::text AS identity_id, user_id::text AS user_id,
-              issuer, subject, created_at::text AS created_at
-         FROM user_external_identities
-        WHERE issuer = $1 AND subject = $2
+      `SELECT i.identity_id::text AS identity_id, i.user_id::text AS user_id,
+              i.issuer, i.subject, i.created_at::text AS created_at
+         FROM user_external_identities AS i
+         INNER JOIN user_external_identity_lifecycle AS lifecycle
+           ON lifecycle.identity_id = i.identity_id
+          AND lifecycle.status = 'active'
+        WHERE i.issuer = $1 AND i.subject = $2
         LIMIT 1`,
       [issuer, subject]
     );
