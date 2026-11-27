@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import type { Pool } from "pg";
 import {
   createOpaqueSessionId,
-  encryptIdentitySecurityTransactionPayload
+  encryptAccountRecoveryTransactionPayload
 } from "./session-crypto.js";
 import { PostgresAccountRecoveryTransactionStore } from "./account-recovery-transactions.js";
 
@@ -33,7 +33,7 @@ describe("account recovery transaction store", () => {
   });
 
   it("consumes a transaction once and decrypts only after the browser binding matches", async () => {
-    const encrypted = encryptIdentitySecurityTransactionPayload(payload, key);
+    const encrypted = encryptAccountRecoveryTransactionPayload(payload, key);
     const pool = {
       query: vi.fn()
         .mockResolvedValueOnce({ rows: [], rowCount: 0 })
