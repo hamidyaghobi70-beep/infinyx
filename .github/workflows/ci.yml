@@ -22,19 +22,7 @@ jobs:
         with:
           node-version: "22"
       - name: Install dependencies
-        run: npm install
-      - name: Emit generated lockfile for repository capture
-        run: |
-          echo "INFINYX_LOCKFILE_BEGIN"
-          cat package-lock.json
-          echo "INFINYX_LOCKFILE_END"
-      - name: Export generated lockfile
-        uses: actions/upload-artifact@v4
-        with:
-          name: generated-npm-lockfile
-          path: package-lock.json
-          if-no-files-found: error
-          retention-days: 1
+        run: npm ci
       - name: Audit dependency vulnerabilities
         run: |
           npm audit --json > npm-audit.json || true
