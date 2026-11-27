@@ -48,7 +48,11 @@ jobs:
             -out .ci/keycloak/server.crt \
             -subj "/CN=localhost" \
             -addext "subjectAltName=DNS:localhost,IP:127.0.0.1"
-          chmod 600 .ci/keycloak/server.key
+          # The official Keycloak image runs as UID 1000 (GID 0); grant it read access
+          # without making the private key world-readable on the runner.
+          sudo chown 1000:0 .ci/keycloak/server.key .ci/keycloak/server.crt
+          chmod 640 .ci/keycloak/server.key
+          chmod 644 .ci/keycloak/server.crt
           echo "NODE_EXTRA_CA_CERTS=$GITHUB_WORKSPACE/.ci/keycloak/server.crt" >> "$GITHUB_ENV"
           echo "KEYCLOAK_INTEGRATION_ISSUER=https://localhost:8443/realms/infinyx-ci" >> "$GITHUB_ENV"
       - name: Start isolated Keycloak test realm over HTTPS
