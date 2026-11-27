@@ -1,6 +1,18 @@
 import { createPublicKey, verify as verifySignature, type KeyObject } from "node:crypto";
-import type { VerifiedExternalIdentity } from "./authenticated-principal.js";
 import { AuthenticationError } from "./authentication-error.js";
+
+export interface VerifiedExternalIdentity {
+  readonly issuer: string;
+  readonly subject: string;
+  readonly audience: readonly string[];
+  readonly expiresAt: number;
+}
+
+const verifiedExternalIdentities = new WeakSet<object>();
+
+export function isVerifiedExternalIdentity(value: unknown): value is VerifiedExternalIdentity {
+  return !!value && typeof value === "object" && verifiedExternalIdentities.has(value);
+}
 
 export interface OidcJwksVerifierOptions {
   readonly issuer: string;
@@ -177,6 +189,7 @@ export function createOidcJwksPrincipalVerifier(
         audience: Object.freeze(audiences),
         expiresAt: claims.exp
       });
+      verifiedExternalIdentities.add(identity);
       return identity;
     } catch {
       throw new AuthenticationError();
@@ -195,7 +208,7 @@ function validateHttpsUrl(value: string): string {
       parsed.hash || parsed.search || value.trim() !== value) {
     throw new TypeError("OIDC endpoints must be HTTPS URLs without credentials, query, or fragment.");
   }
-  return parsed.href;
+  return value;
 }
 
 function parseSegment(segment: string): unknown {
