@@ -26,7 +26,7 @@ jobs:
       - name: Audit dependency vulnerabilities
         run: |
           npm audit --json > npm-audit.json || true
-          node -e 'const a=require("./npm-audit.json"); console.log(JSON.stringify({metadata:a.metadata?.vulnerabilities, vulnerabilities:Object.entries(a.vulnerabilities ?? {}).map(([name,v])=>({name,severity:v.severity,isDirect:v.isDirect,range:v.range,fixAvailable:v.fixAvailable,via:v.via}))},null,2))'
+          node -e 'const a=require("./npm-audit.json"); const v=a.metadata?.vulnerabilities ?? {}; console.log(JSON.stringify({metadata:v, vulnerabilities:Object.entries(a.vulnerabilities ?? {}).map(([name,x])=>({name,severity:x.severity,isDirect:x.isDirect,range:x.range,fixAvailable:x.fixAvailable,via:x.via}))},null,2)); if ((v.total ?? 0) > 0) process.exit(1)'
       - name: Typecheck
         run: npm run typecheck
       - name: Run unit tests
