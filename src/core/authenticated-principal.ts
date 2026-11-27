@@ -119,24 +119,39 @@ export function isVerifiedExternalIdentity(value: unknown): value is VerifiedExt
  * directory. Unknown identities fail closed; no email/phone matching occurs.
  */
 export function createAuthenticatedPrincipalResolver(
+  resolveInternalUserId: (issuer: string, subject: string) => string | null
+): (identity: VerifiedExternalIdentity) => AuthenticatedPrincipal;
+export function createAuthenticatedPrincipalResolver(
   resolveInternalUserId: (issuer: string, subject: string) => Promise<string | null>
-): (identity: VerifiedExternalIdentity) => Promise<AuthenticatedPrincipal> {
-  return async (identity) => {
+): (identity: VerifiedExternalIdentity) => Promise<AuthenticatedPrincipal>;
+export function createAuthenticatedPrincipalResolver(
+  resolveInternalUserId: (issuer: string, subject: string) => string | null | Promise<string | null>
+): (identity: VerifiedExternalIdentity) => AuthenticatedPrincipal | Promise<AuthenticatedPrincipal> {
+  const create = (identity: VerifiedExternalIdentity, userId: string | null): AuthenticatedPrincipal => {
+    if (!isVerifiedExternalIdentity(identity) ||
+        typeof userId !== "string" || !UUID_PATTERN.test(userId)) {
+      throw new AuthenticationError();
+    }
+    const principal = Object.freeze({
+      userId,
+      issuer: identity.issuer,
+      subject: identity.subject,
+      audience: Object.freeze([...identity.audience]),
+      expiresAt: identity.expiresAt
+    });
+    authenticatedPrincipals.add(principal);
+    return principal;
+  };
+  return (identity) => {
     if (!isVerifiedExternalIdentity(identity)) throw new AuthenticationError();
     try {
-      const userId = await resolveInternalUserId(identity.issuer, identity.subject);
-      if (typeof userId !== "string" || !UUID_PATTERN.test(userId)) {
-        throw new AuthenticationError();
+      const resolved = resolveInternalUserId(identity.issuer, identity.subject);
+      if (resolved instanceof Promise) {
+        return resolved.then((userId) => create(identity, userId)).catch(() => {
+          throw new AuthenticationError();
+        });
       }
-      const principal = Object.freeze({
-        userId,
-        issuer: identity.issuer,
-        subject: identity.subject,
-        audience: Object.freeze([...identity.audience]),
-        expiresAt: identity.expiresAt
-      });
-      authenticatedPrincipals.add(principal);
-      return principal;
+      return create(identity, resolved);
     } catch {
       throw new AuthenticationError();
     }
@@ -159,7 +174,7 @@ export function createPrincipalMemoryScope(
 }
 
 export type AuthenticatedPrincipalResolver =
-  (identity: VerifiedExternalIdentity) => Promise<AuthenticatedPrincipal>;
+  (identity: VerifiedExternalIdentity) => AuthenticatedPrincipal | Promise<AuthenticatedPrincipal>;
 
 export function createBearerAuthMiddleware(
   verifyToken: (token: string) => VerifiedExternalIdentity,
