@@ -7,11 +7,11 @@ import {
   type IdentitySecurityTransactionPayload
 } from "./session-crypto.js";
 import {
-  createExpiredIdentitySecurityCookie,
+  createExpiredAccountRecoveryTransactionCookie,
   createExpiredSessionCookie,
   createExpiredStepUpCookie,
-  createIdentitySecurityCookie,
-  readIdentitySecurityCookie
+  createAccountRecoveryTransactionCookie,
+  readAccountRecoveryTransactionCookie
 } from "./session-cookie.js";
 import type { OidcBffClient, OidcBffConfiguration } from "./oidc-bff.js";
 import { PostgresAccountRecoveryTransactionStore } from "./account-recovery-transactions.js";
@@ -107,31 +107,31 @@ export function createAccountRecoveryHandlers(deps: Dependencies) {
       });
 
       response.statusCode = 302;
-      response.setHeader("Set-Cookie", createIdentitySecurityCookie(browserBinding));
+      response.setHeader("Set-Cookie", createAccountRecoveryTransactionCookie(browserBinding));
       response.setHeader("Location", authorizationUrl.href);
       response.end();
     },
 
     handleAccountRecoveryCallback: async (request: IncomingMessage, response: ServerResponse): Promise<void> => {
       const incoming = requestUrl(request, deps.configuration.publicOrigin);
-      const binding = readIdentitySecurityCookie(request.headers.cookie);
+      const binding = readAccountRecoveryTransactionCookie(request.headers.cookie);
       if (!incoming || incoming.pathname !== callbackPath || !binding) {
         return sendJson(response, 401, { error: "account_recovery_unavailable" }, [
-          createExpiredIdentitySecurityCookie()
+          createExpiredAccountRecoveryTransactionCookie()
         ]);
       }
 
       const params = callbackParameters(incoming, deps.configuration.issuer);
       if (!params) {
         return sendJson(response, 401, { error: "account_recovery_unavailable" }, [
-          createExpiredIdentitySecurityCookie()
+          createExpiredAccountRecoveryTransactionCookie()
         ]);
       }
 
       const pending = await deps.recoveryTransactions.consume(params.state, binding);
       if (!pending) {
         return sendJson(response, 401, { error: "account_recovery_unavailable" }, [
-          createExpiredIdentitySecurityCookie()
+          createExpiredAccountRecoveryTransactionCookie()
         ]);
       }
 
@@ -147,7 +147,7 @@ export function createAccountRecoveryHandlers(deps: Dependencies) {
         });
       } catch {
         return sendJson(response, 401, { error: "account_recovery_unavailable" }, [
-          createExpiredIdentitySecurityCookie()
+          createExpiredAccountRecoveryTransactionCookie()
         ]);
       }
 
@@ -155,7 +155,7 @@ export function createAccountRecoveryHandlers(deps: Dependencies) {
       const authenticatedAt = now();
       if (!validFreshClaims(claims, deps.configuration.issuer, authenticatedAt)) {
         return sendJson(response, 401, { error: "account_recovery_unavailable" }, [
-          createExpiredIdentitySecurityCookie()
+          createExpiredAccountRecoveryTransactionCookie()
         ]);
       }
 
@@ -165,7 +165,7 @@ export function createAccountRecoveryHandlers(deps: Dependencies) {
       );
       if (result.outcome !== "recovered") {
         return sendJson(response, 401, { error: "account_recovery_unavailable" }, [
-          createExpiredIdentitySecurityCookie()
+          createExpiredAccountRecoveryTransactionCookie()
         ]);
       }
 
@@ -176,7 +176,7 @@ export function createAccountRecoveryHandlers(deps: Dependencies) {
         return sendJson(response, 503, { error: "account_recovery_pending" }, [
           createExpiredSessionCookie(),
           createExpiredStepUpCookie(),
-          createExpiredIdentitySecurityCookie()
+          createExpiredAccountRecoveryTransactionCookie()
         ]);
       }
 
@@ -184,7 +184,7 @@ export function createAccountRecoveryHandlers(deps: Dependencies) {
       response.setHeader("Set-Cookie", [
         createExpiredSessionCookie(),
         createExpiredStepUpCookie(),
-        createExpiredIdentitySecurityCookie()
+        createExpiredAccountRecoveryTransactionCookie()
       ]);
       response.setHeader("Location", "/auth/login");
       response.end();
