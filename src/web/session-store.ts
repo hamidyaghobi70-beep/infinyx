@@ -295,11 +295,12 @@ export class PostgresWebSessionStore {
         return null;
       }
 
+      const refreshedAt = this.now();
       if (!refreshed || typeof refreshed.accessToken !== "string" ||
           refreshed.accessToken.length < 1 || refreshed.accessToken.length > 16_384 ||
           !Number.isSafeInteger(refreshed.accessTokenExpiresAt) ||
-          refreshed.accessTokenExpiresAt <= now.getTime() ||
-          refreshed.accessTokenExpiresAt > now.getTime() + 86_400_000 ||
+          refreshed.accessTokenExpiresAt <= refreshedAt.getTime() ||
+          refreshed.accessTokenExpiresAt > refreshedAt.getTime() + 86_400_000 ||
           (refreshed.refreshToken !== undefined &&
             (typeof refreshed.refreshToken !== "string" ||
              refreshed.refreshToken.length < 1 || refreshed.refreshToken.length > 16_384))) {
@@ -337,7 +338,7 @@ export class PostgresWebSessionStore {
                WHERE o.user_id = web_sessions.user_id AND o.completed_at IS NULL
             )`,
         [sessionHash, row.encrypted_token_bundle,
-          encryptSessionTokenBundle(nextBundle, this.encryptionKey), now]
+          encryptSessionTokenBundle(nextBundle, this.encryptionKey), refreshedAt]
       );
       return updated.rowCount === 1 ? nextBundle.accessToken : null;
     } catch {
