@@ -13,7 +13,11 @@
       "implicitFlowEnabled": false,
       "directAccessGrantsEnabled": false,
       "serviceAccountsEnabled": false,
-      "redirectUris": ["https://localhost:3000/auth/callback"],
+      "redirectUris": [
+        "https://localhost:3000/auth/callback",
+        "https://localhost:3000/auth/reauth/callback",
+        "https://localhost:3000/auth/identity-link/callback"
+      ],
       "webOrigins": [],
       "protocolMappers": []
     }
