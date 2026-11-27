@@ -32,7 +32,7 @@ integrationDescribe("PostgreSQL safe suspended account recovery", () => {
     if (adminPool) await adminPool.end();
   });
 
-  async function createAccount(identityStatus: "active" | "revoked" = "active") {
+  async function createAccount(identityStatus: "active" | "revoked" = "active", suspendAccount = true) {
     const userId = randomUUID();
     const issuer = `https://recovery-${randomUUID()}.example.test`;
     const subject = `subject-${randomUUID()}`;
@@ -75,22 +75,25 @@ integrationDescribe("PostgreSQL safe suspended account recovery", () => {
       );
     }
 
-    await adminPool.query(
-      `UPDATE user_account_security
-          SET status = 'suspended', version = version + 1,
-              updated_at = GREATEST(clock_timestamp(), updated_at + interval '1 microsecond'),
-              status_changed_by = $2::uuid,
-              status_change_reason = 'test_suspend',
-              status_change_correlation_id = $3::uuid
-        WHERE user_id = $1::uuid`,
-      [userId, userId, correlationId]
-    );
-    await adminPool.query(
-      `UPDATE user_account_session_revocation_outbox
-          SET completed_at = now(), attempts = attempts + 1
-        WHERE user_id = $1::uuid AND completed_at IS NULL`,
-      [userId]
-    );
+    if (suspendAccount) {
+      await adminPool.query(
+        `UPDATE user_account_security
+            SET status = 'suspended', version = version + 1,
+                updated_at = GREATEST(clock_timestamp(), updated_at + interval '1 microsecond'),
+                status_changed_by = $2::uuid,
+                status_change_reason = 'test_suspend',
+                status_change_correlation_id = $3::uuid
+          WHERE user_id = $1::uuid`,
+        [userId, userId, correlationId]
+      );
+      await adminPool.query(
+        `UPDATE user_account_session_revocation_outbox
+            SET completed_at = now(), attempts = attempts + 1
+          WHERE user_id = $1::uuid AND completed_at IS NULL`,
+        [userId]
+      );
+  
+    }
     return { userId, issuer, subject, identityId, sessionId };
   }
 
@@ -188,6 +191,27 @@ integrationDescribe("PostgreSQL safe suspended account recovery", () => {
       [account.identityId]
     );
     expect(lifecycleAfter.rows).toEqual(lifecycleBefore.rows);
+  });
+
+  it("blocks an existing web session immediately when its linked identity becomes revoked", async () => {
+    const account = await createAccount("active", false);
+    await adminPool.query(
+      `UPDATE user_external_identity_lifecycle
+          SET status = 'revoked', version = version + 1,
+              updated_at = GREATEST(clock_timestamp(), updated_at + interval '1 microsecond'),
+              status_changed_by = $2::uuid,
+              status_change_reason = 'test_revoked_without_outbox',
+              status_change_correlation_id = $3::uuid
+        WHERE identity_id = $1::uuid`,
+      [account.identityId, account.userId, randomUUID()]
+    );
+    const sessions = new PostgresWebSessionStore(pool, Buffer.alloc(32, 31));
+    expect(await sessions.findActive(account.sessionId!)).toBeNull();
+    const persisted = await adminPool.query(
+      "SELECT revoked_at FROM web_sessions WHERE user_id = $1::uuid",
+      [account.userId]
+    );
+    expect(persisted.rows[0]?.revoked_at).toBeNull();
   });
 
   it("cannot recover an account through a revoked identity", async () => {
