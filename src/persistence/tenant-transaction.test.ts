@@ -37,9 +37,11 @@ const payload = encode({
   exp: now + 300
 });
 const signingInput = header + "." + payload;
-const principal = verify(
+const principal = createAuthenticatedPrincipalResolver(
+  () => "10000000-0000-4000-8000-000000000001"
+)(verify(
   signingInput + "." + sign("RSA-SHA256", Buffer.from(signingInput), privateKey).toString("base64url")
-);
+));
 
 function fakeDatabase() {
   const calls: Array<{ sql: string; values?: readonly unknown[] }> = [];
