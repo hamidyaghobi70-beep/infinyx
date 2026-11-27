@@ -18,7 +18,7 @@ describe("StderrSessionRefreshObserver", () => {
       event: "persistence_succeeded"
     });
     expect(Object.keys(record).sort()).toEqual(["component", "event", "timestamp"]);
-    expect(record.timestamp).toMatch(/^\\d{4}-\\d{2}-\\d{2}T.*Z$/u);
+    expect(record.timestamp).toMatch(/^\d{4}-\d{2}-\d{2}T.*Z$/u);
   });
 
   it("does not add caller-controlled values to the record", () => {
