@@ -353,15 +353,29 @@ integrationDescribe("PostgreSQL tenant RLS integration", () => {
       role: "viewer"
     });
 
+    await expect(withTenantTransaction(tenantPool, owner, (transaction) =>
+      transitionTenantMembership(
+        transaction,
+        owner,
+        targetUserId,
+        "suspended",
+        "10000000-0000-4000-8000-000000000004"
+      )
+    )).resolves.toEqual({ outcome: "succeeded" });
+
+    await expect(withTenantTransaction(tenantPool, target, (transaction) =>
+      getTenantMembership(transaction, target)
+    )).resolves.toBeNull();
+
     const audit = await withTenantTransaction(tenantPool, owner, (transaction) =>
       transaction.query<{ requested_status: string; outcome: string }>(
         "SELECT requested_status, outcome FROM tenant_membership_audit_events WHERE tenant_id = $1 AND target_user_id = $2 ORDER BY occurred_at",
         ["tenant-a", targetUserId]
       )
     );
-    expect(audit).toHaveLength(3);
+    expect(audit).toHaveLength(4);
     expect(audit.map((row) => row.outcome)).toEqual([
-      "succeeded", "succeeded", "succeeded"
+      "succeeded", "succeeded", "succeeded", "succeeded"
     ]);
   });
 
