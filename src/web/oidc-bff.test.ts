@@ -189,6 +189,8 @@ describe("OIDC-backed Node BFF handlers", () => {
     expect(f.pendingTransactions.consume).toHaveBeenCalledWith(f.state, bindingCookie.split("=")[1]);
     expect(f.authorizationCodeGrant).toHaveBeenCalledOnce();
     expect(f.database.query).toHaveBeenCalledWith(expect.stringContaining("user_external_identities"), [issuer, "subject-123"]);
+    expect(vi.mocked(f.database.query).mock.calls[0]?.[0]).toContain("INNER JOIN user_external_identity_lifecycle");
+    expect(vi.mocked(f.database.query).mock.calls[0]?.[0]).toContain("lifecycle.status = 'active'");
     expect(f.sessions.create).toHaveBeenCalledOnce();
     expect(f.sessions.revoke).toHaveBeenCalledWith(previousSessionId);
     expect(f.createdSession).toMatchObject({
@@ -207,6 +209,22 @@ describe("OIDC-backed Node BFF handlers", () => {
     );
     expect(replay.status).toBe(401);
     expect(f.sessions.create).toHaveBeenCalledOnce();
+  });
+
+  it("denies login when the external identity lifecycle is revoked or missing", async () => {
+    const f = setup();
+    vi.mocked(f.database.query).mockResolvedValueOnce({ rows: [], rowCount: 0 } as never);
+    const base = await openServer(f.handlers);
+    const login = await fetch(`${base}/auth/login`, { redirect: "manual" });
+    const bindingCookie = getCookies(login)[0]!.split(";")[0]!;
+    const callback = await fetch(
+      `${base}/auth/callback?state=${f.state}&code=synthetic-code`,
+      { redirect: "manual", headers: { cookie: bindingCookie } }
+    );
+    expect(callback.status).toBe(401);
+    expect(f.sessions.create).not.toHaveBeenCalled();
+    expect(vi.mocked(f.database.query).mock.calls[0]?.[0]).toContain("INNER JOIN user_external_identity_lifecycle");
+    expect(vi.mocked(f.database.query).mock.calls[0]?.[0]).toContain("lifecycle.status = 'active'");
   });
 
   it("returns only the internal user and CSRF token, never OAuth tokens", async () => {
