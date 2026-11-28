@@ -7,6 +7,7 @@ import {
   encryptSessionTokenBundle
 } from "./session-crypto.js";
 import { PostgresWebSessionStore } from "./session-store.js";
+import type { SessionRefreshEvent } from "./session-refresh-observer.js";
 
 const key = Buffer.alloc(32, 23);
 const userId = "10000000-0000-4000-8000-000000000001";
@@ -74,6 +75,95 @@ function fakePool(row: ReturnType<typeof sessionRow>) {
   const pool = { query } as unknown as Pool;
   return { pool, calls, query, get stored() { return stored; } };
 }
+
+
+describe("secret-free session refresh observability", () => {
+  it("emits lifecycle events without exposing session or token identifiers", async () => {
+    const fake = fakePool(sessionRow(now.getTime() - 1, "private-refresh-token"));
+    const events: SessionRefreshEvent[] = [];
+    const observer = { onEvent: (event: SessionRefreshEvent) => events.push(event) };
+    const store = new PostgresWebSessionStore(fake.pool, key, () => now, observer);
+
+    await expect(store.getUsableAccessToken(createOpaqueSessionId(), async () => ({
+      accessToken: "private-access-token",
+      refreshToken: "private-rotated-token",
+      accessTokenExpiresAt: now.getTime() + 300_000
+    }))).resolves.toBe("private-access-token");
+
+    expect(events).toEqual(["reservation_claimed", "persistence_succeeded"]);
+    const serialized = JSON.stringify(events);
+    expect(serialized).not.toContain("private-refresh-token");
+    expect(serialized).not.toContain("private-access-token");
+    expect(serialized).not.toContain("private-rotated-token");
+  });
+
+  it("does not let a failing observer alter refresh behavior", async () => {
+    const fake = fakePool(sessionRow(now.getTime() - 1, "private-refresh-token"));
+    const observer = { onEvent: vi.fn(() => { throw new Error("telemetry unavailable"); }) };
+    const store = new PostgresWebSessionStore(fake.pool, key, () => now, observer);
+
+    await expect(store.getUsableAccessToken(createOpaqueSessionId(), async () => ({
+      accessToken: "rotated-access-token",
+      accessTokenExpiresAt: now.getTime() + 300_000
+    }))).resolves.toBe("rotated-access-token");
+    expect(observer.onEvent).toHaveBeenCalledWith("reservation_claimed");
+    expect(observer.onEvent).toHaveBeenCalledWith("persistence_succeeded");
+  });
+
+  it("reports provider failure without forwarding provider error details", async () => {
+    const fake = fakePool(sessionRow(now.getTime() - 1, "private-refresh-token"));
+    const events: SessionRefreshEvent[] = [];
+    const store = new PostgresWebSessionStore(fake.pool, key, () => now, {
+      onEvent: event => events.push(event)
+    });
+
+    await expect(store.getUsableAccessToken(createOpaqueSessionId(), async () => {
+      throw new Error("sensitive provider response");
+    })).resolves.toBeNull();
+
+    expect(events).toEqual(["reservation_claimed", "provider_failed"]);
+    expect(JSON.stringify(events)).not.toContain("sensitive provider response");
+  });
+
+  it("reports rejected provider responses through a fixed event", async () => {
+    const fake = fakePool(sessionRow(now.getTime() - 1, "private-refresh-token"));
+    const events: SessionRefreshEvent[] = [];
+    const store = new PostgresWebSessionStore(fake.pool, key, () => now, {
+      onEvent: event => events.push(event)
+    });
+
+    await expect(store.getUsableAccessToken(createOpaqueSessionId(), async () => ({
+      accessToken: "",
+      refreshToken: "private-rotated-token",
+      accessTokenExpiresAt: now.getTime() + 300_000
+    }))).resolves.toBeNull();
+
+    expect(events).toEqual(["reservation_claimed", "provider_response_rejected"]);
+    expect(JSON.stringify(events)).not.toContain("private-refresh-token");
+    expect(JSON.stringify(events)).not.toContain("private-rotated-token");
+  });
+
+  it("reports a final persistence compare-and-set conflict", async () => {
+    const fake = fakePool(sessionRow(now.getTime() - 1, "private-refresh-token"));
+    const events: SessionRefreshEvent[] = [];
+    const store = new PostgresWebSessionStore(fake.pool, key, () => now, {
+      onEvent: event => events.push(event)
+    });
+
+    await expect(store.getUsableAccessToken(createOpaqueSessionId(), async () => {
+      fake.stored.refresh_attempt_id = "00000000-0000-4000-8000-000000000099";
+      return {
+        accessToken: "private-access-token",
+        refreshToken: "private-rotated-token",
+        accessTokenExpiresAt: now.getTime() + 300_000
+      };
+    })).resolves.toBeNull();
+
+    expect(events).toEqual(["reservation_claimed", "persistence_conflict"]);
+    expect(JSON.stringify(events)).not.toContain("private-refresh-token");
+    expect(JSON.stringify(events)).not.toContain("private-access-token");
+  });
+});
 
 describe("serialized web-session access-token refresh", () => {
   it("serializes refresh without holding a transaction or row lock, preserving CSRF", async () => {
