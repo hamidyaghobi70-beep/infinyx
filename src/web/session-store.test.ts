@@ -122,6 +122,45 @@ describe("secret-free session refresh observability", () => {
     expect(events).toEqual(["reservation_claimed", "provider_failed"]);
     expect(JSON.stringify(events)).not.toContain("sensitive provider response");
   });
+
+  it("reports rejected provider responses through a fixed event", async () => {
+    const fake = fakePool(sessionRow(now.getTime() - 1, "private-refresh-token"));
+    const events: SessionRefreshEvent[] = [];
+    const store = new PostgresWebSessionStore(fake.pool, key, () => now, {
+      onEvent: event => events.push(event)
+    });
+
+    await expect(store.getUsableAccessToken(createOpaqueSessionId(), async () => ({
+      accessToken: "",
+      refreshToken: "private-rotated-token",
+      accessTokenExpiresAt: now.getTime() + 300_000
+    }))).resolves.toBeNull();
+
+    expect(events).toEqual(["reservation_claimed", "provider_response_rejected"]);
+    expect(JSON.stringify(events)).not.toContain("private-refresh-token");
+    expect(JSON.stringify(events)).not.toContain("private-rotated-token");
+  });
+
+  it("reports a final persistence compare-and-set conflict", async () => {
+    const fake = fakePool(sessionRow(now.getTime() - 1, "private-refresh-token"));
+    const events: SessionRefreshEvent[] = [];
+    const store = new PostgresWebSessionStore(fake.pool, key, () => now, {
+      onEvent: event => events.push(event)
+    });
+
+    await expect(store.getUsableAccessToken(createOpaqueSessionId(), async () => {
+      fake.stored.refresh_attempt_id = "00000000-0000-4000-8000-000000000099";
+      return {
+        accessToken: "private-access-token",
+        refreshToken: "private-rotated-token",
+        accessTokenExpiresAt: now.getTime() + 300_000
+      };
+    })).resolves.toBeNull();
+
+    expect(events).toEqual(["reservation_claimed", "persistence_conflict"]);
+    expect(JSON.stringify(events)).not.toContain("private-refresh-token");
+    expect(JSON.stringify(events)).not.toContain("private-access-token");
+  });
 });
 
 describe("serialized web-session access-token refresh", () => {
