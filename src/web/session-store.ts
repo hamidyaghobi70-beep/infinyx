@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import type { Pool } from "pg";
+import { NOOP_SESSION_REFRESH_OBSERVER, type SessionRefreshObserver } from "./session-refresh-observer.js";
 import {
   decryptSessionTokenBundle,
   encryptSessionTokenBundle,
@@ -54,7 +55,8 @@ export class PostgresWebSessionStore {
   constructor(
     private readonly pool: Pool,
     private readonly encryptionKey: Buffer,
-    private readonly now: () => Date = () => new Date()
+    private readonly now: () => Date = () => new Date(),
+    private readonly refreshObserver: SessionRefreshObserver = NOOP_SESSION_REFRESH_OBSERVER
   ) {
     if (!Buffer.isBuffer(encryptionKey) || encryptionKey.length !== 32) {
       throw new TypeError("Invalid session encryption key.");
@@ -314,7 +316,11 @@ export class PostgresWebSessionStore {
         [sessionHash, attemptId, row.encrypted_token_bundle, now]
       );
     } catch { throw new WebSessionStoreError(); }
-    if (reservation.rowCount !== 1) return null;
+    if (reservation.rowCount !== 1) {
+      this.observeRefresh("reservation_conflict");
+      return null;
+    }
+    this.observeRefresh("reservation_claimed");
 
     let refreshed: {
       readonly accessToken: string;
@@ -326,6 +332,7 @@ export class PostgresWebSessionStore {
       // PostgreSQL client or transaction remains checked out while it runs.
       refreshed = await refresh(current.refreshToken);
     } catch {
+      this.observeRefresh("provider_failed");
       try {
         await this.pool.query(
           `UPDATE web_sessions SET revoked_at = $3, refresh_attempt_id = NULL
@@ -345,6 +352,7 @@ export class PostgresWebSessionStore {
         (refreshed.refreshToken !== undefined &&
           (typeof refreshed.refreshToken !== "string" ||
            refreshed.refreshToken.length < 1 || refreshed.refreshToken.length > 16_384))) {
+      this.observeRefresh("provider_response_rejected");
       try {
         await this.pool.query(
           `UPDATE web_sessions SET revoked_at = $3, refresh_attempt_id = NULL
@@ -391,12 +399,23 @@ export class PostgresWebSessionStore {
         [sessionHash, attemptId, encryptSessionTokenBundle(nextBundle, this.encryptionKey),
           refreshedAt, row.encrypted_token_bundle]
       );
-      return updated.rowCount === 1 ? nextBundle.accessToken : null;
+      if (updated.rowCount === 1) {
+        this.observeRefresh("persistence_succeeded");
+        return nextBundle.accessToken;
+      }
+      this.observeRefresh("persistence_conflict");
+      return null;
     } catch {
+      this.observeRefresh("persistence_failed");
       // Keep the reservation if persistence is uncertain: the provider may have
       // rotated its single-use token, so retrying the previous token is unsafe.
       throw new WebSessionStoreError();
     }
+  }
+
+  private observeRefresh(event: Parameters<SessionRefreshObserver["onEvent"]>[0]): void {
+    // Observability must never change authentication or refresh outcomes.
+    try { this.refreshObserver.onEvent(event); } catch { /* ignore observer failures */ }
   }
 
   async revoke(sessionId: string): Promise<void> {

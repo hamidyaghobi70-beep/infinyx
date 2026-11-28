@@ -9,6 +9,7 @@ import { decodeSessionEncryptionKey } from "./session-crypto.js";
 import { PostgresOidcLoginTransactionStore } from "./oidc-login-transactions.js";
 import { createPostgresPool } from "../persistence/postgres-pool.js";
 import { PostgresWebSessionStore } from "./session-store.js";
+import type { SessionRefreshObserver } from "./session-refresh-observer.js";
 import { PostgresIdentitySecurityTransactionStore } from "./identity-security-transactions.js";
 import { createIdentityLinkHandlers } from "./identity-link-handlers.js";
 import { retryPendingIdentitySessionRevocations } from "./identity-link-workflow.js";
@@ -67,14 +68,20 @@ function required(value: string | undefined): string {
 }
 
 export async function createWebBffApplication(
-  env: Readonly<Record<string, string | undefined>> = process.env
+  env: Readonly<Record<string, string | undefined>> = process.env,
+  refreshObserver?: SessionRefreshObserver
 ) {
   const runtime = readWebBffRuntimeConfiguration(env);
   let pool: ReturnType<typeof createPostgresPool> | undefined;
   try {
     pool = createPostgresPool(env);
     const client = await discoverOidcClient(runtime.oidc);
-    const sessions = new PostgresWebSessionStore(pool, runtime.sessionEncryptionKey);
+    const sessions = new PostgresWebSessionStore(
+      pool,
+      runtime.sessionEncryptionKey,
+      () => new Date(),
+      refreshObserver
+    );
     const loginTransactions = new PostgresOidcLoginTransactionStore(
       pool,
       runtime.sessionEncryptionKey
