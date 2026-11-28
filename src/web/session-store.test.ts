@@ -201,6 +201,37 @@ describe("serialized web-session access-token refresh", () => {
     expect(fake.calls.at(-1)?.sql).toContain("refresh_attempt_id = $2");
   });
 
+  it("clears a pending reservation on explicit revoke and rejects the late provider response", async () => {
+    const fake = fakePool(sessionRow(now.getTime() - 1, "single-use-refresh-token"));
+    const store = new PostgresWebSessionStore(fake.pool, key, () => now);
+    const sessionId = createOpaqueSessionId();
+    let signalStarted!: () => void;
+    let finishRefresh!: () => void;
+    const started = new Promise<void>(resolve => { signalStarted = resolve; });
+    const gate = new Promise<void>(resolve => { finishRefresh = resolve; });
+    const refresh = vi.fn(async () => {
+      signalStarted();
+      await gate;
+      return {
+        accessToken: "must-not-be-persisted",
+        refreshToken: "rotated-token",
+        accessTokenExpiresAt: now.getTime() + 300_000
+      };
+    });
+
+    const pending = store.getUsableAccessToken(sessionId, refresh);
+    await started;
+    await store.revoke(sessionId);
+    expect(fake.stored.revoked_at).toEqual(now);
+    expect(fake.stored.refresh_attempt_id).toBeNull();
+
+    finishRefresh();
+    await expect(pending).resolves.toBeNull();
+    expect(refresh).toHaveBeenCalledOnce();
+    expect(decryptSessionTokenBundle(fake.stored.encrypted_token_bundle, key).accessToken)
+      .toBe("old-access-token");
+  });
+
   it("does not persist credentials when the final reservation compare-and-set conflicts", async () => {
     const fake = fakePool(sessionRow(now.getTime() - 1, "single-use-refresh-token"));
     const store = new PostgresWebSessionStore(fake.pool, key, () => now);
