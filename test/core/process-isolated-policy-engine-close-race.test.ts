@@ -169,13 +169,16 @@ describe("Issue #31 terminal commitment versus child close ordering", () => {
     });
 
     try {
-      const evaluation = engine.evaluateDetailed(allowRequest);
+      const evaluation = engine.evaluateDetailed({
+        ...allowRequest,
+        action: "allow-with-active-handle"
+      });
       await observer.waitFor("FINALIZING");
-      await waitForEvent(closeGate.closeHeld, 3_000);
 
-      // The OS child has exited, but the coordinator has not received close.
-      // Let the deadline callback win before releasing the held close event.
+      // The evaluator has returned allow but its active handle keeps the real
+      // child alive. The deadline must win and initiate termination first.
       await observer.waitFor("STOP_REQUESTED");
+      await waitForEvent(closeGate.closeHeld, 3_000);
       expect(observer.states).not.toContain("AUTHORIZED");
 
       closeGate.releaseClose();
