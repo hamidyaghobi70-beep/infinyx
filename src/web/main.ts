@@ -1,7 +1,11 @@
 import { createWebBffApplication } from "./application.js";
+import { StderrSessionRefreshObserver } from "./session-refresh-stderr-observer.js";
 
 async function start(): Promise<void> {
-  const application = await createWebBffApplication();
+  const application = await createWebBffApplication(
+    process.env,
+    new StderrSessionRefreshObserver()
+  );
   await new Promise<void>((resolve, reject) => {
     const onError = (error: Error) => {
       application.server.off("listening", onListening);
