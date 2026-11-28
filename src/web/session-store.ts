@@ -273,7 +273,7 @@ export class PostgresWebSessionStore {
     if (!current.refreshToken) {
       try {
         await this.pool.query(
-          `UPDATE web_sessions SET revoked_at = $3
+          `UPDATE web_sessions SET revoked_at = $3, refresh_attempt_id = NULL
             WHERE session_id_hash = $1 AND encrypted_token_bundle = $2
               AND refresh_attempt_id IS NULL AND revoked_at IS NULL`,
           [sessionHash, row.encrypted_token_bundle, now]
@@ -328,7 +328,7 @@ export class PostgresWebSessionStore {
     } catch {
       try {
         await this.pool.query(
-          `UPDATE web_sessions SET revoked_at = $3
+          `UPDATE web_sessions SET revoked_at = $3, refresh_attempt_id = NULL
             WHERE session_id_hash = $1 AND refresh_attempt_id = $2 AND revoked_at IS NULL`,
           [sessionHash, attemptId, this.now()]
         );
@@ -347,7 +347,7 @@ export class PostgresWebSessionStore {
            refreshed.refreshToken.length < 1 || refreshed.refreshToken.length > 16_384))) {
       try {
         await this.pool.query(
-          `UPDATE web_sessions SET revoked_at = $3
+          `UPDATE web_sessions SET revoked_at = $3, refresh_attempt_id = NULL
             WHERE session_id_hash = $1 AND refresh_attempt_id = $2 AND revoked_at IS NULL`,
           [sessionHash, attemptId, refreshedAt]
         );
@@ -405,7 +405,7 @@ export class PostgresWebSessionStore {
     catch { return; }
     try {
       await this.pool.query(
-        `UPDATE web_sessions SET revoked_at = $2
+        `UPDATE web_sessions SET revoked_at = $2, refresh_attempt_id = NULL
           WHERE session_id_hash = $1 AND revoked_at IS NULL`,
         [sessionHash, this.now()]
       );
@@ -418,7 +418,7 @@ export class PostgresWebSessionStore {
     if (!UUID_PATTERN.test(userId)) throw new TypeError("Invalid user identifier.");
     try {
       await this.pool.query(
-        `UPDATE web_sessions SET revoked_at = $2
+        `UPDATE web_sessions SET revoked_at = $2, refresh_attempt_id = NULL
           WHERE user_id = $1::uuid AND revoked_at IS NULL`,
         [userId, this.now()]
       );
