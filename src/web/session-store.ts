@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import type { Pool } from "pg";
 import {
   decryptSessionTokenBundle,
@@ -46,6 +47,7 @@ interface SessionRow {
   encrypted_token_bundle: Buffer;
   idle_expires_at: Date | string;
   absolute_expires_at: Date | string;
+  refresh_attempt_id?: string | null;
 }
 
 export class PostgresWebSessionStore {
@@ -223,28 +225,17 @@ export class PostgresWebSessionStore {
   ): Promise<string | null> {
     let sessionHash: Buffer;
     try { sessionHash = hashOpaqueSecret(sessionId); } catch { return null; }
-    let client: import("pg").PoolClient;
-    try { client = await this.pool.connect(); }
-    catch { throw new WebSessionStoreError(); }
 
-    let lockAcquired = false;
-    let destroyClient = false;
-    const lockKey = "hashtextextended(encode($1::bytea, 'hex'), 78123)";
+    const now = this.now();
+    let row: SessionRow | undefined;
     try {
-      // Session-scoped lock serializes refresh across replicas without keeping
-      // a SQL transaction or row lock open during the provider network request.
-      const lock = await client.query<{ acquired: boolean }>(
-        `SELECT pg_try_advisory_lock(${lockKey}) AS acquired`, [sessionHash]
-      );
-      lockAcquired = lock.rows[0]?.acquired === true;
-      if (!lockAcquired) return null;
-
-      const now = this.now();
-      const selected = await client.query<SessionRow>(
+      const selected = await this.pool.query<SessionRow>(
         `SELECT user_id::text AS user_id, issuer, subject, csrf_token_hash,
-                encrypted_token_bundle, idle_expires_at, absolute_expires_at
+                encrypted_token_bundle, idle_expires_at, absolute_expires_at,
+                refresh_attempt_id
            FROM web_sessions
           WHERE session_id_hash = $1 AND revoked_at IS NULL
+            AND refresh_attempt_id IS NULL
             AND idle_expires_at > $2 AND absolute_expires_at > $2
             AND EXISTS (
               SELECT 1 FROM user_account_security s
@@ -267,57 +258,117 @@ export class PostgresWebSessionStore {
           LIMIT 1`,
         [sessionHash, now]
       );
-      const row = selected.rows[0];
-      if (!row) return null;
-      const current = decryptSessionTokenBundle(row.encrypted_token_bundle, this.encryptionKey);
-      if (!current.csrfToken) throw new WebSessionStoreError();
-      if (current.accessTokenExpiresAt > now.getTime() + 60_000) return current.accessToken;
+      row = selected.rows[0];
+    } catch {
+      throw new WebSessionStoreError();
+    }
+    if (!row) return null;
 
-      const revokeIfUnchanged = async () => {
-        await client.query(
-          `UPDATE web_sessions SET revoked_at = $3
-            WHERE session_id_hash = $1 AND encrypted_token_bundle = $2 AND revoked_at IS NULL`,
+    let current: SessionTokenBundle;
+    try { current = decryptSessionTokenBundle(row.encrypted_token_bundle, this.encryptionKey); }
+    catch { throw new WebSessionStoreError(); }
+    if (!current.csrfToken) throw new WebSessionStoreError();
+    if (current.accessTokenExpiresAt > now.getTime() + 60_000) return current.accessToken;
+
+    if (!current.refreshToken) {
+      try {
+        await this.pool.query(
+          `UPDATE web_sessions SET revoked_at = $3, refresh_attempt_id = NULL
+            WHERE session_id_hash = $1 AND encrypted_token_bundle = $2
+              AND refresh_attempt_id IS NULL AND revoked_at IS NULL`,
           [sessionHash, row.encrypted_token_bundle, now]
         );
-      };
-      if (!current.refreshToken) { await revokeIfUnchanged(); return null; }
+      } catch { throw new WebSessionStoreError(); }
+      return null;
+    }
 
-      let refreshed: {
-        readonly accessToken: string;
-        readonly refreshToken?: string;
-        readonly accessTokenExpiresAt: number;
-      };
-      try {
-        // The OIDC provider fetch is bounded to five seconds by providerFetch.
-        refreshed = await refresh(current.refreshToken);
-      } catch {
-        await revokeIfUnchanged();
-        return null;
-      }
-
-      const refreshedAt = this.now();
-      if (!refreshed || typeof refreshed.accessToken !== "string" ||
-          refreshed.accessToken.length < 1 || refreshed.accessToken.length > 16_384 ||
-          !Number.isSafeInteger(refreshed.accessTokenExpiresAt) ||
-          refreshed.accessTokenExpiresAt <= refreshedAt.getTime() ||
-          refreshed.accessTokenExpiresAt > refreshedAt.getTime() + 86_400_000 ||
-          (refreshed.refreshToken !== undefined &&
-            (typeof refreshed.refreshToken !== "string" ||
-             refreshed.refreshToken.length < 1 || refreshed.refreshToken.length > 16_384))) {
-        await revokeIfUnchanged();
-        return null;
-      }
-
-      const nextBundle: SessionTokenBundle = Object.freeze({
-        accessToken: refreshed.accessToken,
-        refreshToken: refreshed.refreshToken ?? current.refreshToken,
-        accessTokenExpiresAt: refreshed.accessTokenExpiresAt,
-        csrfToken: current.csrfToken
-      });
-      const updated = await client.query(
+    const attemptId = randomUUID();
+    let reservation: { rowCount: number | null };
+    try {
+      reservation = await this.pool.query(
         `UPDATE web_sessions
-            SET encrypted_token_bundle = $3, last_seen_at = $4
-          WHERE session_id_hash = $1 AND encrypted_token_bundle = $2
+            SET refresh_attempt_id = $2
+          WHERE session_id_hash = $1
+            AND encrypted_token_bundle = $3
+            AND refresh_attempt_id IS NULL
+            AND revoked_at IS NULL
+            AND idle_expires_at > $4 AND absolute_expires_at > $4
+            AND EXISTS (
+              SELECT 1 FROM user_account_security s
+               WHERE s.user_id = web_sessions.user_id AND s.status = 'active'
+            )
+            AND EXISTS (
+              SELECT 1 FROM user_external_identities i
+              INNER JOIN user_external_identity_lifecycle l ON l.identity_id = i.identity_id
+               WHERE i.user_id = web_sessions.user_id AND i.issuer = web_sessions.issuer
+                 AND i.subject = web_sessions.subject AND l.status = 'active'
+            )
+            AND NOT EXISTS (
+              SELECT 1 FROM user_account_session_revocation_outbox o
+               WHERE o.user_id = web_sessions.user_id AND o.completed_at IS NULL
+            )
+            AND NOT EXISTS (
+              SELECT 1 FROM identity_session_revocation_outbox o
+               WHERE o.user_id = web_sessions.user_id AND o.completed_at IS NULL
+            )`,
+        [sessionHash, attemptId, row.encrypted_token_bundle, now]
+      );
+    } catch { throw new WebSessionStoreError(); }
+    if (reservation.rowCount !== 1) return null;
+
+    let refreshed: {
+      readonly accessToken: string;
+      readonly refreshToken?: string;
+      readonly accessTokenExpiresAt: number;
+    };
+    try {
+      // The durable reservation is committed before this network request. No
+      // PostgreSQL client or transaction remains checked out while it runs.
+      refreshed = await refresh(current.refreshToken);
+    } catch {
+      try {
+        await this.pool.query(
+          `UPDATE web_sessions SET revoked_at = $3, refresh_attempt_id = NULL
+            WHERE session_id_hash = $1 AND refresh_attempt_id = $2 AND revoked_at IS NULL`,
+          [sessionHash, attemptId, this.now()]
+        );
+      } catch { throw new WebSessionStoreError(); }
+      return null;
+    }
+
+    const refreshedAt = this.now();
+    if (!refreshed || typeof refreshed.accessToken !== "string" ||
+        refreshed.accessToken.length < 1 || refreshed.accessToken.length > 16_384 ||
+        !Number.isSafeInteger(refreshed.accessTokenExpiresAt) ||
+        refreshed.accessTokenExpiresAt <= refreshedAt.getTime() ||
+        refreshed.accessTokenExpiresAt > refreshedAt.getTime() + 86_400_000 ||
+        (refreshed.refreshToken !== undefined &&
+          (typeof refreshed.refreshToken !== "string" ||
+           refreshed.refreshToken.length < 1 || refreshed.refreshToken.length > 16_384))) {
+      try {
+        await this.pool.query(
+          `UPDATE web_sessions SET revoked_at = $3, refresh_attempt_id = NULL
+            WHERE session_id_hash = $1 AND refresh_attempt_id = $2 AND revoked_at IS NULL`,
+          [sessionHash, attemptId, refreshedAt]
+        );
+      } catch { throw new WebSessionStoreError(); }
+      return null;
+    }
+
+    const nextBundle: SessionTokenBundle = Object.freeze({
+      accessToken: refreshed.accessToken,
+      refreshToken: refreshed.refreshToken ?? current.refreshToken,
+      accessTokenExpiresAt: refreshed.accessTokenExpiresAt,
+      csrfToken: current.csrfToken
+    });
+    try {
+      const updated = await this.pool.query(
+        `UPDATE web_sessions
+            SET encrypted_token_bundle = $3,
+                refresh_attempt_id = NULL,
+                last_seen_at = $4
+          WHERE session_id_hash = $1 AND refresh_attempt_id = $2
+            AND encrypted_token_bundle = $5
             AND revoked_at IS NULL AND idle_expires_at > $4 AND absolute_expires_at > $4
             AND EXISTS (
               SELECT 1 FROM user_account_security s
@@ -337,25 +388,14 @@ export class PostgresWebSessionStore {
               SELECT 1 FROM identity_session_revocation_outbox o
                WHERE o.user_id = web_sessions.user_id AND o.completed_at IS NULL
             )`,
-        [sessionHash, row.encrypted_token_bundle,
-          encryptSessionTokenBundle(nextBundle, this.encryptionKey), refreshedAt]
+        [sessionHash, attemptId, encryptSessionTokenBundle(nextBundle, this.encryptionKey),
+          refreshedAt, row.encrypted_token_bundle]
       );
       return updated.rowCount === 1 ? nextBundle.accessToken : null;
     } catch {
+      // Keep the reservation if persistence is uncertain: the provider may have
+      // rotated its single-use token, so retrying the previous token is unsafe.
       throw new WebSessionStoreError();
-    } finally {
-      if (lockAcquired) {
-        try {
-          const unlocked = await client.query<{ unlocked: boolean }>(
-            `SELECT pg_advisory_unlock(${lockKey}) AS unlocked`, [sessionHash]
-          );
-          if (unlocked.rows[0]?.unlocked !== true) destroyClient = true;
-        } catch { destroyClient = true; }
-      }
-      // node-postgres destroys a checked-out client when release(error) is used.
-      // Closing the physical connection makes PostgreSQL release any session lock
-      // whose explicit unlock could not be confirmed.
-      client.release(destroyClient ? new Error("Discarding connection after advisory-lock cleanup failure.") : undefined);
     }
   }
 
@@ -365,7 +405,7 @@ export class PostgresWebSessionStore {
     catch { return; }
     try {
       await this.pool.query(
-        `UPDATE web_sessions SET revoked_at = $2
+        `UPDATE web_sessions SET revoked_at = $2, refresh_attempt_id = NULL
           WHERE session_id_hash = $1 AND revoked_at IS NULL`,
         [sessionHash, this.now()]
       );
@@ -378,7 +418,7 @@ export class PostgresWebSessionStore {
     if (!UUID_PATTERN.test(userId)) throw new TypeError("Invalid user identifier.");
     try {
       await this.pool.query(
-        `UPDATE web_sessions SET revoked_at = $2
+        `UPDATE web_sessions SET revoked_at = $2, refresh_attempt_id = NULL
           WHERE user_id = $1::uuid AND revoked_at IS NULL`,
         [userId, this.now()]
       );

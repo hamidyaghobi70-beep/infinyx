@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import type { Pool, PoolClient } from "pg";
+import type { Pool } from "pg";
 import {
   createCsrfToken,
   createOpaqueSessionId,
@@ -31,39 +31,48 @@ function sessionRow(expiry: number, refreshToken?: string) {
   };
 }
 
-function fakePool(
-  row: ReturnType<typeof sessionRow>,
-  options: { readonly lockResult?: boolean; readonly unlockResult?: boolean; readonly unlockError?: boolean } = {}
-) {
-  let stored = row;
+function fakePool(row: ReturnType<typeof sessionRow>) {
+  let stored = { ...row, refresh_attempt_id: null as string | null, revoked_at: null as Date | null };
   const calls: Array<{ sql: string; values?: readonly unknown[] }> = [];
-  const client = {
-    async query(sql: string, values?: readonly unknown[]) {
-      calls.push({ sql, values });
-      if (sql.includes("pg_try_advisory_lock")) return { rows: [{ acquired: options.lockResult ?? true }], rowCount: 1 };
-      if (sql.includes("pg_advisory_unlock")) {
-        if (options.unlockError) throw new Error("simulated advisory unlock failure");
-        return { rows: [{ unlocked: options.unlockResult ?? true }], rowCount: 1 };
-      }
-      if (sql.includes("SELECT user_id::text AS user_id")) {
-        return { rows: [stored], rowCount: 1 };
-      }
-      if (sql.includes("UPDATE web_sessions") && sql.includes("SET encrypted_token_bundle")) {
-        const updatedAt = (values?.[3] as Date).getTime();
-        if (updatedAt >= stored.idle_expires_at.getTime() ||
-            updatedAt >= stored.absolute_expires_at.getTime()) {
-          return { rows: [], rowCount: 0 };
-        }
-        stored = { ...stored, encrypted_token_bundle: values?.[2] as Buffer };
-        return { rows: [], rowCount: 1 };
-      }
-      return { rows: [], rowCount: null };
-    },
-    release: vi.fn()
-  };
-  const connect = vi.fn(async () => client);
-  const pool = { connect } as unknown as Pool;
-  return { pool, client, calls, connect, get stored() { return stored; } };
+  const query = vi.fn(async (sql: string, values?: readonly unknown[]) => {
+    calls.push({ sql, values });
+    if (sql.includes("SELECT user_id::text AS user_id")) {
+      const accessTokenLookup = sql.includes("refresh_attempt_id");
+      const blocked = stored.revoked_at !== null ||
+        (accessTokenLookup && stored.refresh_attempt_id !== null);
+      return { rows: blocked ? [] : [stored], rowCount: blocked ? 0 : 1 };
+    }
+    if (sql.includes("SET last_seen_at =")) {
+      const touchedAt = values?.[1] as Date;
+      const nextIdleExpiry = values?.[2] as Date;
+      if (stored.revoked_at !== null || touchedAt >= stored.idle_expires_at ||
+          touchedAt >= stored.absolute_expires_at) return { rows: [], rowCount: 0 };
+      stored.idle_expires_at = new Date(Math.min(nextIdleExpiry.getTime(), stored.absolute_expires_at.getTime()));
+      return { rows: [], rowCount: 1 };
+    }
+    if (sql.includes("SET refresh_attempt_id =")) {
+      if (stored.refresh_attempt_id || stored.revoked_at ||
+          !stored.encrypted_token_bundle.equals(values?.[2] as Buffer)) return { rows: [], rowCount: 0 };
+      stored.refresh_attempt_id = values?.[1] as string;
+      return { rows: [], rowCount: 1 };
+    }
+    if (sql.includes("SET encrypted_token_bundle")) {
+      const updatedAt = (values?.[3] as Date).getTime();
+      if (updatedAt >= stored.idle_expires_at.getTime() ||
+          updatedAt >= stored.absolute_expires_at.getTime() ||
+          stored.refresh_attempt_id !== values?.[1]) return { rows: [], rowCount: 0 };
+      stored = { ...stored, encrypted_token_bundle: values?.[2] as Buffer, refresh_attempt_id: null };
+      return { rows: [], rowCount: 1 };
+    }
+    if (sql.includes("SET revoked_at")) {
+      stored.revoked_at = values?.[2] as Date ?? values?.[1] as Date;
+      stored.refresh_attempt_id = null;
+      return { rows: [], rowCount: 1 };
+    }
+    return { rows: [], rowCount: null };
+  });
+  const pool = { query } as unknown as Pool;
+  return { pool, calls, query, get stored() { return stored; } };
 }
 
 describe("serialized web-session access-token refresh", () => {
@@ -86,8 +95,8 @@ describe("serialized web-session access-token refresh", () => {
     const accessToken = await store.getUsableAccessToken(createOpaqueSessionId(), refresh);
     expect(accessToken).toBe("new-access-token");
     expect(refresh).toHaveBeenCalledOnce();
-    expect(fake.calls.some(call => call.sql.includes("pg_try_advisory_lock"))).toBe(true);
-    expect(fake.calls.some(call => call.sql.includes("pg_advisory_unlock"))).toBe(true);
+    expect(fake.calls.some(call => call.sql.includes("SET refresh_attempt_id ="))).toBe(true);
+    expect(fake.calls.some(call => call.sql.includes("refresh_attempt_id = NULL"))).toBe(true);
     expect(fake.calls.some(call => call.sql === "BEGIN")).toBe(false);
     expect(fake.calls.find(call => call.sql.includes("SELECT user_id::text AS user_id"))?.sql)
       .toContain("user_external_identity_lifecycle");
@@ -98,6 +107,34 @@ describe("serialized web-session access-token refresh", () => {
       refreshToken: "rotated-refresh-token",
       csrfToken
     });
+  });
+
+  it("allows only one provider call while a durable reservation is pending", async () => {
+    const fake = fakePool(sessionRow(now.getTime() - 1, "single-use-refresh-token"));
+    const store = new PostgresWebSessionStore(fake.pool, key, () => now);
+    const sessionId = createOpaqueSessionId();
+    let signalStarted!: () => void;
+    let finishRefresh!: () => void;
+    const started = new Promise<void>(resolve => { signalStarted = resolve; });
+    const gate = new Promise<void>(resolve => { finishRefresh = resolve; });
+    const refresh = vi.fn(async () => {
+      signalStarted();
+      await gate;
+      return {
+        accessToken: "rotated-access-token",
+        refreshToken: "rotated-refresh-token",
+        accessTokenExpiresAt: now.getTime() + 300_000
+      };
+    });
+
+    const first = store.getUsableAccessToken(sessionId, refresh);
+    await started;
+    const second = await store.getUsableAccessToken(sessionId, refresh);
+    expect(second).toBeNull();
+    expect(refresh).toHaveBeenCalledOnce();
+    finishRefresh();
+    await expect(first).resolves.toBe("rotated-access-token");
+    expect(fake.stored.refresh_attempt_id).toBeNull();
   });
 
   it("does not persist refreshed credentials if the session expires during the provider request", async () => {
@@ -127,7 +164,6 @@ describe("serialized web-session access-token refresh", () => {
     const refresh = vi.fn();
     expect(await store.getUsableAccessToken(createOpaqueSessionId(), refresh)).toBe("old-access-token");
     expect(refresh).not.toHaveBeenCalled();
-    expect(fake.calls.some(call => call.sql.includes("pg_advisory_unlock"))).toBe(true);
   });
 
   it("revokes an expired session when no refresh token is available", async () => {
@@ -137,7 +173,6 @@ describe("serialized web-session access-token refresh", () => {
     expect(await store.getUsableAccessToken(createOpaqueSessionId(), refresh)).toBeNull();
     expect(refresh).not.toHaveBeenCalled();
     expect(fake.calls.some(call => call.sql.includes("SET revoked_at"))).toBe(true);
-    expect(fake.calls.some(call => call.sql.includes("pg_advisory_unlock"))).toBe(true);
   });
 
   it("revokes the session when refresh fails rather than returning an expired token", async () => {
@@ -146,32 +181,81 @@ describe("serialized web-session access-token refresh", () => {
     const refresh = vi.fn(async () => { throw new Error("provider details must not escape"); });
     expect(await store.getUsableAccessToken(createOpaqueSessionId(), refresh)).toBeNull();
     expect(fake.calls.some(call => call.sql.includes("SET revoked_at"))).toBe(true);
-    expect(fake.calls.at(-1)?.sql).toContain("pg_advisory_unlock");
-    expect(fake.client.release).toHaveBeenCalledOnce();
+    expect(fake.calls.at(-1)?.sql).toContain("SET revoked_at");
+    expect(fake.stored.refresh_attempt_id).toBeNull();
   });
 
-  it.each([
-    ["returns false", { unlockResult: false }],
-    ["throws", { unlockError: true }]
-  ] as const)("discards the PostgreSQL client when advisory unlock %s", async (_label, options) => {
-    const fake = fakePool(sessionRow(now.getTime() + 180_000, "refresh-token"), options);
+  it("revokes and clears the reservation when the provider returns an invalid response", async () => {
+    const fake = fakePool(sessionRow(now.getTime() - 1, "single-use-refresh-token"));
     const store = new PostgresWebSessionStore(fake.pool, key, () => now);
+    const refresh = vi.fn(async () => ({
+      accessToken: "",
+      refreshToken: "rotated-token",
+      accessTokenExpiresAt: now.getTime() + 300_000
+    }));
 
-    await expect(
-      store.getUsableAccessToken(createOpaqueSessionId(), vi.fn())
-    ).resolves.toBe("old-access-token");
+    expect(await store.getUsableAccessToken(createOpaqueSessionId(), refresh)).toBeNull();
+    expect(refresh).toHaveBeenCalledOnce();
+    expect(fake.stored.revoked_at).toEqual(now);
+    expect(fake.stored.refresh_attempt_id).toBeNull();
+    expect(fake.calls.at(-1)?.sql).toContain("refresh_attempt_id = $2");
+  });
 
-    expect(fake.client.release).toHaveBeenCalledOnce();
-    expect(fake.client.release).toHaveBeenCalledWith(
-      expect.objectContaining({ message: "Discarding connection after advisory-lock cleanup failure." })
-    );
+  it("clears a pending reservation on explicit revoke and rejects the late provider response", async () => {
+    const fake = fakePool(sessionRow(now.getTime() - 1, "single-use-refresh-token"));
+    const store = new PostgresWebSessionStore(fake.pool, key, () => now);
+    const sessionId = createOpaqueSessionId();
+    let signalStarted!: () => void;
+    let finishRefresh!: () => void;
+    const started = new Promise<void>(resolve => { signalStarted = resolve; });
+    const gate = new Promise<void>(resolve => { finishRefresh = resolve; });
+    const refresh = vi.fn(async () => {
+      signalStarted();
+      await gate;
+      return {
+        accessToken: "must-not-be-persisted",
+        refreshToken: "rotated-token",
+        accessTokenExpiresAt: now.getTime() + 300_000
+      };
+    });
+
+    const pending = store.getUsableAccessToken(sessionId, refresh);
+    await started;
+    await store.revoke(sessionId);
+    expect(fake.stored.revoked_at).toEqual(now);
+    expect(fake.stored.refresh_attempt_id).toBeNull();
+
+    finishRefresh();
+    await expect(pending).resolves.toBeNull();
+    expect(refresh).toHaveBeenCalledOnce();
+    expect(decryptSessionTokenBundle(fake.stored.encrypted_token_bundle, key).accessToken)
+      .toBe("old-access-token");
+  });
+
+  it("does not persist credentials when the final reservation compare-and-set conflicts", async () => {
+    const fake = fakePool(sessionRow(now.getTime() - 1, "single-use-refresh-token"));
+    const store = new PostgresWebSessionStore(fake.pool, key, () => now);
+    const originalBundle = Buffer.from(fake.stored.encrypted_token_bundle);
+    const refresh = vi.fn(async () => {
+      fake.stored.refresh_attempt_id = "00000000-0000-4000-8000-000000000099";
+      return {
+        accessToken: "must-not-be-persisted",
+        refreshToken: "rotated-token",
+        accessTokenExpiresAt: now.getTime() + 300_000
+      };
+    });
+
+    expect(await store.getUsableAccessToken(createOpaqueSessionId(), refresh)).toBeNull();
+    expect(refresh).toHaveBeenCalledOnce();
+    expect(fake.stored.encrypted_token_bundle.equals(originalBundle)).toBe(true);
+    expect(fake.stored.refresh_attempt_id).toBe("00000000-0000-4000-8000-000000000099");
   });
 
   it("fails closed for malformed session identifiers", async () => {
     const fake = fakePool(sessionRow(now.getTime() + 100_000, "refresh-token"));
     const store = new PostgresWebSessionStore(fake.pool, key, () => now);
     expect(await store.getUsableAccessToken("invalid", vi.fn())).toBeNull();
-    expect(fake.connect).not.toHaveBeenCalled();
+    expect(fake.query).not.toHaveBeenCalled();
   });
 
   it("fails closed when the account is inactive or has pending revocation", async () => {
@@ -196,7 +280,26 @@ describe("serialized web-session access-token refresh", () => {
       expect(sql).toContain("lifecycle.status = 'active'");
       expect(sql).toContain("user_account_session_revocation_outbox");
       expect(sql).toContain("account_security.status = 'active'");
+      expect(sql).not.toContain("refresh_attempt_id IS NULL");
     }
+  });
+
+  it("keeps a session active and touchable while a durable refresh reservation is pending", async () => {
+    const fake = fakePool(sessionRow(now.getTime() - 1, "single-use-refresh-token"));
+    const store = new PostgresWebSessionStore(fake.pool, key, () => now);
+    fake.stored.refresh_attempt_id = "4c4d8c1b-1e8f-4aab-9b61-40a6a32caa41";
+
+    await expect(store.findActive(createOpaqueSessionId())).resolves.toMatchObject({
+      userId,
+      issuer,
+      subject: "subject-1"
+    });
+    await expect(store.touch(
+      createOpaqueSessionId(),
+      new Date(now.getTime() + 1_800_000)
+    )).resolves.toBe(true);
+
+    expect(fake.stored.refresh_attempt_id).toBe("4c4d8c1b-1e8f-4aab-9b61-40a6a32caa41");
   });
 
   it("refuses to create a session unless the account is active and both revocation barriers are clear", async () => {
@@ -228,47 +331,6 @@ describe("serialized web-session access-token refresh", () => {
     })).rejects.toThrow("Web session operation failed");
   });
 
-  it("releases each distinct client when concurrent refresh attempts cannot acquire the lock", async () => {
-    const clients = Array.from({ length: 10 }, () => ({
-      query: vi.fn(async (sql: string) => {
-        if (sql.includes("pg_try_advisory_lock")) {
-          return { rows: [{ acquired: false }], rowCount: 1 };
-        }
-        return { rows: [], rowCount: 0 };
-      }),
-      release: vi.fn()
-    }));
-    let nextClient = 0;
-    const pool = {
-      connect: vi.fn(async () => clients[nextClient++]!)
-    } as unknown as Pool;
-    const store = new PostgresWebSessionStore(pool, key, () => now);
 
-    const results = await Promise.all(
-      Array.from({ length: clients.length }, () => store.getUsableAccessToken(createOpaqueSessionId(), vi.fn()))
-    );
-
-    expect(results).toEqual(Array(clients.length).fill(null));
-    expect(pool.connect).toHaveBeenCalledTimes(clients.length);
-    for (const client of clients) {
-      expect(client.query).toHaveBeenCalledOnce();
-      expect(client.release).toHaveBeenCalledOnce();
-    }
-  });
-
-  it("fails closed when another request already owns the refresh lock", async () => {
-    const fake = fakePool(sessionRow(now.getTime() - 1, "refresh-token"));
-    fake.client.query = async (sql: string, values?: readonly unknown[]) => {
-      fake.calls.push({ sql, values });
-      if (sql.includes("pg_try_advisory_lock")) return { rows: [{ acquired: false }], rowCount: 1 };
-      return { rows: [], rowCount: 0 };
-    };
-    const store = new PostgresWebSessionStore(fake.pool, key, () => now);
-    const refresh = vi.fn();
-    expect(await store.getUsableAccessToken(createOpaqueSessionId(), refresh)).toBeNull();
-    expect(refresh).not.toHaveBeenCalled();
-    expect(fake.calls.some(call => call.sql.includes("pg_advisory_unlock"))).toBe(false);
-    expect(fake.client.release).toHaveBeenCalledOnce();
-  });
 
 });

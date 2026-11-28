@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+import { randomBytes, randomUUID } from "node:crypto";
 import { createRequire } from "node:module";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { createPostgresPool } from "../persistence/postgres-pool.js";
@@ -19,7 +19,7 @@ function captureDownSql(file: string): string {
   return statements.join("\n");
 }
 
-integrationDescribe("account-security migration rollback safety", () => {
+integrationDescribe("database migration rollback safety", () => {
   let adminPool: ReturnType<typeof createPostgresPool>;
 
   beforeAll(() => {
@@ -86,5 +86,44 @@ integrationDescribe("account-security migration rollback safety", () => {
     expect(stillPresent.rows[0]).toEqual({
       account_state: true, account_outbox: true, recovery_audit: true
     });
+  });
+
+  it("refuses to remove a durable refresh reservation while its outcome is active or ambiguous", async () => {
+    const sessionHash = randomBytes(32);
+    const issuer = `https://rollback-refresh-${randomUUID()}.example.test`;
+    const subject = `subject-${randomUUID()}`;
+
+    try {
+      await adminPool.query(
+        `INSERT INTO web_sessions
+           (session_id_hash, user_id, issuer, subject, csrf_token_hash,
+            encrypted_token_bundle, idle_expires_at, absolute_expires_at, refresh_attempt_id)
+         VALUES ($1::bytea, $2::uuid, $3, $4, $5::bytea, $6::bytea,
+                 clock_timestamp() + interval '30 minutes',
+                 clock_timestamp() + interval '8 hours', $7::uuid)`,
+        [
+          sessionHash,
+          "10000000-0000-4000-8000-000000000001",
+          issuer,
+          subject,
+          randomBytes(32),
+          randomBytes(64),
+          randomUUID()
+        ]
+      );
+
+      const rollbackSql = captureDownSql("016_durable_session_refresh_reservation.cjs");
+      await expect(adminPool.query(rollbackSql))
+        .rejects.toThrow(/Refusing to remove web-session refresh reservations/iu);
+
+      const stillPresent = await adminPool.query<{ refresh_attempt_id: string | null }>(
+        "SELECT refresh_attempt_id::text FROM web_sessions WHERE session_id_hash = $1",
+        [sessionHash]
+      );
+      expect(stillPresent.rows).toHaveLength(1);
+      expect(stillPresent.rows[0]?.refresh_attempt_id).toMatch(/^[0-9a-f-]{36}$/iu);
+    } finally {
+      await adminPool.query("DELETE FROM web_sessions WHERE session_id_hash = $1", [sessionHash]);
+    }
   });
 });
