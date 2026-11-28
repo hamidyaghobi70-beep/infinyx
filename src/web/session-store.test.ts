@@ -66,6 +66,7 @@ function fakePool(row: ReturnType<typeof sessionRow>) {
     }
     if (sql.includes("SET revoked_at")) {
       stored.revoked_at = values?.[2] as Date ?? values?.[1] as Date;
+      stored.refresh_attempt_id = null;
       return { rows: [], rowCount: 1 };
     }
     return { rows: [], rowCount: null };
@@ -181,8 +182,43 @@ describe("serialized web-session access-token refresh", () => {
     expect(await store.getUsableAccessToken(createOpaqueSessionId(), refresh)).toBeNull();
     expect(fake.calls.some(call => call.sql.includes("SET revoked_at"))).toBe(true);
     expect(fake.calls.at(-1)?.sql).toContain("SET revoked_at");
+    expect(fake.stored.refresh_attempt_id).toBeNull();
   });
 
+  it("revokes and clears the reservation when the provider returns an invalid response", async () => {
+    const fake = fakePool(sessionRow(now.getTime() - 1, "single-use-refresh-token"));
+    const store = new PostgresWebSessionStore(fake.pool, key, () => now);
+    const refresh = vi.fn(async () => ({
+      accessToken: "",
+      refreshToken: "rotated-token",
+      accessTokenExpiresAt: now.getTime() + 300_000
+    }));
+
+    expect(await store.getUsableAccessToken(createOpaqueSessionId(), refresh)).toBeNull();
+    expect(refresh).toHaveBeenCalledOnce();
+    expect(fake.stored.revoked_at).toEqual(now);
+    expect(fake.stored.refresh_attempt_id).toBeNull();
+    expect(fake.calls.at(-1)?.sql).toContain("refresh_attempt_id = $2");
+  });
+
+  it("does not persist credentials when the final reservation compare-and-set conflicts", async () => {
+    const fake = fakePool(sessionRow(now.getTime() - 1, "single-use-refresh-token"));
+    const store = new PostgresWebSessionStore(fake.pool, key, () => now);
+    const originalBundle = Buffer.from(fake.stored.encrypted_token_bundle);
+    const refresh = vi.fn(async () => {
+      fake.stored.refresh_attempt_id = "00000000-0000-4000-8000-000000000099";
+      return {
+        accessToken: "must-not-be-persisted",
+        refreshToken: "rotated-token",
+        accessTokenExpiresAt: now.getTime() + 300_000
+      };
+    });
+
+    expect(await store.getUsableAccessToken(createOpaqueSessionId(), refresh)).toBeNull();
+    expect(refresh).toHaveBeenCalledOnce();
+    expect(fake.stored.encrypted_token_bundle.equals(originalBundle)).toBe(true);
+    expect(fake.stored.refresh_attempt_id).toBe("00000000-0000-4000-8000-000000000099");
+  });
 
   it("fails closed for malformed session identifiers", async () => {
     const fake = fakePool(sessionRow(now.getTime() + 100_000, "refresh-token"));
