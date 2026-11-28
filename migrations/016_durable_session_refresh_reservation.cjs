@@ -9,6 +9,11 @@ exports.up = (pgm) => {
 
 exports.down = (pgm) => {
   pgm.sql(`
+    -- Serialize the preflight with reservation writers so no new lease can
+    -- appear between the check and DROP COLUMN. The migration runner executes
+    -- this down migration transactionally.
+    LOCK TABLE public.web_sessions IN ACCESS EXCLUSIVE MODE;
+
     DO $preflight$
     BEGIN
       IF EXISTS (
